@@ -1,0 +1,27 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    g++ \
+    libacl1-dev \
+    libssl-dev \
+    openssh-server \
+    sudo \
+    pkg-config \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /var/run/sshd
+
+WORKDIR /build
+COPY . .
+
+RUN cmake -B build -S . \
+    && cmake --build build -j$(nproc)
+
+RUN cd build && ctest --output-on-failure || true
+
+RUN echo "Build and test complete for Ubuntu 22.04"

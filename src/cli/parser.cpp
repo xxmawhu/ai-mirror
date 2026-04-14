@@ -39,6 +39,20 @@ int parse_and_run(int argc, char** argv) {
     mkdir_cmd->add_option("path", mkdir_path, "Directory path")->required();
     mkdir_cmd->add_option("ai_user", mkdir_user, "AI user to grant access")->required();
 
+    // cp
+    std::string cp_src, cp_dst, cp_user;
+    auto* cp_cmd = app.add_subcommand("cp", "Copy file/directory and set ai-user ownership");
+    cp_cmd->add_option("src", cp_src, "Source path")->required();
+    cp_cmd->add_option("dst", cp_dst, "Destination path")->required();
+    cp_cmd->add_option("--user,-u", cp_user, "AI user to own the copied file")->required();
+
+    // mv
+    std::string mv_src, mv_dst, mv_user;
+    auto* mv_cmd = app.add_subcommand("mv", "Move file/directory atomically and set ai-user ownership");
+    mv_cmd->add_option("src", mv_src, "Source path")->required();
+    mv_cmd->add_option("dst", mv_dst, "Destination path")->required();
+    mv_cmd->add_option("--user,-u", mv_user, "AI user to own the moved file")->required();
+
     // cd
     std::string cd_path;
     auto* cd_cmd = app.add_subcommand("cd", "Switch to appropriate user context");
@@ -82,6 +96,10 @@ int parse_and_run(int argc, char** argv) {
         return cmd_create(create_path, verbose);
     } else if (mkdir_cmd->parsed()) {
         return cmd_mkdir(mkdir_path, mkdir_user, verbose);
+    } else if (cp_cmd->parsed()) {
+        return cmd_cp(cp_src, cp_dst, cp_user, verbose);
+    } else if (mv_cmd->parsed()) {
+        return cmd_mv(mv_src, mv_dst, mv_user, verbose);
     } else if (cd_cmd->parsed()) {
         return cmd_cd(cd_path, verbose);
     } else if (app.got_subcommand("list")) {

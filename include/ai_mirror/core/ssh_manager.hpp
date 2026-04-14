@@ -17,6 +17,7 @@ public:
     bool authorize_key(const std::string& username, const fs::path& public_key_path);
     bool authorize_public_key_string(const std::string& username, const std::string& public_key);
     bool setup_passwordless(const std::string& main_user, const std::string& ai_user);
+    bool setup_default_key_from_file(const std::string& ai_user, const fs::path& public_key_path);
     bool setup_default_keys(const std::string& ai_user, const std::vector<SSHKeyEntry>& default_keys);
     fs::path get_public_key_path(const fs::path& key_path) const;
     bool test_connection(const std::string& username) const;

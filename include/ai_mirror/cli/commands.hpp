@@ -6,6 +6,8 @@ namespace ai_mirror::cli {
 
 int cmd_create(const std::string& project_path, bool verbose);
 int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose);
+int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai_user, bool verbose);
+int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai_user, bool verbose);
 int cmd_cd(const std::string& path, bool verbose);
 int cmd_list(bool verbose);
 int cmd_health(bool verbose);

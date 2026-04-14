@@ -10,7 +10,7 @@
 
 namespace ai_mirror::core {
 
-Graft::Graft() = default;
+Graft::Graft(const std::string& user_prefix) : prefix_(user_prefix) {}
 
 bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool read_only) {
     std::error_code ec;
@@ -28,18 +28,14 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
         return false;
     }
 
-    std::ostringstream cmd;
-    cmd << "mount --bind " << source.string() << " " << target.string();
-    auto result = utils::execute(cmd.str());
+    auto result = utils::exec_safe({"mount", "--bind", source.string(), target.string()});
     if (result.exit_code != 0) {
         utils::get_logger()->error("mount --bind failed: {}", result.stderr_output);
         return false;
     }
 
     if (read_only) {
-        std::ostringstream remount_cmd;
-        remount_cmd << "mount -o remount,bind,ro " << target.string();
-        auto remount_result = utils::execute(remount_cmd.str());
+        auto remount_result = utils::exec_safe({"mount", "-o", "remount,bind,ro", target.string()});
         if (remount_result.exit_code != 0) {
             utils::get_logger()->warn("Failed to remount as read-only: {}", remount_result.stderr_output);
         }
@@ -50,14 +46,15 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
 }
 
 bool Graft::execute_umount(const fs::path& target, bool lazy) {
-    std::ostringstream cmd;
-    cmd << "umount";
+    std::vector<std::string> args;
+    args.reserve(3);
+    args.push_back("umount");
     if (lazy) {
-        cmd << " -l";
+        args.push_back("-l");
     }
-    cmd << " " << target.string();
+    args.push_back(target.string());
 
-    auto result = utils::execute(cmd.str());
+    auto result = utils::exec_safe(args);
     if (result.exit_code != 0) {
         utils::get_logger()->error("umount failed for {}: {}", target.string(), result.stderr_output);
         return false;
@@ -77,7 +74,7 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
         std::string device, mount_point, fs_type, options;
         iss >> device >> mount_point >> fs_type >> options;
 
-        if (mount_point.find("/home/i") != std::string::npos) {
+        if (mount_point.find("/home/" + prefix_) == 0) {
             MountEntry entry;
             entry.source = device;
             entry.target = mount_point;
@@ -91,11 +88,34 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
 }
 
 bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read_only) {
+    if (!security::validate_mount_source(source)) {
+        utils::get_logger()->error("Mount source rejected (system path): {}", source.string());
+        return false;
+    }
+
+    auto pre_mount_source = security::safe_canonical(source);
+    if (pre_mount_source.empty()) {
+        utils::get_logger()->error("Mount source canonical resolution failed: {}", source.string());
+        return false;
+    }
+
     if (is_mounted(target)) {
         utils::get_logger()->warn("Target already mounted: {}", target.string());
         return true;
     }
-    return execute_mount(source, target, read_only);
+
+    if (!security::validate_path_exists(source)) {
+        utils::get_logger()->error("Mount source path does not exist or is not regular/dir: {}", source.string());
+        return false;
+    }
+
+    auto pre_exec_source = security::safe_canonical(source);
+    if (pre_exec_source != pre_mount_source) {
+        utils::get_logger()->error("Mount source path changed between validation and execution: {}", source.string());
+        return false;
+    }
+
+    return execute_mount(pre_exec_source, target, read_only);
 }
 
 bool Graft::unmount(const fs::path& target, bool lazy) {
@@ -143,9 +163,13 @@ bool Graft::is_mounted(const fs::path& target) const {
 }
 
 bool Graft::ensure_group_exists(const std::string& groupname) {
-    auto result = utils::execute("getent group " + groupname);
+    if (!utils::validate_username(groupname)) {
+        utils::get_logger()->error("Invalid group name: {}", groupname);
+        return false;
+    }
+    auto result = utils::exec_safe({"getent", "group", groupname});
     if (result.exit_code != 0) {
-        result = utils::execute("groupadd " + groupname);
+        result = utils::exec_safe({"groupadd", groupname});
         if (result.exit_code != 0) {
             utils::get_logger()->error("groupadd failed for {}: {}", groupname, result.stderr_output);
             return false;
@@ -156,7 +180,7 @@ bool Graft::ensure_group_exists(const std::string& groupname) {
 }
 
 bool Graft::set_directory_group(const fs::path& path, const std::string& groupname) {
-    auto result = utils::execute("chgrp " + groupname + " " + path.string());
+    auto result = utils::exec_safe({"chgrp", groupname, path.string()});
     if (result.exit_code != 0) {
         utils::get_logger()->error("chgrp failed: {}", result.stderr_output);
         return false;
@@ -165,7 +189,7 @@ bool Graft::set_directory_group(const fs::path& path, const std::string& groupna
 }
 
 bool Graft::set_sgid(const fs::path& path) {
-    auto result = utils::execute("chmod g+s " + path.string());
+    auto result = utils::exec_safe({"chmod", "g+s", path.string()});
     if (result.exit_code != 0) {
         utils::get_logger()->error("chmod g+s failed: {}", result.stderr_output);
         return false;
@@ -174,13 +198,23 @@ bool Graft::set_sgid(const fs::path& path) {
 }
 
 bool Graft::grant_write_access(const fs::path& path, const std::string& username) {
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error("Invalid username for write access: {}", username);
+        return false;
+    }
+
+    if (!security::validate_path_allowed(path)) {
+        utils::get_logger()->error("Grant write path rejected (system directory): {}", path.string());
+        return false;
+    }
+
     if (!ensure_group_exists(username)) {
         return false;
     }
 
-    auto result = utils::execute("usermod -aG " + username + " " + username);
-    if (result.exit_code != 0) {
-        utils::get_logger()->error("usermod -aG failed: {}", result.stderr_output);
+    auto mod_result = utils::exec_safe({"usermod", "-aG", username, username});
+    if (mod_result.exit_code != 0) {
+        utils::get_logger()->error("usermod -aG failed: {}", mod_result.stderr_output);
         return false;
     }
 
@@ -197,7 +231,7 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
         return false;
     }
 
-    auto chmod_result = utils::execute("chmod g+rwX " + path.string());
+    auto chmod_result = utils::exec_safe({"chmod", "g+rwX", path.string()});
     if (chmod_result.exit_code != 0) {
         utils::get_logger()->error("chmod g+rwX failed: {}", chmod_result.stderr_output);
         return false;
@@ -211,12 +245,31 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
     return true;
 }
 
-bool Graft::revoke_write_access(const fs::path& path, [[maybe_unused]] const std::string& username) {
-    auto result = utils::execute("chmod g-rwx " + path.string());
-    if (result.exit_code != 0) {
-        utils::get_logger()->error("chmod g-rwx failed: {}", result.stderr_output);
+bool Graft::revoke_write_access(const fs::path& path, const std::string& username) {
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error("Invalid username for revoke: {}", username);
         return false;
     }
+
+    auto chmod_result = utils::exec_safe({"chmod", "g-s", path.string()});
+    if (chmod_result.exit_code != 0) {
+        utils::get_logger()->warn("chmod g-s failed (may not be set): {}", chmod_result.stderr_output);
+    }
+
+    auto gpasswd_result = utils::exec_safe({"gpasswd", "-d", username, username});
+    if (gpasswd_result.exit_code != 0) {
+        utils::get_logger()->warn("gpasswd -d failed (user may not be in group): {}", gpasswd_result.stderr_output);
+    }
+
+    auto chmod_rw_result = utils::exec_safe({"chmod", "g-rwx", path.string()});
+    if (chmod_rw_result.exit_code != 0) {
+        utils::get_logger()->error("chmod g-rwx failed: {}", chmod_rw_result.stderr_output);
+        return false;
+    }
+
+    utils::exec_safe({"groupdel", username});
+
+    utils::get_logger()->info("Revoked write access: {} from group {}", path.string(), username);
     return true;
 }
 

@@ -16,6 +16,13 @@ namespace fs = std::filesystem;
 
 namespace ai_mirror::cli {
 
+static bool validate_ai_user_ownership(const std::string& ai_user, const std::string& main_user, const std::string& prefix) {
+    if (ai_user.empty() || main_user.empty()) return false;
+    std::string expected_prefix = prefix + main_user;
+    return ai_user.size() >= expected_prefix.size()
+        && ai_user.substr(0, expected_prefix.size()) == expected_prefix;
+}
+
 struct CommandContext {
     core::Config config;
     std::unique_ptr<core::UserManager> user_mgr;
@@ -28,7 +35,7 @@ static CommandContext make_context(bool verbose) {
     CommandContext ctx;
     ctx.config = core::ConfigParser::load_default();
     ctx.user_mgr = std::make_unique<core::UserManager>(ctx.config.user.prefix);
-    ctx.graft = std::make_unique<core::Graft>();
+    ctx.graft = std::make_unique<core::Graft>(ctx.config.user.prefix);
     ctx.ssh_mgr = std::make_unique<core::SSHManager>();
     ctx.verbose = verbose;
     return ctx;
@@ -48,6 +55,12 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
+    std::string main_user = utils::get_effective_username();
+    if (!utils::is_path_allowed(proj, main_user)) {
+        std::cerr << "Path not allowed: " << proj.string() << std::endl;
+        return 1;
+    }
+
     utils::get_logger()->info("Creating ai-user for project: {}", proj.string());
 
     auto user_info = ctx.user_mgr->create_ai_user(proj.string());
@@ -56,7 +69,6 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    std::string main_user = utils::get_effective_username();
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 
@@ -64,14 +76,19 @@ int cmd_create(const std::string& project_path, bool verbose) {
         std::cerr << "Warning: SSH setup failed" << std::endl;
     }
 
-    if (!ctx.config.ssh.default_keys.empty()) {
-        ctx.ssh_mgr->setup_default_keys(user_info.username, ctx.config.ssh.default_keys);
+    if (!ctx.config.ssh.ai_default_key.empty()) {
+        ctx.ssh_mgr->setup_default_key_from_file(user_info.username, ctx.config.ssh.ai_default_key);
     }
 
     for (const auto& mount_path : ctx.config.mount.paths) {
         fs::path source = core::PathResolver::resolve(mount_path.string());
         if (!fs::exists(source)) {
             utils::get_logger()->warn("Mount source does not exist, skipping: {}", source.string());
+            continue;
+        }
+
+        if (!utils::is_path_allowed(source, main_user)) {
+            utils::get_logger()->error("Mount source path not allowed, skipping: {}", source.string());
             continue;
         }
 
@@ -93,7 +110,28 @@ int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose)
         return 1;
     }
 
+    if (!utils::validate_username(ai_user)) {
+        std::cerr << "Invalid ai_user name: " << ai_user << std::endl;
+        return 1;
+    }
+
+    std::string main_user = utils::get_effective_username();
+    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
+        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
+        return 1;
+    }
+
     fs::path dir_path = core::PathResolver::resolve(path);
+    if (dir_path.empty()) {
+        std::cerr << "Invalid path: " << path << std::endl;
+        return 1;
+    }
+
+    if (!utils::is_path_allowed(dir_path, main_user)) {
+        std::cerr << "Path not allowed: " << dir_path.string() << std::endl;
+        return 1;
+    }
+
     std::error_code ec;
     if (!fs::exists(dir_path, ec)) {
         fs::create_directories(dir_path, ec);
@@ -114,6 +152,152 @@ int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose)
     return 0;
 }
 
+static bool recursive_chown(const fs::path& p, const std::string& owner) {
+    auto result = utils::exec_safe({"chown", "-R", owner + ":" + owner, p.string()});
+    if (result.exit_code != 0) {
+        utils::get_logger()->error("chown -R failed for {}: {}", p.string(), result.stderr_output);
+        return false;
+    }
+    return true;
+}
+
+int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai_user, bool verbose) {
+    auto ctx = make_context(verbose);
+
+    if (!utils::is_root()) {
+        std::cerr << "ai-mirror cp requires root privileges" << std::endl;
+        return 1;
+    }
+
+    if (!utils::validate_username(ai_user)) {
+        std::cerr << "Invalid ai_user name: " << ai_user << std::endl;
+        return 1;
+    }
+
+    std::string main_user = utils::get_effective_username();
+    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
+        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
+        return 1;
+    }
+
+    fs::path src_path = core::PathResolver::resolve(src);
+    if (src_path.empty() || !fs::exists(src_path)) {
+        std::cerr << "Source does not exist: " << src << std::endl;
+        return 1;
+    }
+
+    fs::path dst_path = core::PathResolver::resolve(dst);
+    if (dst_path.empty()) {
+        std::cerr << "Invalid destination path: " << dst << std::endl;
+        return 1;
+    }
+
+    if (!utils::is_path_allowed(dst_path, main_user)) {
+        std::cerr << "Destination path not allowed: " << dst_path.string() << std::endl;
+        return 1;
+    }
+
+    if (!utils::is_path_allowed(src_path, main_user)) {
+        std::cerr << "Source path not allowed: " << src_path.string() << std::endl;
+        return 1;
+    }
+
+    auto cp_result = utils::exec_safe({"cp", "-a", src_path.string(), dst_path.string()});
+    if (cp_result.exit_code != 0) {
+        std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
+        return 1;
+    }
+
+    fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
+    if (!recursive_chown(chown_target, ai_user)) {
+        std::cerr << "Failed to set ownership for " << ai_user << std::endl;
+        return 1;
+    }
+
+    if (verbose) {
+        std::cout << "Copied: " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+    }
+    return 0;
+}
+
+int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai_user, bool verbose) {
+    auto ctx = make_context(verbose);
+
+    if (!utils::is_root()) {
+        std::cerr << "ai-mirror mv requires root privileges" << std::endl;
+        return 1;
+    }
+
+    if (!utils::validate_username(ai_user)) {
+        std::cerr << "Invalid ai_user name: " << ai_user << std::endl;
+        return 1;
+    }
+
+    std::string main_user = utils::get_effective_username();
+    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
+        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
+        return 1;
+    }
+
+    fs::path src_path = core::PathResolver::resolve(src);
+    if (src_path.empty() || !fs::exists(src_path)) {
+        std::cerr << "Source does not exist: " << src << std::endl;
+        return 1;
+    }
+
+    fs::path dst_path = core::PathResolver::resolve(dst);
+    if (dst_path.empty()) {
+        std::cerr << "Invalid destination path: " << dst << std::endl;
+        return 1;
+    }
+
+    if (!utils::is_path_allowed(dst_path, main_user)) {
+        std::cerr << "Destination path not allowed: " << dst_path.string() << std::endl;
+        return 1;
+    }
+
+    if (!utils::is_path_allowed(src_path, main_user)) {
+        std::cerr << "Source path not allowed: " << src_path.string() << std::endl;
+        return 1;
+    }
+
+    std::error_code ec;
+    fs::rename(src_path, dst_path, ec);
+    if (ec) {
+        auto cp_result = utils::exec_safe({"cp", "-a", src_path.string(), dst_path.string()});
+        if (cp_result.exit_code != 0) {
+            std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
+            return 1;
+        }
+
+        fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
+        if (!recursive_chown(chown_target, ai_user)) {
+            std::cerr << "Failed to set ownership after copy" << std::endl;
+            return 1;
+        }
+
+        fs::remove_all(src_path, ec);
+        if (ec) {
+            utils::get_logger()->warn("Failed to remove source after copy: {}", ec.message());
+        }
+
+        if (verbose) {
+            std::cout << "Moved (copy+delete): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+        }
+        return 0;
+    }
+
+    fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
+    if (!recursive_chown(chown_target, ai_user)) {
+        utils::get_logger()->warn("Rename succeeded but chown failed for {}", chown_target.string());
+    }
+
+    if (verbose) {
+        std::cout << "Moved (atomic): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+    }
+    return 0;
+}
+
 int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
     auto config = core::ConfigParser::load_default();
     std::string prefix = config.user.prefix;
@@ -127,21 +311,27 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
         return 1;
     }
 
+    if (!utils::validate_path_no_shell_metachars(target.string())) {
+        std::cerr << "Path contains disallowed characters" << std::endl;
+        return 1;
+    }
+
     std::string owner = core::PathResolver::detect_owner_user(target);
 
     if (owner.empty() || owner == current_user) {
-        std::cout << "cd " << target.string() << std::endl;
+        std::cout << "cd " << utils::shell_escape(target.string()) << std::endl;
         return 0;
     }
 
     if (owner.length() >= ai_prefix.length() &&
         owner.substr(0, ai_prefix.length()) == ai_prefix) {
-        std::cout << "exec ssh -q " << owner << "@localhost -t 'cd "
-                  << target.string() << "; exec bash -l'" << std::endl;
+        std::string remote_cmd = "cd " + utils::shell_escape(target.string()) + " && exec bash -l";
+        std::cout << "exec ssh -q " << utils::shell_escape(owner)
+                  << "@localhost -t " << utils::shell_escape(remote_cmd) << std::endl;
         return 0;
     }
 
-    std::cout << "cd " << target.string() << std::endl;
+    std::cout << "cd " << utils::shell_escape(target.string()) << std::endl;
     return 0;
 }
 
@@ -203,9 +393,15 @@ int cmd_force_destroy(const std::string& project_or_user, bool verbose) {
         }
     }
 
+    std::string main_user = utils::get_effective_username();
+    if (!validate_ai_user_ownership(username, main_user, ctx.config.user.prefix)) {
+        std::cerr << "User '" << username << "' does not belong to '" << main_user << "'" << std::endl;
+        return 1;
+    }
+
     utils::get_logger()->warn("Force destroying user: {}", username);
 
-    daemon::MountCleaner cleaner;
+    daemon::MountCleaner cleaner(ctx.config.user.prefix);
     cleaner.cleanup_for_user(username);
 
     if (!ctx.user_mgr->remove_ai_user(username, true)) {
@@ -245,71 +441,17 @@ int cmd_rm(const std::string& project_path, bool verbose) {
     }
 
     fs::path ai_home(user_info->home_dir);
-    std::string main_user = utils::get_effective_username();
-    fs::path main_home = utils::get_effective_home();
-    fs::path preserved_dir = main_home / ".ai-mirror-preserves" / username;
 
     utils::get_logger()->info("Removing project: {} (user: {})", proj.string(), username);
 
     if (verbose) {
-        std::cout << "Step 1: Finding output files outside ai-user home" << std::endl;
+        std::cout << "Step 1: Unmounting bind mounts for " << username << std::endl;
     }
-
-    std::ostringstream find_cmd;
-    find_cmd << "find / -user " << username
-             << " -not -path '" << ai_home.string() << "/*'"
-             << " -not -path '" << ai_home.string() << "'"
-             << " -type f 2>/dev/null";
-    auto find_result = utils::execute(find_cmd.str());
-
-    bool has_output = false;
-    if (!find_result.stdout_output.empty()) {
-        std::istringstream stream(find_result.stdout_output);
-        std::string file_path;
-        while (std::getline(stream, file_path)) {
-            if (file_path.empty()) continue;
-            if (!has_output) {
-                std::error_code ec;
-                fs::create_directories(preserved_dir, ec);
-                if (ec) {
-                    std::cerr << "Failed to create preserve dir: " << preserved_dir.string() << std::endl;
-                    return 1;
-                }
-                has_output = true;
-            }
-
-            fs::path src(file_path);
-            fs::path dst = preserved_dir / src.relative_path();
-            std::error_code ec;
-            fs::create_directories(dst.parent_path(), ec);
-            fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-            if (ec) {
-                utils::get_logger()->warn("Failed to preserve file: {} - {}", file_path, ec.message());
-            } else if (verbose) {
-                std::cout << "  Preserved: " << file_path << std::endl;
-            }
-        }
-    }
-
-    if (has_output) {
-        std::ostringstream chown_cmd;
-        chown_cmd << "chown -R " << main_user << ":" << main_user << " " << preserved_dir.string();
-        utils::execute(chown_cmd.str());
-        if (verbose) {
-            std::cout << "  Output files preserved to " << preserved_dir.string() << std::endl;
-        }
-    } else if (verbose) {
-        std::cout << "  No output files found outside ai-user home." << std::endl;
-    }
-
-    if (verbose) {
-        std::cout << "Step 2: Unmounting bind mounts for " << username << std::endl;
-    }
-    daemon::MountCleaner cleaner;
+    daemon::MountCleaner cleaner(ctx.config.user.prefix);
     cleaner.cleanup_for_user(username);
 
     if (verbose) {
-        std::cout << "Step 3: Removing user " << username << std::endl;
+        std::cout << "Step 2: Removing user " << username << std::endl;
     }
     if (!ctx.user_mgr->remove_ai_user(username, false)) {
         std::cerr << "Failed to remove user: " << username << std::endl;
@@ -317,7 +459,7 @@ int cmd_rm(const std::string& project_path, bool verbose) {
     }
 
     if (verbose) {
-        std::cout << "Step 4: Cleaning up ai-user home" << std::endl;
+        std::cout << "Step 3: Cleaning up ai-user home" << std::endl;
     }
     {
         std::error_code ec;
@@ -328,38 +470,24 @@ int cmd_rm(const std::string& project_path, bool verbose) {
     }
 
     if (verbose) {
-        std::cout << "Step 5: Revoking write grants on project" << std::endl;
+        std::cout << "Step 4: Revoking write grants on project" << std::endl;
     }
     ctx.graft->revoke_write_access(proj, username);
 
     std::cout << "Removed: " << username << std::endl;
-    if (has_output) {
-        std::cout << "Output preserved at: " << preserved_dir.string() << std::endl;
-    }
     return 0;
 }
 
 int cmd_config([[maybe_unused]] bool verbose) {
     auto config = core::ConfigParser::load_default();
     std::cout << "Config file: " << config.config_path.string() << std::endl;
-    std::cout << "User prefix: " << config.user.prefix << std::endl;
+    std::cout << "User prefix: " << config.user.prefix << " (system-level)" << std::endl;
     std::cout << "SSH key type: " << config.ssh.key_type << std::endl;
     std::cout << "SSH key path: " << config.ssh.key_path.string() << std::endl;
-    std::cout << "Auth log: " << config.log.auth_log.string() << std::endl;
-    std::cout << "Log level: " << config.log.level << std::endl;
+    std::cout << "AI default key: " << config.ssh.ai_default_key.string() << std::endl;
     std::cout << "Mount paths:" << std::endl;
     for (const auto& p : config.mount.paths) {
         std::cout << "  - " << p.string() << std::endl;
-    }
-    if (!config.ssh.default_keys.empty()) {
-        std::cout << "SSH default keys:" << std::endl;
-        for (const auto& k : config.ssh.default_keys) {
-            std::string name = k.name.empty() ? "(unnamed)" : k.name;
-            std::string key_preview = k.public_key.size() > 40
-                ? k.public_key.substr(0, 40) + "..."
-                : k.public_key;
-            std::cout << "  - [" << name << "] " << key_preview << std::endl;
-        }
     }
     std::cout << "Loaded: " << (config.loaded ? "yes" : "no (using defaults)") << std::endl;
     return 0;

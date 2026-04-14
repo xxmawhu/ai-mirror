@@ -25,79 +25,95 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 cmake --build .
 ```
 
+构建启用了安全加固标志：PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE。
+
 ### 系统级安装（含 systemd）
 
 ```bash
-sudo ./install.sh              # 完整安装 (构建 + 部署 + systemd)
-sudo ./install.sh --build      # 仅构建
-sudo ./install.sh --clean      # 卸载
+sudo ./install.sh                # 完整安装 (构建 + 部署 + systemd)
+sudo ./install.sh --build        # 仅构建
+sudo ./install.sh --clean        # 卸载
+sudo ./install.sh --skip-pull    # 安装（跳过 git pull）
 ```
+
+安装后提供两个入口：
+- `am` — wrapper 脚本，自动处理 sudo 提权
+- `ai-mirror-bin` — 实际二进制，通过 sudoers 规则提权
+
+### 运行环境
+
+- Linux（systemd 或非 systemd 环境均可）
+- 非 systemd 环境（Docker/WSL）自动跳过 systemd 配置
+- Docker 集成测试: Ubuntu 22.04 / 24.04
 
 ## 使用
 
 ### 创建项目用户
 
 ```bash
-ai-mirror create /home/maxx/projects/alpha
+am create /home/maxx/projects/alpha
 # 创建用户 imaxx_alpha，只读挂载 ~/.bashrc ~/.config 到其 home
 ```
 
 ### 添加写权限目录
 
 ```bash
-ai-mirror mkdir /data/output imaxx_alpha
+am mkdir /data/output imaxx_alpha
 # 授权 imaxx_alpha 对 /data/output 读写
 ```
 
 ### 切换用户
 
 ```bash
-ai-mirror cd /home/imaxx_alpha/project
+am cd /home/imaxx_alpha/project
 # 自动判断并 SSH 切换到 imaxx_alpha
 ```
 
 ### 列出所有 ai-user
 
 ```bash
-ai-mirror list
+am list
 ```
 
 ### 健康检查
 
 ```bash
-ai-mirror health
+am health
 # 检查所有 bind mount 状态
 ```
 
-### 删除项目（保留外部输出）
+### 查看状态
 
 ```bash
-ai-mirror rm /home/maxx/projects/alpha
-# 查找 home 外的输出文件 → 保存到 ~/.ai-mirror-preserves/
-# 卸载 bind mount → 删除用户
+am status
+```
+
+### 删除项目
+
+```bash
+am rm /home/maxx/projects/alpha
+# 卸载 bind mount → 删除用户 → 清理 home
 ```
 
 ### 强制清理
 
 ```bash
-ai-mirror force-destroy imaxx_alpha
+am force-destroy imaxx_alpha
 # 强制卸载并删除用户
 ```
 
 ### 查看配置
 
 ```bash
-ai-mirror config
+am config
 ```
 
 ## 配置文件
 
-`~/.ai-mirror.toml`:
+用户配置 `~/.ai-mirror.toml`（首次运行时自动创建）。`prefix` 固定为 `"i"`（系统级，不可配置）：
 
 ```toml
-[user]
-prefix = "i"           # ai-user 前缀: maxx → imaxx
-
+# 用户级配置 (~/.ai-mirror.toml)
 [mount]
 paths = [
     "~/.bashrc",       # 只读挂载到每个 ai-user
@@ -107,26 +123,33 @@ paths = [
 [ssh]
 key_type = "ed25519"
 key_path = "~/.ssh/ai-mirror"
-
-[[ssh.default_keys]]   # 自动授权到每个 ai-user
-name = "my-key"
-public_key = "ssh-ed25519 AAAA..."
-
-[log]
-auth_log = "/var/log/auth.log"
-level = "info"
+ai_default_key = "~/.ssh/id_ed25519.pub"  # 自动读取公钥并授权给 ai-user（用于读取远程 GitLab 仓库）
 ```
 
 ## 架构
 
 ```
 src/
-├── main.cpp
-├── cli/           # CLI11 命令解析
-├── core/          # 用户管理, Bind Mount, SSH, 配置
-├── daemon/        # 心跳检测, auth.log 监控, 挂载清理
-├── security/      # 路径验证, 安全审计
-└── utils/         # Shell 工具, 日志
+├── main.cpp              # CLI 入口
+├── cli/
+│   ├── parser.cpp        # CLI11 命令解析
+│   └── commands.cpp      # 命令分发
+├── core/
+│   ├── user_manager.cpp  # Linux 用户管理 (useradd/userdel)
+│   ├── graft.cpp         # Bind Mount 管理
+│   ├── ssh_manager.cpp   # SSH 密钥管理
+│   ├── path_resolver.cpp # 路径安全检查
+│   └── config.cpp        # TOML 配置解析
+├── daemon/
+│   ├── health_check.cpp  # 心跳检测
+│   ├── auth_monitor.cpp  # auth.log 监控
+│   └── mount_cleaner.cpp # 挂载清理
+├── security/
+│   ├── path_validator.cpp # 路径包含性检查
+│   └── audit.cpp          # 安全审计
+└── utils/
+    ├── shell.cpp          # Shell 工具函数
+    └── logger.cpp         # 日志
 ```
 
 ### 依赖 (FetchContent 自动获取)
@@ -140,11 +163,49 @@ src/
 
 ## 安全设计
 
+### 路径验证
+
+- **路径白名单**: `cmd_create`, `create_ai_user`, `grant_write_access`, `bind_mount` 均验证路径，拒绝 `/etc`, `/root`, `/var` 等系统目录
 - **路径包含性检查**: mount 前验证 Target 不是 Source 的子目录，防止循环挂载
+- **符号链接防护**: `is_path_allowed()` 和 `safe_canonical()` 在 canonical 失败时返回失败（不回退原始路径），使用 `fs::path` 迭代器检测 `..` 组件
+- **路径存在性验证**: `validate_path_exists()` 使用 `O_PATH | O_NOFOLLOW` + `fstat` 确认路径存在且为目录/文件
+- **Mount 前二次验证**: `bind_mount()` 在验证和执行之间再次检查 canonical 路径一致性，防止 TOCTOU 攻击
+
+### 权限隔离
+
 - **只读 Bind Mount**: 配置文件以只读方式挂载，ai-user 无法修改
 - **无 ACL**: 仅使用传统 Linux 组权限（groupadd, chgrp, chmod g+rwX, SGID）
+- **权限撤销完整**: `revoke_write_access()` 清除 SGID 位、从组中移除用户、删除用户组
+
+### 身份与认证
+
 - **SSH 隔离**: 通过 SSH 密钥切换身份，非 su/sudo
-- **安全审计**: `audit_mounts_for_user()`, `audit_user_permissions()`, `full_audit()`
+- **身份验证**: 优先读取 `/proc/self/loginuid`，防止 `SUDO_USER` 环境变量欺骗
+- **用户名碰撞处理**: `generate_username()` 截断后检测系统用户碰撞，自动追加数字后缀（`_2`, `_3`, ...）确保唯一
+
+### 命令注入防护
+
+- **SSH 命令注入防护**: `cmd_cd` 对整个远程命令进行 `shell_escape()`，使用 `&&` 替代 `;`，路径含 shell 元字符时拒绝
+- **Shell 注入防护**: `fork()+execv()` 替代 `popen()`，SSH 输出使用 `shell_escape()`
+- **TOML 注入防护**: 配置写入时 `toml_escape()` 转义特殊字符
+- **绝对路径执行**: `resolve_command()` 将命令名解析为绝对路径，防止 PATH 劫持
+
+### 编译器加固
+
+PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE、NX (`-Wl,-z,noexecstack`)
+
+### Sudoers 安全模型
+
+sudoers 规则仅列出命令名（无通配符），参数验证由 C++ 二进制层强制执行：
+
+- 所有路径参数经过 `validate_path_allowed()` / `validate_mount_source()` 验证
+- 系统目录 (`/etc`, `/root`, `/var`, `/proc`, `/sys`, `/dev`, `/boot`, `/lib`, `/usr`, `/sbin`, `/bin`, `/run`) 被拒绝
+- `force_cleanup()` 仅允许卸载 `/home/` 下的挂载点
+- `cmd_rm` 的 find 扫描范围限制在用户 home 和项目目录内
+
+### 安全审计
+
+`audit_mounts_for_user()`, `audit_user_permissions()`, `full_audit()` 提供运行时安全审计能力。
 
 ## 测试
 
@@ -153,12 +214,19 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Docker 测试:
+Docker 集成测试（26 项全部通过）：
 
 ```bash
 docker build -t ai-mirror-ubuntu24 -f docker/Dockerfile.ubuntu24 .
 docker build -t ai-mirror-ubuntu22 -f docker/Dockerfile.ubuntu22 .
 ```
+
+## 项目状态
+
+- [x] Phase 1: 核心基础 — 用户管理、路径安全、Bind Mount、SSH、CLI
+- [x] Phase 2: 高级功能 — 配置文件、cd 自动切换、mkdir 权限、心跳检测、强制清理
+- [x] Phase 3: 运维与测试 — Docker 集成测试、install.sh 部署、systemd、安全审计
+- [x] 安全加固 (SECURITY-001 ~ SECURITY-012): 12 项安全问题全部修复
 
 ## License
 

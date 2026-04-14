@@ -20,27 +20,20 @@ static std::string write_test_config(const std::string& content) {
 
 static void test_load_default() {
     auto config = ai_mirror::core::ConfigParser::load_default();
-    assert(!config.user.prefix.empty());
     assert(!config.ssh.key_type.empty());
-    std::cout << "  [PASS] load_default (prefix=" << config.user.prefix << ")" << std::endl;
+    std::cout << "  [PASS] load_default (key_type=" << config.ssh.key_type << ")" << std::endl;
 }
 
 static void test_load_from_file() {
     std::string content = R"(
-[user]
-prefix = "test"
-
 [ssh]
 key_type = "rsa"
-
-[log]
-level = "debug"
+ai_default_key = "/home/test/.ssh/id_ed25519.pub"
 )";
     std::string path = write_test_config(content);
     auto config = ai_mirror::core::ConfigParser::load(path);
-    assert(config.user.prefix == "test");
     assert(config.ssh.key_type == "rsa");
-    assert(config.log.level == "debug");
+    assert(config.ssh.ai_default_key == fs::path("/home/test/.ssh/id_ed25519.pub"));
     std::filesystem::remove(path);
     std::cout << "  [PASS] load_from_file" << std::endl;
 }
@@ -50,11 +43,11 @@ static void test_save_and_load() {
     std::string path = tmpdir + "/ai-mirror-test-save-" + std::to_string(::getpid()) + ".toml";
 
     auto config = ai_mirror::core::ConfigParser::create_default_config(path);
-    config.user.prefix = "z";
+    config.ssh.key_type = "ed25519";
     assert(ai_mirror::core::ConfigParser::save(config, path));
 
     auto loaded = ai_mirror::core::ConfigParser::load(path);
-    assert(loaded.user.prefix == "z");
+    assert(loaded.ssh.key_type == "ed25519");
     std::filesystem::remove(path);
     std::cout << "  [PASS] save_and_load" << std::endl;
 }

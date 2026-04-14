@@ -25,13 +25,8 @@ struct Config {
     struct SSHConfig {
         std::string key_type = "ed25519";
         fs::path key_path;
-        std::vector<SSHKeyEntry> default_keys;
+        fs::path ai_default_key;
     } ssh;
-
-    struct LogConfig {
-        fs::path auth_log = "/var/log/auth.log";
-        std::string level = "info";
-    } log;
 
     fs::path config_path;
     bool loaded = false;

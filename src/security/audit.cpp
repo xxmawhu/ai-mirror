@@ -74,8 +74,8 @@ AuditReport audit_mounts_for_user(const std::string& username) {
     report.add("mount", "user_exists", true);
 
     std::string home(pw->pw_dir);
-    auto mounts_cmd = "findmnt -l -n -o TARGET,SOURCE,FSTYPE";
-    auto result = ai_mirror::utils::execute(mounts_cmd);
+    auto result = ai_mirror::utils::exec_safe(
+        "findmnt", {"findmnt", "-l", "-n", "-o", "TARGET,SOURCE,FSTYPE"});
 
     if (result.exit_code != 0) {
         report.add("mount", "findmnt", false, "findmnt command failed");
@@ -170,7 +170,8 @@ AuditReport full_audit() {
         report.add("system", "ssh_dir_exists", false, ".ssh directory not found");
     }
 
-    auto mounts_result = ai_mirror::utils::execute("findmnt -l -n -o TARGET,FSTYPE");
+    auto mounts_result = ai_mirror::utils::exec_safe(
+        "findmnt", {"findmnt", "-l", "-n", "-o", "TARGET,FSTYPE"});
     if (mounts_result.exit_code == 0) {
         std::istringstream stream(mounts_result.stdout_output);
         std::string line;

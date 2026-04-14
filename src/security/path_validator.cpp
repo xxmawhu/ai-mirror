@@ -1,15 +1,49 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include <algorithm>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace ai_mirror::security {
+
+static const std::vector<std::string> SYSTEM_DIRS = {
+    "/etc", "/root", "/var", "/proc", "/sys", "/dev",
+    "/boot", "/lib", "/usr", "/sbin", "/bin", "/run"
+};
 
 fs::path safe_canonical(const fs::path& p) {
     std::error_code ec;
     auto canonical = fs::canonical(p, ec);
-    if (ec) {
-        return p;
+    if (!ec) return canonical;
+
+    auto weak = fs::weakly_canonical(p, ec);
+    if (!ec) {
+        for (const auto& part : weak) {
+            if (part == "..") return fs::path{};
+        }
+        return weak;
     }
-    return canonical;
+
+    return fs::path{};
+}
+
+bool validate_path_allowed(const fs::path& p) {
+    if (p.empty()) return false;
+    auto resolved = safe_canonical(p);
+    std::string s = resolved.string();
+    for (const auto& d : SYSTEM_DIRS) {
+        if (s.length() >= d.length() && s.substr(0, d.length()) == d) {
+            if (s.length() == d.length() || s[d.length()] == '/') {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool validate_mount_source(const fs::path& source) {
+    if (source.empty()) return false;
+    return validate_path_allowed(source);
 }
 
 bool is_subpath(const fs::path& parent, const fs::path& child) {
@@ -69,6 +103,21 @@ PathCheckResult validate_no_circular_mount(const fs::path& source, const fs::pat
     }
 
     return {true, "OK"};
+}
+
+bool validate_path_exists(const fs::path& p) {
+    if (p.empty()) return false;
+
+    int fd = ::open(p.c_str(), O_PATH | O_NOFOLLOW);
+    if (fd < 0) return false;
+
+    struct stat st{};
+    int ret = ::fstat(fd, &st);
+    ::close(fd);
+
+    if (ret < 0) return false;
+
+    return S_ISDIR(st.st_mode) || S_ISREG(st.st_mode);
 }
 
 }

@@ -6,6 +6,22 @@
 
 namespace ai_mirror::core {
 
+static std::string toml_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:   out += c; break;
+        }
+    }
+    return out;
+}
+
 fs::path ConfigParser::resolve_home(const fs::path& p) {
     auto str = p.string();
     if (str == "~") {
@@ -40,13 +56,6 @@ Config ConfigParser::load(const fs::path& config_path) {
     try {
         auto data = toml::parse(config_path.string());
 
-        if (data.as_table().contains("user")) {
-            auto& user = data["user"];
-            if (user.as_table().contains("prefix")) {
-                config.user.prefix = toml::get<std::string>(user["prefix"]);
-            }
-        }
-
         if (data.as_table().contains("mount")) {
             auto& mount = data["mount"];
             if (mount.as_table().contains("paths")) {
@@ -67,33 +76,8 @@ Config ConfigParser::load(const fs::path& config_path) {
             } else {
                 config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
             }
-            if (ssh.as_table().contains("default_keys")) {
-                auto& keys = ssh["default_keys"];
-                auto& keys_arr = keys.as_array();
-                for (size_t i = 0; i < keys_arr.size(); ++i) {
-                    auto& entry = keys_arr.at(i);
-                    auto& entry_table = entry.as_table();
-                    SSHKeyEntry key_entry;
-                    if (entry_table.contains("name")) {
-                        key_entry.name = toml::get<std::string>(entry_table["name"]);
-                    }
-                    if (entry_table.contains("public_key")) {
-                        key_entry.public_key = toml::get<std::string>(entry_table["public_key"]);
-                    }
-                    if (!key_entry.public_key.empty()) {
-                        config.ssh.default_keys.push_back(std::move(key_entry));
-                    }
-                }
-            }
-        }
-
-        if (data.as_table().contains("log")) {
-            auto& log_sec = data["log"];
-            if (log_sec.as_table().contains("auth_log")) {
-                config.log.auth_log = toml::get<std::string>(log_sec["auth_log"]);
-            }
-            if (log_sec.as_table().contains("level")) {
-                config.log.level = toml::get<std::string>(log_sec["level"]);
+            if (ssh.as_table().contains("ai_default_key")) {
+                config.ssh.ai_default_key = expand_path(toml::get<std::string>(ssh["ai_default_key"]));
             }
         }
 
@@ -106,8 +90,23 @@ Config ConfigParser::load(const fs::path& config_path) {
     return config;
 }
 
+static bool try_auto_create_config(const fs::path& config_path) {
+    if (fs::exists(config_path)) return true;
+
+    auto default_cfg = ConfigParser::create_default_config(config_path);
+    if (!ConfigParser::save(default_cfg, config_path)) {
+        utils::get_logger()->warn("Failed to auto-create config: {}", config_path.string());
+        return false;
+    }
+
+    utils::get_logger()->info("Auto-created config: {}", config_path.string());
+    return true;
+}
+
 Config ConfigParser::load_default() {
     fs::path default_path = fs::path(utils::get_effective_home()) / ".ai-mirror.toml";
+
+    try_auto_create_config(default_path);
 
     if (fs::exists(default_path)) {
         return load(default_path);
@@ -115,7 +114,6 @@ Config ConfigParser::load_default() {
 
     Config config;
     config.config_path = default_path;
-    config.user.prefix = "i";
     config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
     config.loaded = false;
 
@@ -125,15 +123,13 @@ Config ConfigParser::load_default() {
 Config ConfigParser::create_default_config(const fs::path& config_path) {
     Config config;
     config.config_path = config_path;
-    config.user.prefix = "i";
     config.mount.paths = {
         fs::path("~/.bashrc"),
         fs::path("~/.config"),
     };
     config.ssh.key_type = "ed25519";
     config.ssh.key_path = fs::path("~/.ssh/ai-mirror");
-    config.log.auth_log = "/var/log/auth.log";
-    config.log.level = "info";
+    config.ssh.ai_default_key = fs::path("~/.ssh/id_ed25519.pub");
 
     return config;
 }
@@ -144,27 +140,16 @@ bool ConfigParser::save(const Config& config, const fs::path& config_path) {
         return false;
     }
 
-    ofs << "[user]\n"
-        << "prefix = \"" << config.user.prefix << "\"\n\n"
-        << "[mount]\n"
+    ofs << "[mount]\n"
         << "paths = [\n";
     for (const auto& p : config.mount.paths) {
-        ofs << "    \"" << p.string() << "\",\n";
+        ofs << "    \"" << toml_escape(p.string()) << "\",\n";
     }
     ofs << "]\n\n"
         << "[ssh]\n"
-        << "key_type = \"" << config.ssh.key_type << "\"\n"
-        << "key_path = \"" << config.ssh.key_path.string() << "\"\n";
-
-    for (const auto& k : config.ssh.default_keys) {
-        ofs << "\n[[ssh.default_keys]]\n"
-            << "name = \"" << k.name << "\"\n"
-            << "public_key = \"" << k.public_key << "\"\n";
-    }
-
-    ofs << "\n[log]\n"
-        << "auth_log = \"" << config.log.auth_log.string() << "\"\n"
-        << "level = \"" << config.log.level << "\"\n";
+        << "key_type = \"" << toml_escape(config.ssh.key_type) << "\"\n"
+        << "key_path = \"" << toml_escape(config.ssh.key_path.string()) << "\"\n"
+        << "ai_default_key = \"" << toml_escape(config.ssh.ai_default_key.string()) << "\"\n";
 
     return true;
 }

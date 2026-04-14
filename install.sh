@@ -232,7 +232,7 @@ key_path = "~/.ssh/ai-mirror"
 auth_log = "/var/log/auth.log"
 level = "info"
 TOML
-		chmod 0644 "$config_file"
+		chmod 0600 "$config_file"
 		log "  ${config_file} (created)"
 	else
 		log "  Preserving existing config: ${config_file}"
@@ -243,19 +243,19 @@ TOML
 	cat >"$sudoers_file" <<SUDOERS
 # ai-mirror sudo rules
 # Allows members of the ai-mirror group to run ai-mirror commands as root
-# The 'am' wrapper auto-invokes sudo, so users type: am create /path
-# Security: uses "" for exact arg count; path validation is enforced by the binary
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} create "",*
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} mkdir "" ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} cd "",*
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} rm "",*
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} force-destroy "",*
+# Security: No wildcards; argument validation is enforced by the binary
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} create
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} mkdir
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} cd
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} rm
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} force-destroy
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} health
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} list
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} config
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} status
 SUDOERS
 	chmod 0440 "$sudoers_file"
+	chown root:root "$sudoers_file"
 
 	if ! getent group ai-mirror &>/dev/null; then
 		groupadd --system ai-mirror 2>/dev/null || true

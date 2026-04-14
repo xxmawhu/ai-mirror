@@ -19,5 +19,8 @@ PathCheckResult validate_no_circular_mount(const fs::path& source, const fs::pat
 
 bool is_subpath(const fs::path& parent, const fs::path& child);
 fs::path safe_canonical(const fs::path& p);
+bool validate_path_allowed(const fs::path& p);
+bool validate_mount_source(const fs::path& source);
+bool validate_path_exists(const fs::path& p);
 
 }

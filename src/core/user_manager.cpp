@@ -1,4 +1,5 @@
 #include "ai_mirror/core/user_manager.hpp"
+#include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <algorithm>
@@ -16,15 +17,22 @@ std::string UserManager::generate_username(const fs::path& project_path) const {
     std::replace(stem.begin(), stem.end(), '.', '_');
     std::replace(stem.begin(), stem.end(), '-', '_');
 
-    std::string username = prefix_ + utils::get_effective_username() + "_" + stem;
+    std::string base = prefix_ + utils::get_effective_username() + "_" + stem;
+    std::transform(base.begin(), base.end(), base.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
 
     const size_t max_len = 32;
-    if (username.length() > max_len) {
-        username = username.substr(0, max_len);
-    }
+    std::string username = base.substr(0, max_len);
 
-    std::transform(username.begin(), username.end(), username.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+    if (user_exists(username)) {
+        for (size_t i = 2; i < 1000; ++i) {
+            std::string suffix = "_" + std::to_string(i);
+            size_t trunc = max_len - suffix.length();
+            if (trunc > base.length()) trunc = base.length();
+            username = base.substr(0, trunc) + suffix;
+            if (!user_exists(username)) break;
+        }
+    }
 
     return username;
 }
@@ -34,15 +42,17 @@ std::string UserManager::derive_username(const std::string& project_path) const 
 }
 
 bool UserManager::execute_useradd(const std::string& username, const fs::path& home_dir) {
-    std::ostringstream cmd;
-    cmd << "useradd"
-        << " --create-home"
-        << " --home-dir " << home_dir.string()
-        << " --shell /bin/bash"
-        << " --comment 'ai-mirror managed user'"
-        << " " << username;
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error("Invalid username: {}", username);
+        return false;
+    }
 
-    auto result = utils::execute(cmd.str());
+    auto result = utils::exec_safe({"useradd",
+        "--create-home",
+        "--home-dir", home_dir.string(),
+        "--shell", "/usr/sbin/nologin",
+        "--comment", "ai-mirror managed user",
+        username});
     if (result.exit_code != 0) {
         utils::get_logger()->error("useradd failed: {}", result.stderr_output);
         return false;
@@ -51,14 +61,20 @@ bool UserManager::execute_useradd(const std::string& username, const fs::path& h
 }
 
 bool UserManager::execute_userdel(const std::string& username, bool remove_home) {
-    std::ostringstream cmd;
-    cmd << "userdel";
-    if (remove_home) {
-        cmd << " --remove";
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error("Invalid username for deletion: {}", username);
+        return false;
     }
-    cmd << " " << username;
 
-    auto result = utils::execute(cmd.str());
+    std::vector<std::string> args;
+    args.reserve(4);
+    args.push_back("userdel");
+    if (remove_home) {
+        args.push_back("--remove");
+    }
+    args.push_back(username);
+
+    auto result = utils::exec_safe(args);
     if (result.exit_code != 0) {
         utils::get_logger()->error("userdel failed: {}", result.stderr_output);
         return false;
@@ -68,6 +84,22 @@ bool UserManager::execute_userdel(const std::string& username, bool remove_home)
 
 UserInfo UserManager::create_ai_user(const std::string& project_path) {
     fs::path proj(project_path);
+
+    if (!security::validate_path_allowed(proj)) {
+        utils::get_logger()->error("Project path rejected (system directory): {}", proj.string());
+        return {"", "", 0, 0, false};
+    }
+
+    std::string main_user = utils::get_effective_username();
+    std::string main_home = utils::get_home_dir(main_user);
+    if (!main_home.empty()) {
+        std::string ps = fs::absolute(proj).string();
+        if (ps.length() < main_home.length() || ps.substr(0, main_home.length()) != main_home) {
+            utils::get_logger()->error("Project path must be under caller home ({}): {}", main_home, ps);
+            return {"", "", 0, 0, false};
+        }
+    }
+
     std::string username = generate_username(proj);
 
     if (user_exists(username)) {
@@ -89,6 +121,11 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
 
 bool UserManager::remove_ai_user(const std::string& username, bool force) {
     if (!user_exists(username)) {
+        return false;
+    }
+
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error("Invalid username for removal: {}", username);
         return false;
     }
 

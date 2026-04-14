@@ -17,7 +17,7 @@ struct MountEntry {
 
 class Graft {
 public:
-    Graft();
+    explicit Graft(const std::string& user_prefix = "i");
 
     bool bind_mount(const fs::path& source, const fs::path& target, bool read_only = true);
     bool unmount(const fs::path& target, bool lazy = false);
@@ -35,6 +35,7 @@ public:
     int force_cleanup(const std::vector<fs::path>& dead_mounts);
 
 private:
+    std::string prefix_;
     bool execute_mount(const fs::path& source, const fs::path& target, bool read_only);
     bool execute_umount(const fs::path& target, bool lazy);
     std::vector<MountEntry> parse_mount_table() const;

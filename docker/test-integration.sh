@@ -68,7 +68,7 @@ assert_user_not_exists() {
 # ============================================================
 log_info "=== ai-mirror Docker Integration Test ==="
 
-AI_MIRROR="/usr/local/bin/ai-mirror"
+AI_MIRROR="/usr/local/bin/am"
 PROJECT_DIR="/tmp/test-project-alpha"
 PROJECT_DIR2="/tmp/test-project-beta"
 
@@ -234,11 +234,13 @@ log_info "--- Test 7: cd command ---"
 if [ -n "$AI_USER" ]; then
 	OUT=$(SUDO_USER="$MAIN_USER" "$AI_MIRROR" cd "$PROJECT_DIR" 2>&1) || true
 	log_info "cd ai-user dir: $OUT"
-	assert_contains "cd outputs cd command" "$OUT" "cd"
+	assert_contains "cd project dir outputs cd" "$OUT" "cd"
 
 	OUT=$(SUDO_USER="$MAIN_USER" "$AI_MIRROR" cd "/home/$AI_USER" 2>&1) || true
 	log_info "cd ai-user home: $OUT"
-	assert_contains "cd detects ai-user home ownership" "$OUT" "$AI_USER"
+	assert_contains "cd ai-user home outputs exec ssh" "$OUT" "exec ssh"
+	assert_contains "cd ai-user home uses quiet mode" "$OUT" "ssh -q "
+	assert_contains "cd ai-user home targets correct user" "$OUT" "$AI_USER"
 
 	OUT=$(SUDO_USER="$MAIN_USER" "$AI_MIRROR" cd "/home/$MAIN_USER" 2>&1) || true
 	log_info "cd main user dir: $OUT"
@@ -270,9 +272,22 @@ else
 fi
 
 # ============================================================
-# Test 10: rm command
+# Test 10: status command
 # ============================================================
-log_info "--- Test 10: rm command ---"
+log_info "--- Test 10: status command ---"
+if [ -n "$AI_USER" ]; then
+	OUT=$(run_as_user status 2>&1)
+	log_info "status output: $OUT"
+	assert_contains "status shows project" "$OUT" "Project: $AI_USER"
+	assert_contains "status shows home" "$OUT" "Home:"
+	assert_contains "status shows SSH state" "$OUT" "SSH:"
+	assert_contains "status shows overall status" "$OUT" "Status:"
+fi
+
+# ============================================================
+# Test 11: rm command
+# ============================================================
+log_info "--- Test 11: rm command ---"
 if [ -n "$AI_USER2" ]; then
 	OUT=$(run_as_user rm "$PROJECT_DIR2") || true
 	log_info "rm output: $OUT"
@@ -282,9 +297,9 @@ if [ -n "$AI_USER2" ]; then
 fi
 
 # ============================================================
-# Test 11: force-destroy command
+# Test 12: force-destroy command
 # ============================================================
-log_info "--- Test 11: force-destroy command ---"
+log_info "--- Test 12: force-destroy command ---"
 if [ -n "$AI_USER" ]; then
 	OUT=$(run_as_user force-destroy "$AI_USER") || true
 	log_info "force-destroy output: $OUT"
@@ -295,6 +310,20 @@ if [ -n "$AI_USER" ]; then
 	else
 		log_pass "ai-user home removed after force-destroy"
 	fi
+fi
+
+# ============================================================
+# Test 13: AI user rejection
+# ============================================================
+log_info "--- Test 13: AI user cannot use am ---"
+if [ -n "$AI_USER" ]; then
+	OUT=$(SUDO_USER="$AI_USER" "$AI_MIRROR" list 2>&1) || true
+	log_info "AI user running list: $OUT"
+	assert_contains "AI user gets rejection message" "$OUT" "AI users cannot use"
+
+	OUT=$(SUDO_USER="$AI_USER" "$AI_MIRROR" health 2>&1) || true
+	log_info "AI user running health: $OUT"
+	assert_contains "AI user rejected on all commands" "$OUT" "AI users cannot use"
 fi
 
 # ============================================================

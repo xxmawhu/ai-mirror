@@ -1,8 +1,24 @@
 #include "ai_mirror/cli/commands.hpp"
+#include "ai_mirror/utils/shell.hpp"
+#include "ai_mirror/core/config.hpp"
 #include <CLI/CLI.hpp>
 #include <iostream>
+#include <pwd.h>
 
 namespace ai_mirror::cli {
+
+static bool is_ai_user() {
+    auto config = core::ConfigParser::load_default();
+    std::string prefix = config.user.prefix;
+    std::string current = utils::get_effective_username();
+
+    if (current.empty() || prefix.empty()) return false;
+    if (current.length() <= prefix.length()) return false;
+    if (current.substr(0, prefix.length()) != prefix) return false;
+
+    size_t underscore_pos = current.find('_', prefix.length());
+    return underscore_pos != std::string::npos;
+}
 
 int parse_and_run(int argc, char** argv) {
     CLI::App app{"ai-mirror - Linux user permission isolation manager"};
@@ -47,10 +63,19 @@ int parse_and_run(int argc, char** argv) {
     // config
     app.add_subcommand("config", "Show current configuration");
 
+    // status
+    app.add_subcommand("status", "Show status of all projects");
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
         return app.exit(e);
+    }
+
+    if (is_ai_user()) {
+        std::cerr << "ai-mirror: AI users cannot use this tool." << std::endl;
+        std::cerr << "This command manages AI user isolation and must be run by the main user." << std::endl;
+        return 1;
     }
 
     if (create_cmd->parsed()) {
@@ -69,6 +94,8 @@ int parse_and_run(int argc, char** argv) {
         return cmd_rm(rm_path, verbose);
     } else if (app.got_subcommand("config")) {
         return cmd_config(verbose);
+    } else if (app.got_subcommand("status")) {
+        return cmd_status(verbose);
     }
 
     return 1;

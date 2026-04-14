@@ -12,5 +12,6 @@ int cmd_health(bool verbose);
 int cmd_force_destroy(const std::string& project_or_user, bool verbose);
 int cmd_rm(const std::string& project_path, bool verbose);
 int cmd_config(bool verbose);
+int cmd_status(bool verbose);
 
 }

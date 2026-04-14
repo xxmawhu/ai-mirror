@@ -23,6 +23,8 @@ SYSTEMD_DIR="${AI_MIRROR_SYSTEMD_DIR:-/etc/systemd/system}"
 CONFIG_DIR="${AI_MIRROR_CONFIG_DIR:-/etc/ai-mirror}"
 DATA_DIR="${AI_MIRROR_DATA_DIR:-/var/lib/ai-mirror}"
 BIN_NAME="ai-mirror"
+REAL_BIN_NAME="ai-mirror-bin"
+WRAPPER_NAME="am"
 
 # ---- Colors ----
 RED='\033[0;31m'
@@ -169,9 +171,36 @@ phase_install() {
 	log "Installing binary to ${PREFIX}/bin/..."
 
 	install -d "${PREFIX}/bin"
-	install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/"
+	install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${REAL_BIN_NAME}"
 
-	log "  ${PREFIX}/bin/${BIN_NAME}  ($(stat -c%s "${PREFIX}/bin/${BIN_NAME}") bytes)"
+	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  ($(stat -c%s "${PREFIX}/bin/${REAL_BIN_NAME}") bytes)"
+
+	log "Installing 'am' wrapper to ${PREFIX}/bin/..."
+	local wrapper_src="${SCRIPT_DIR}/docker/am-wrapper.sh"
+	if [[ ! -f "$wrapper_src" ]]; then
+		wrapper_src="${SCRIPT_DIR}/am-wrapper.sh"
+	fi
+	if [[ -f "$wrapper_src" ]]; then
+		install -m 0755 "$wrapper_src" "${PREFIX}/bin/${WRAPPER_NAME}"
+		sed -i "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|" "${PREFIX}/bin/${WRAPPER_NAME}"
+		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper)"
+	else
+		cat >"${PREFIX}/bin/${WRAPPER_NAME}" <<WRAPPER
+#!/usr/bin/env bash
+set -euo pipefail
+AM_BIN="${PREFIX}/bin/${REAL_BIN_NAME}"
+if [ ! -x "\$AM_BIN" ]; then
+    echo "error: \$AM_BIN not found" >&2
+    exit 1
+fi
+if [ "\$(id -u)" -eq 0 ]; then
+    exec "\$AM_BIN" "\$@"
+fi
+exec sudo "\$AM_BIN" "\$@"
+WRAPPER
+		chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}"
+		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper, inline)"
+	fi
 
 	log "Setting up data directory ${DATA_DIR}/..."
 	install -d "${DATA_DIR}"
@@ -214,15 +243,17 @@ TOML
 	cat >"$sudoers_file" <<SUDOERS
 # ai-mirror sudo rules
 # Allows members of the ai-mirror group to run ai-mirror commands as root
+# The 'am' wrapper auto-invokes sudo, so users type: am create /path
 # Security: uses "" for exact arg count; path validation is enforced by the binary
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create "",*
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir "" ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd "",*
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm "",*
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy "",*
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} create "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} mkdir "" ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} cd "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} rm "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} force-destroy "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} health
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} list
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} config
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} status
 SUDOERS
 	chmod 0440 "$sudoers_file"
 
@@ -270,7 +301,7 @@ After=local-fs.target
 
 [Service]
 Type=oneshot
-ExecStart=${PREFIX}/bin/${BIN_NAME} health
+	ExecStart=${PREFIX}/bin/${REAL_BIN_NAME} health
 StandardOutput=journal
 StandardError=journal
 EOF
@@ -311,7 +342,7 @@ EOF
 
 	echo ""
 	info "Check timer:  sudo systemctl list-timers ai-mirror-health.timer"
-	info "Manual check: sudo ${PREFIX}/bin/${BIN_NAME} health"
+	info "Manual check: ${PREFIX}/bin/${WRAPPER_NAME} health"
 }
 
 # ---- Phase: Summary ----
@@ -320,8 +351,9 @@ phase_summary() {
 	log "INSTALL COMPLETE"
 	separator
 	log ""
-	log "Installed binary:"
-	log "  ${PREFIX}/bin/${BIN_NAME}"
+	log "Installed:"
+	log "  ${PREFIX}/bin/${WRAPPER_NAME}       (wrapper, auto-invokes sudo)"
+	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  (actual binary)"
 	log ""
 	log "Configuration:"
 	log "  ${CONFIG_DIR}/ai-mirror.toml"
@@ -338,10 +370,10 @@ phase_summary() {
 	log "Quick start:"
 	log "  1. Add user to group:     sudo usermod -aG ai-mirror \$USER"
 	log "  2. Create config symlink: ln -s ${CONFIG_DIR}/ai-mirror.toml ~/.ai-mirror.toml"
-	log "  3. Create project user:   sudo ai-mirror create /path/to/project"
-	log "  4. Grant write access:    sudo ai-mirror mkdir /path/to/dir <ai-user>"
-	log "  5. List users:            ai-mirror list"
-	log "  6. Remove project:        sudo ai-mirror rm /path/to/project"
+	log "  3. Create project user:   am create /path/to/project"
+	log "  4. Grant write access:    am mkdir /path/to/dir <ai-user>"
+	log "  5. List users:            am list"
+	log "  6. Remove project:        am rm /path/to/project"
 	log ""
 	log "Uninstall:"
 	log "  sudo ${SCRIPT_DIR}/install.sh --clean"
@@ -380,9 +412,14 @@ phase_clean() {
 		systemctl daemon-reload 2>&1 | tee -a "$INSTALL_LOG" || true
 	fi
 
-	if [[ -f "${PREFIX}/bin/${BIN_NAME}" ]]; then
-		rm -f "${PREFIX}/bin/${BIN_NAME}"
-		log "  Removed ${PREFIX}/bin/${BIN_NAME}"
+	if [[ -f "${PREFIX}/bin/${REAL_BIN_NAME}" ]]; then
+		rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"
+		log "  Removed ${PREFIX}/bin/${REAL_BIN_NAME}"
+	fi
+
+	if [[ -f "${PREFIX}/bin/${WRAPPER_NAME}" ]]; then
+		rm -f "${PREFIX}/bin/${WRAPPER_NAME}"
+		log "  Removed ${PREFIX}/bin/${WRAPPER_NAME}"
 	fi
 
 	if [[ -f "${CONFIG_DIR}/sudoers.d/ai-mirror" ]]; then

@@ -114,7 +114,13 @@ int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose)
     return 0;
 }
 
-int cmd_cd(const std::string& path, bool verbose) {
+int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
+    auto config = core::ConfigParser::load_default();
+    std::string prefix = config.user.prefix;
+
+    std::string current_user = utils::get_effective_username();
+    std::string ai_prefix = prefix + current_user;
+
     fs::path target = core::PathResolver::resolve(path);
     if (!fs::exists(target)) {
         std::cerr << "Path does not exist: " << path << std::endl;
@@ -122,19 +128,16 @@ int cmd_cd(const std::string& path, bool verbose) {
     }
 
     std::string owner = core::PathResolver::detect_owner_user(target);
-    std::string current_user = utils::get_effective_username();
 
     if (owner.empty() || owner == current_user) {
         std::cout << "cd " << target.string() << std::endl;
         return 0;
     }
 
-    std::string prefix = "i";
-    if (owner.substr(0, prefix.length()) == prefix) {
-        if (verbose) {
-            std::cerr << "Switching to user: " << owner << std::endl;
-        }
-        std::cout << "ssh " << owner << "@localhost" << std::endl;
+    if (owner.length() >= ai_prefix.length() &&
+        owner.substr(0, ai_prefix.length()) == ai_prefix) {
+        std::cout << "exec ssh -q " << owner << "@localhost -t 'cd "
+                  << target.string() << "; exec bash -l'" << std::endl;
         return 0;
     }
 
@@ -359,6 +362,53 @@ int cmd_config([[maybe_unused]] bool verbose) {
         }
     }
     std::cout << "Loaded: " << (config.loaded ? "yes" : "no (using defaults)") << std::endl;
+    return 0;
+}
+
+int cmd_status([[maybe_unused]] bool verbose) {
+    auto ctx = make_context(verbose);
+    auto users = ctx.user_mgr->list_ai_users();
+
+    if (users.empty()) {
+        std::cout << "No ai-mirror managed projects." << std::endl;
+        return 0;
+    }
+
+    std::string main_user = utils::get_effective_username();
+
+    for (const auto& u : users) {
+        std::cout << "Project: " << u.username << std::endl;
+        std::cout << "  Home: " << u.home_dir << std::endl;
+        std::cout << "  UID:  " << u.uid << std::endl;
+
+        bool all_healthy = true;
+
+        auto mounts = ctx.graft->list_mounts(u.username);
+        if (mounts.empty()) {
+            std::cout << "  Mounts: none" << std::endl;
+        } else {
+            std::cout << "  Mounts:" << std::endl;
+            for (const auto& m : mounts) {
+                std::string state = m.active ? "active" : "broken";
+                std::string mode = m.read_only ? "ro" : "rw";
+                std::cout << "    " << m.source.string() << " -> " << m.target.string()
+                          << " (" << mode << ", " << state << ")" << std::endl;
+                if (!m.active) all_healthy = false;
+            }
+        }
+
+        std::string ssh_key_path = utils::get_home_dir(main_user) + "/.ssh/ai-mirror";
+        bool ssh_ok = fs::exists(fs::path(ssh_key_path)) &&
+                      fs::exists(fs::path(ssh_key_path + ".pub"));
+        std::cout << "  SSH:   " << (ssh_ok ? "ok" : "missing") << std::endl;
+
+        fs::path auth_keys = fs::path(u.home_dir) / ".ssh" / "authorized_keys";
+        std::cout << "  Auth:  " << (fs::exists(auth_keys) ? "ok" : "missing") << std::endl;
+
+        std::cout << "  Status: " << (all_healthy ? "healthy" : "unhealthy") << std::endl;
+        std::cout << std::endl;
+    }
+
     return 0;
 }
 

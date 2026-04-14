@@ -129,3 +129,6 @@ AI用户 (imaxx_alpha):
 - [x] audit.cpp 安全审计函数已填充
 - [x] 测试目标修复 (CMakeLists.txt macro 替代 function, 4个独立测试全部通过)
 - [x] 文档 README.md
+- [x] Docker 集成测试通过 (Ubuntu 22.04: 26/26, Ubuntu 24.04: 26/26)
+- [x] SUDO_USER bug 修复 (user_manager.cpp, commands.cpp: get_current_username -> get_effective_username)
+- [x] install.sh systemd 兼容 (非 systemd 环境/Docker 自动跳过)

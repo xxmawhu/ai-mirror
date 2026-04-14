@@ -56,7 +56,7 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    std::string main_user = utils::get_current_username();
+    std::string main_user = utils::get_effective_username();
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 
@@ -122,7 +122,7 @@ int cmd_cd(const std::string& path, bool verbose) {
     }
 
     std::string owner = core::PathResolver::detect_owner_user(target);
-    std::string current_user = utils::get_current_username();
+    std::string current_user = utils::get_effective_username();
 
     if (owner.empty() || owner == current_user) {
         std::cout << "cd " << target.string() << std::endl;

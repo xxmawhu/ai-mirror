@@ -214,11 +214,15 @@ TOML
 	cat >"$sudoers_file" <<SUDOERS
 # ai-mirror sudo rules
 # Allows members of the ai-mirror group to run ai-mirror commands as root
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create *
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir *
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm *
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy *
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health *
+# Security: uses "" for exact arg count; path validation is enforced by the binary
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir "" ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy "",*
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config
 SUDOERS
 	chmod 0440 "$sudoers_file"
 
@@ -231,7 +235,20 @@ SUDOERS
 }
 
 # ---- Phase: Systemd ----
+has_systemd() {
+	if [ -d /run/systemd/system ] 2>/dev/null; then
+		return 0
+	fi
+	return 1
+}
+
 phase_systemd() {
+	if ! has_systemd; then
+		warn "systemd not running (PID 1 != systemd). Skipping systemd setup."
+		warn "In container/WSL environments, health check runs via cron or manual invocation."
+		return 0
+	fi
+
 	log "Setting up systemd health-check service..."
 
 	local was_running=false
@@ -337,17 +354,19 @@ phase_summary() {
 phase_clean() {
 	log "Removing installed files..."
 
-	if systemctl is-active --quiet ai-mirror-health.timer 2>/dev/null; then
-		log "  Stopping timer..."
-		systemctl stop ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG" || true
-	fi
-	if systemctl is-active --quiet ai-mirror-health.service 2>/dev/null; then
-		log "  Stopping service..."
-		systemctl stop ai-mirror-health.service 2>&1 | tee -a "$INSTALL_LOG" || true
-	fi
-	if systemctl is-enabled --quiet ai-mirror-health.timer 2>/dev/null; then
-		log "  Disabling timer..."
-		systemctl disable ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG" || true
+	if has_systemd; then
+		if systemctl is-active --quiet ai-mirror-health.timer 2>/dev/null; then
+			log "  Stopping timer..."
+			systemctl stop ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG" || true
+		fi
+		if systemctl is-active --quiet ai-mirror-health.service 2>/dev/null; then
+			log "  Stopping service..."
+			systemctl stop ai-mirror-health.service 2>&1 | tee -a "$INSTALL_LOG" || true
+		fi
+		if systemctl is-enabled --quiet ai-mirror-health.timer 2>/dev/null; then
+			log "  Disabling timer..."
+			systemctl disable ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG" || true
+		fi
 	fi
 
 	for f in ai-mirror-health.service ai-mirror-health.timer; do
@@ -356,7 +375,10 @@ phase_clean() {
 			log "  Removed ${SYSTEMD_DIR}/${f}"
 		fi
 	done
-	systemctl daemon-reload 2>&1 | tee -a "$INSTALL_LOG" || true
+
+	if has_systemd; then
+		systemctl daemon-reload 2>&1 | tee -a "$INSTALL_LOG" || true
+	fi
 
 	if [[ -f "${PREFIX}/bin/${BIN_NAME}" ]]; then
 		rm -f "${PREFIX}/bin/${BIN_NAME}"

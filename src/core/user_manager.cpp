@@ -16,7 +16,7 @@ std::string UserManager::generate_username(const fs::path& project_path) const {
     std::replace(stem.begin(), stem.end(), '.', '_');
     std::replace(stem.begin(), stem.end(), '-', '_');
 
-    std::string username = prefix_ + utils::get_current_username() + "_" + stem;
+    std::string username = prefix_ + utils::get_effective_username() + "_" + stem;
 
     const size_t max_len = 32;
     if (username.length() > max_len) {
@@ -92,7 +92,7 @@ bool UserManager::remove_ai_user(const std::string& username, bool force) {
         return false;
     }
 
-    std::string prefix_check = prefix_ + utils::get_current_username();
+    std::string prefix_check = prefix_ + utils::get_effective_username();
     if (username.substr(0, prefix_check.length()) != prefix_check) {
         utils::get_logger()->error("Refusing to remove non-ai-mirror user: {}", username);
         return false;
@@ -115,7 +115,7 @@ bool UserManager::user_exists(const std::string& username) const {
 
 std::vector<UserInfo> UserManager::list_ai_users() const {
     std::vector<UserInfo> users;
-    std::string prefix_str = prefix_ + utils::get_current_username();
+    std::string prefix_str = prefix_ + utils::get_effective_username();
 
     setpwent();
     while (auto* pw = getpwent()) {

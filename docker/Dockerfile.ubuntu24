@@ -19,9 +19,10 @@ RUN mkdir -p /var/run/sshd
 WORKDIR /build
 COPY . .
 
-RUN cmake -B build -S . \
-    && cmake --build build -j$(nproc)
+RUN ./install.sh --build && ./install.sh
 
-RUN cd build && ctest --output-on-failure || true
+RUN cd build-release && ctest --output-on-failure
 
-RUN echo "Build and test complete for Ubuntu 24.04"
+RUN bash /build/docker/test-integration.sh
+
+RUN echo "Build, test, and integration test complete for Ubuntu 24.04"

@@ -147,6 +147,8 @@ catboost_info
 .vscode/
 log
 *.log
+build-release/
+build-test/
 *.png
 *.s
 *.i

@@ -1,0 +1,12 @@
+build-release/
+build-test/
+build/
+log/
+.plan/
+end_task/
+issues/
+plan/
+.git/
+.cache/
+.clangd/
+compile_commands.json

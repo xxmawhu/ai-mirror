@@ -2,11 +2,10 @@
 #
 # ai-mirror installer
 # Builds from source and installs ai-mirror CLI.
-# Includes systemd health-check daemon setup.
 #
 # Usage:
 #   chmod +x install.sh
-#   sudo ./install.sh            # full install (build + deploy + systemd)
+#   sudo ./install.sh            # full install (build + deploy)
 #   sudo ./install.sh --build    # build only, do not install
 #   sudo ./install.sh --clean    # remove installed files
 #
@@ -215,9 +214,6 @@ WRAPPER
 # ai-mirror configuration
 # See: ai-mirror config
 
-[user]
-prefix = "i"
-
 [mount]
 paths = [
     "~/.bashrc",
@@ -227,10 +223,7 @@ paths = [
 [ssh]
 key_type = "ed25519"
 key_path = "~/.ssh/ai-mirror"
-
-[log]
-auth_log = "/var/log/auth.log"
-level = "info"
+ai_default_key = "~/.ssh/id_ed25519.pub"
 TOML
 		chmod 0600 "$config_file"
 		log "  ${config_file} (created)"
@@ -246,6 +239,9 @@ TOML
 # Security: No wildcards; argument validation is enforced by the binary
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} create
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} mkdir
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} touch
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} cp
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} mv
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} cd
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} rm
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} force-destroy
@@ -361,17 +357,14 @@ phase_summary() {
 	log "Data directory:"
 	log "  ${DATA_DIR}/"
 	log ""
-	log "Systemd timer:"
-	log "  ${SYSTEMD_DIR}/ai-mirror-health.timer (every 5 min)"
-	log ""
 	log "Sudoers:"
 	log "  ${CONFIG_DIR}/sudoers.d/ai-mirror"
 	log ""
 	log "Quick start:"
 	log "  1. Add user to group:     sudo usermod -aG ai-mirror \$USER"
-	log "  2. Create config symlink: ln -s ${CONFIG_DIR}/ai-mirror.toml ~/.ai-mirror.toml"
-	log "  3. Create project user:   am create /path/to/project"
-	log "  4. Grant write access:    am mkdir /path/to/dir <ai-user>"
+	log "  2. Create project user:   am create /path/to/project"
+	log "  3. Grant write access:    am mkdir /path/to/dir <ai-user>"
+	log "  4. Create file:           am touch /path/to/file <ai-user>"
 	log "  5. List users:            am list"
 	log "  6. Remove project:        am rm /path/to/project"
 	log ""
@@ -468,15 +461,14 @@ main() {
 		phase_build
 		phase_verify
 		phase_install
-		phase_systemd
 		phase_summary
 		;;
 	--help | -h)
 		echo "Usage: $0 [--build|--clean|--help]"
 		echo ""
-		echo "  (default)   Build, install, and setup systemd timer"
+		echo "  (default)   Build and install"
 		echo "  --build     Build and verify only, do not install"
-		echo "  --clean     Remove all installed files and systemd services"
+		echo "  --clean     Remove all installed files"
 		echo "  --help      Show this help"
 		;;
 	*)

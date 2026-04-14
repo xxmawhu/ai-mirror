@@ -9,6 +9,7 @@
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 
@@ -102,6 +103,15 @@ int cmd_create(const std::string& project_path, bool verbose) {
     return 0;
 }
 
+static bool recursive_chown(const fs::path& p, const std::string& owner) {
+    auto result = utils::exec_safe({"chown", "-R", owner + ":" + owner, p.string()});
+    if (result.exit_code != 0) {
+        utils::get_logger()->error("chown -R failed for {}: {}", p.string(), result.stderr_output);
+        return false;
+    }
+    return true;
+}
+
 int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose) {
     auto ctx = make_context(verbose);
 
@@ -152,13 +162,62 @@ int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose)
     return 0;
 }
 
-static bool recursive_chown(const fs::path& p, const std::string& owner) {
-    auto result = utils::exec_safe({"chown", "-R", owner + ":" + owner, p.string()});
-    if (result.exit_code != 0) {
-        utils::get_logger()->error("chown -R failed for {}: {}", p.string(), result.stderr_output);
-        return false;
+int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose) {
+    auto ctx = make_context(verbose);
+
+    if (!utils::is_root()) {
+        std::cerr << "ai-mirror touch requires root privileges" << std::endl;
+        return 1;
     }
-    return true;
+
+    if (!utils::validate_username(ai_user)) {
+        std::cerr << "Invalid ai_user name: " << ai_user << std::endl;
+        return 1;
+    }
+
+    std::string main_user = utils::get_effective_username();
+    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
+        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
+        return 1;
+    }
+
+    fs::path file_path = core::PathResolver::resolve(path);
+    if (file_path.empty()) {
+        std::cerr << "Invalid path: " << path << std::endl;
+        return 1;
+    }
+
+    if (!utils::is_path_allowed(file_path, main_user)) {
+        std::cerr << "Path not allowed: " << file_path.string() << std::endl;
+        return 1;
+    }
+
+    if (!fs::exists(file_path)) {
+        std::error_code ec;
+        fs::path parent = file_path.parent_path();
+        if (!parent.empty() && !fs::exists(parent)) {
+            fs::create_directories(parent, ec);
+            if (ec) {
+                std::cerr << "Failed to create parent directory: " << parent.string() << std::endl;
+                return 1;
+            }
+        }
+        std::ofstream ofs(file_path);
+        if (!ofs.is_open()) {
+            std::cerr << "Failed to create file: " << file_path.string() << std::endl;
+            return 1;
+        }
+    }
+
+    if (!recursive_chown(file_path, ai_user)) {
+        std::cerr << "Failed to set ownership for " << ai_user << std::endl;
+        return 1;
+    }
+
+    if (verbose) {
+        std::cout << "Created file: " << file_path.string() << " (owner: " << ai_user << ")" << std::endl;
+    }
+    return 0;
 }
 
 int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai_user, bool verbose) {

@@ -27,10 +27,10 @@ cmake --build .
 
 构建启用了安全加固标志：PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE。
 
-### 系统级安装（含 systemd）
+### 系统级安装
 
 ```bash
-sudo ./install.sh                # 完整安装 (构建 + 部署 + systemd)
+sudo ./install.sh                # 完整安装 (构建 + 部署)
 sudo ./install.sh --build        # 仅构建
 sudo ./install.sh --clean        # 卸载
 sudo ./install.sh --skip-pull    # 安装（跳过 git pull）
@@ -43,7 +43,6 @@ sudo ./install.sh --skip-pull    # 安装（跳过 git pull）
 ### 运行环境
 
 - Linux（systemd 或非 systemd 环境均可）
-- 非 systemd 环境（Docker/WSL）自动跳过 systemd 配置
 - Docker 集成测试: Ubuntu 22.04 / 24.04
 
 ## 使用
@@ -59,7 +58,28 @@ am create /home/maxx/projects/alpha
 
 ```bash
 am mkdir /data/output imaxx_alpha
-# 授权 imaxx_alpha 对 /data/output 读写
+# 创建目录并授权 imaxx_alpha 对 /data/output 读写
+```
+
+### 创建文件并授权
+
+```bash
+am touch /data/output/result.txt imaxx_alpha
+# 创建空文件并授权 imaxx_alpha 所有（用于授予文件级写权限）
+```
+
+### 复制文件
+
+```bash
+am cp /home/maxx/config.yaml /data/output/ -u imaxx_alpha
+# 复制文件，自动 chown 给 ai-user
+```
+
+### 移动文件
+
+```bash
+am mv /data/old_file /data/new_file -u imaxx_alpha
+# 原子移动文件，自动 chown 给 ai-user（跨设备时回退为 copy+delete）
 ```
 
 ### 切换用户
@@ -75,17 +95,18 @@ am cd /home/imaxx_alpha/project
 am list
 ```
 
+### 查看项目状态
+
+```bash
+am status
+# 显示所有 ai-user 的 mount 状态、SSH 密钥、authorized_keys 健康状态
+```
+
 ### 健康检查
 
 ```bash
 am health
 # 检查所有 bind mount 状态
-```
-
-### 查看状态
-
-```bash
-am status
 ```
 
 ### 删除项目
@@ -122,9 +143,33 @@ paths = [
 
 [ssh]
 key_type = "ed25519"
-key_path = "~/.ssh/ai-mirror"
-ai_default_key = "~/.ssh/id_ed25519.pub"  # 自动读取公钥并授权给 ai-user（用于读取远程 GitLab 仓库）
+key_path = "~/.ssh/ai-mirror"              # 用于 SSH 登录 ai-user 的密钥对
+ai_default_key = "~/.ssh/id_ed25519.pub"   # 自动读取公钥并授权给 ai-user（用于读取远程 GitLab 仓库）
 ```
+
+## Sudoers 配置
+
+安装时自动创建 `/etc/ai-mirror/sudoers.d/ai-mirror`，仅允许 `ai-mirror` 组用户通过 `sudo` 执行指定命令：
+
+```
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin create
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin mkdir
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin touch
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin cp
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin mv
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin cd
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin rm
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin force-destroy
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin health
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin list
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin config
+%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror-bin status
+```
+
+安全要点：
+- 无通配符，仅列出命令名，参数验证由 C++ 二进制层强制执行
+- 路径参数经过 `validate_path_allowed()` 验证，系统目录被拒绝
+- 需要将用户加入 `ai-mirror` 组：`sudo usermod -aG ai-mirror $USER`
 
 ## 架构
 
@@ -224,9 +269,9 @@ docker build -t ai-mirror-ubuntu22 -f docker/Dockerfile.ubuntu22 .
 ## 项目状态
 
 - [x] Phase 1: 核心基础 — 用户管理、路径安全、Bind Mount、SSH、CLI
-- [x] Phase 2: 高级功能 — 配置文件、cd 自动切换、mkdir 权限、心跳检测、强制清理
-- [x] Phase 3: 运维与测试 — Docker 集成测试、install.sh 部署、systemd、安全审计
-- [x] 安全加固 (SECURITY-001 ~ SECURITY-012): 12 项安全问题全部修复
+- [x] Phase 2: 高级功能 — 配置文件、cd 自动切换、mkdir/touch 权限、cp/mv、心跳检测、强制清理
+- [x] Phase 3: 运维与测试 — Docker 集成测试、install.sh 部署、安全审计
+- [x] 安全加固 (SECURITY-001 ~ SECURITY-018): 18 项安全问题全部修复
 
 ## License
 

@@ -53,6 +53,12 @@ int parse_and_run(int argc, char** argv) {
     mv_cmd->add_option("dst", mv_dst, "Destination path")->required();
     mv_cmd->add_option("--user,-u", mv_user, "AI user to own the moved file")->required();
 
+    // touch
+    std::string touch_path, touch_user;
+    auto* touch_cmd = app.add_subcommand("touch", "Create file and grant ownership to ai-user");
+    touch_cmd->add_option("path", touch_path, "File path to create")->required();
+    touch_cmd->add_option("ai_user", touch_user, "AI user to grant ownership")->required();
+
     // cd
     std::string cd_path;
     auto* cd_cmd = app.add_subcommand("cd", "Switch to appropriate user context");
@@ -100,6 +106,8 @@ int parse_and_run(int argc, char** argv) {
         return cmd_cp(cp_src, cp_dst, cp_user, verbose);
     } else if (mv_cmd->parsed()) {
         return cmd_mv(mv_src, mv_dst, mv_user, verbose);
+    } else if (touch_cmd->parsed()) {
+        return cmd_touch(touch_path, touch_user, verbose);
     } else if (cd_cmd->parsed()) {
         return cmd_cd(cd_path, verbose);
     } else if (app.got_subcommand("list")) {

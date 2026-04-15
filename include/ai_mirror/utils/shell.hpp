@@ -31,6 +31,7 @@ std::string get_effective_home();
     std::string shell_escape(const std::string& s);
     bool validate_path_no_shell_metachars(const std::string& path);
     bool is_path_allowed(const fs::path& p, const std::string& main_user);
-uid_t get_login_uid();
+    bool is_path_allowed_parent(const fs::path& p, const std::string& main_user);
+    uid_t get_login_uid();
 
 }

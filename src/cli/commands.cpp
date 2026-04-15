@@ -132,9 +132,9 @@ static bool safe_chown_file(const fs::path& p, const std::string& owner) {
 static bool safe_chown_single(const fs::path& p, uid_t uid, gid_t gid) {
     int fd = open(p.c_str(), O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
-        if (errno == ELOOP && fs::is_directory(p)) {
-            if (chown(p.c_str(), uid, gid) != 0) {
-                utils::get_logger()->error("safe_chown: chown({}) failed: {}", p.string(), strerror(errno));
+        if (errno == ELOOP) {
+            if (lchown(p.c_str(), uid, gid) != 0) {
+                utils::get_logger()->error("safe_chown: lchown({}) failed: {}", p.string(), strerror(errno));
                 return false;
             }
             return true;
@@ -160,9 +160,8 @@ static bool safe_chown_path(const fs::path& p, const std::string& owner) {
     if (!fs::is_directory(p)) {
         return safe_chown_single(p, pw->pw_uid, pw->pw_gid);
     }
-    if (!safe_chown_single(p, pw->pw_uid, pw->pw_gid)) {
-        return false;
-    }
+
+    std::vector<fs::path> entries;
     std::error_code ec;
     for (auto it = fs::recursive_directory_iterator(p, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (ec) {
@@ -170,10 +169,22 @@ static bool safe_chown_path(const fs::path& p, const std::string& owner) {
             ec.clear();
             continue;
         }
-        if (!safe_chown_single(it->path(), pw->pw_uid, pw->pw_gid)) {
+        if (fs::is_symlink(it->symlink_status(ec))) {
+            continue;
+        }
+        entries.push_back(it->path());
+    }
+
+    for (auto rit = entries.rbegin(); rit != entries.rend(); ++rit) {
+        if (!safe_chown_single(*rit, pw->pw_uid, pw->pw_gid)) {
             return false;
         }
     }
+
+    if (!safe_chown_single(p, pw->pw_uid, pw->pw_gid)) {
+        return false;
+    }
+
     auto chmod_result = utils::exec_safe({"chmod", "-R", "ug-s", p.string()});
     if (chmod_result.exit_code != 0) {
         utils::get_logger()->warn("safe_chown_path: chmod ug-s failed for {}: {}", p.string(), chmod_result.stderr_output);

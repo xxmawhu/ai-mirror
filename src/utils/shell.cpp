@@ -202,6 +202,9 @@ std::string get_effective_home() {
 }
 
 bool validate_path_no_shell_metachars(const std::string& path) {
+    if (path.find('\0') != std::string::npos) {
+        return false;
+    }
     static const std::string dangerous = ";`$(){}[]|&<>!\n\r";
     return path.find_first_of(dangerous) == std::string::npos;
 }
@@ -238,20 +241,32 @@ bool is_path_allowed(const fs::path& p, const std::string& main_user) {
         if (part == "..") return false;
     }
 
-    std::error_code ec;
-    fs::path canon = fs::canonical(p, ec);
-    if (ec) return false;
-
-    std::string s = canon.string();
-
     std::string main_home = get_home_dir(main_user);
     if (main_home.empty()) return false;
+
+    std::error_code ec;
+    fs::path canon = fs::canonical(p, ec);
+    if (ec) {
+        canon = fs::weakly_canonical(p, ec);
+        if (ec) return false;
+        for (const auto& part : canon) {
+            if (part == "..") return false;
+        }
+    }
+
+    std::string s = canon.string();
 
     if (s == main_home) return true;
     if (s.length() > main_home.length() && s[main_home.length()] == '/'
         && s.substr(0, main_home.length()) == main_home) return true;
 
     return false;
+}
+
+bool is_path_allowed_parent(const fs::path& p, const std::string& main_user) {
+    fs::path parent = p.parent_path();
+    if (parent.empty()) return false;
+    return is_path_allowed(parent, main_user);
 }
 
 }

@@ -80,6 +80,40 @@ static void test_metachar_rejection() {
     std::cout << "  [PASS] validate_path_no_shell_metachars" << std::endl;
 }
 
+static void test_null_byte_rejection() {
+    using ai_mirror::utils::validate_path_no_shell_metachars;
+    std::string path_with_null = "/home/user/safe";
+    path_with_null += '\0';
+    path_with_null += "/../etc/passwd";
+    assert(!validate_path_no_shell_metachars(path_with_null));
+    std::string path_with_embedded_null = "test\x00file";
+    assert(!validate_path_no_shell_metachars(path_with_embedded_null));
+    assert(validate_path_no_shell_metachars("/home/user/normal_path"));
+    std::cout << "  [PASS] null byte rejection (SEC-026)" << std::endl;
+}
+
+static void test_is_path_allowed_nonexistent() {
+    using ai_mirror::utils::is_path_allowed;
+    std::string user = getenv("USER") ? getenv("USER") : "root";
+    std::string home = ai_mirror::utils::get_home_dir(user);
+    if (!home.empty()) {
+        fs::path nonexistent = fs::path(home) / "nonexistent_subdir" / "newfile.txt";
+        assert(is_path_allowed(nonexistent, user));
+        fs::path nonexistent_dir = fs::path(home) / "brand_new_project_xyz";
+        assert(is_path_allowed(nonexistent_dir, user));
+    }
+    std::cout << "  [PASS] is_path_allowed non-existent paths (SEC-041)" << std::endl;
+}
+
+static void test_is_path_allowed_rejects_outside() {
+    using ai_mirror::utils::is_path_allowed;
+    std::string user = getenv("USER") ? getenv("USER") : "root";
+    assert(!is_path_allowed("/etc/passwd", user));
+    assert(!is_path_allowed("/root/.ssh/id_rsa", user));
+    assert(!is_path_allowed("/var/log/syslog", user));
+    std::cout << "  [PASS] is_path_allowed rejects outside home (SEC-041)" << std::endl;
+}
+
 static void test_is_path_allowed_canonical_failure() {
     assert(!ai_mirror::utils::is_path_allowed("/nonexistent/path/xyz", "root"));
     std::cout << "  [PASS] is_path_allowed rejects nonexistent (no fallback)" << std::endl;
@@ -102,6 +136,9 @@ int main() {
     test_validate_path_exists_real();
     test_validate_path_exists_empty();
     test_metachar_rejection();
+    test_null_byte_rejection();
+    test_is_path_allowed_nonexistent();
+    test_is_path_allowed_rejects_outside();
     test_is_path_allowed_canonical_failure();
     test_is_path_allowed_dotdot();
     std::cout << "All path_validator tests passed!" << std::endl;

@@ -3,8 +3,20 @@
 #include "ai_mirror/utils/logger.hpp"
 #include <filesystem>
 #include <fstream>
+#include <random>
 
 namespace ai_mirror::core {
+
+namespace {
+fs::path make_random_tmp_path(const fs::path& base) {
+    std::random_device rd;
+    std::uniform_int_distribution<unsigned long> dist(0, ULONG_MAX);
+    std::string suffix = ".tmp." + std::to_string(dist(rd));
+    fs::path tmp = base;
+    tmp += suffix;
+    return tmp;
+}
+}
 
 SSHManager::SSHManager() {
     key_path_ = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
@@ -109,8 +121,7 @@ bool SSHManager::authorize_key(const std::string& username, const fs::path& publ
 
     existing_lines.push_back(key_content);
 
-    fs::path tmp_path = auth_keys;
-    tmp_path += ".tmp";
+    fs::path tmp_path = make_random_tmp_path(auth_keys);
     {
         std::ofstream ofs(tmp_path, std::ios::trunc);
         if (!ofs.is_open()) {
@@ -177,8 +188,7 @@ bool SSHManager::authorize_public_key_string(const std::string& username, const 
 
     existing_lines.push_back(public_key);
 
-    fs::path tmp_path = auth_keys;
-    tmp_path += ".tmp";
+    fs::path tmp_path = make_random_tmp_path(auth_keys);
     {
         std::ofstream ofs(tmp_path, std::ios::trunc);
         if (!ofs.is_open()) {

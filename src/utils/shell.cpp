@@ -245,21 +245,13 @@ bool is_path_allowed(const fs::path& p, const std::string& main_user) {
     std::string s = canon.string();
 
     std::string main_home = get_home_dir(main_user);
-    if (!main_home.empty() && s.length() >= main_home.length()
-        && s.substr(0, main_home.length()) == main_home) {
-        return true;
-    }
+    if (main_home.empty()) return false;
 
-    static const std::vector<std::string> denied = {
-        "/etc", "/root", "/var", "/proc", "/sys", "/dev",
-        "/boot", "/lib", "/usr", "/sbin", "/bin", "/run"
-    };
-    for (const auto& d : denied) {
-        if (s.length() >= d.length() && s.substr(0, d.length()) == d) {
-            return false;
-        }
-    }
-    return true;
+    if (s == main_home) return true;
+    if (s.length() > main_home.length() && s[main_home.length()] == '/'
+        && s.substr(0, main_home.length()) == main_home) return true;
+
+    return false;
 }
 
 }

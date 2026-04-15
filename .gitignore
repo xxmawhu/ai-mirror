@@ -153,6 +153,7 @@ build-test/
 *.s
 *.i
 *.h5
+*.parquet
 miniconda.sh
 data/
 compressedLog

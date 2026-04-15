@@ -12,7 +12,7 @@ namespace ai_mirror::core {
 
 UserManager::UserManager(const std::string& prefix) : prefix_(prefix) {}
 
-std::string UserManager::generate_username(const fs::path& project_path) const {
+std::optional<std::string> UserManager::generate_username(const fs::path& project_path) const {
     std::string stem = project_path.filename().string();
     std::replace(stem.begin(), stem.end(), '.', '_');
     std::replace(stem.begin(), stem.end(), '-', '_');
@@ -25,19 +25,17 @@ std::string UserManager::generate_username(const fs::path& project_path) const {
     std::string username = base.substr(0, max_len);
 
     if (user_exists(username)) {
-        for (size_t i = 2; i < 1000; ++i) {
-            std::string suffix = "_" + std::to_string(i);
-            size_t trunc = max_len - suffix.length();
-            if (trunc > base.length()) trunc = base.length();
-            username = base.substr(0, trunc) + suffix;
-            if (!user_exists(username)) break;
-        }
+        utils::get_logger()->error(
+            "Username collision detected: '{}' already exists (derived from path '{}'). "
+            "Cannot create user - project path too similar to existing project.",
+            username, project_path.string());
+        return std::nullopt;
     }
 
     return username;
 }
 
-std::string UserManager::derive_username(const std::string& project_path) const {
+std::optional<std::string> UserManager::derive_username(const std::string& project_path) const {
     return generate_username(fs::path(project_path));
 }
 
@@ -100,7 +98,11 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
         }
     }
 
-    std::string username = generate_username(proj);
+    auto username_opt = generate_username(proj);
+    if (!username_opt) {
+        return {"", "", 0, 0, false};
+    }
+    std::string username = std::move(*username_opt);
 
     if (user_exists(username)) {
         auto info = get_user_info(username);

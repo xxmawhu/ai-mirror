@@ -12,6 +12,11 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <pwd.h>
+#include <grp.h>
 
 namespace fs = std::filesystem;
 
@@ -103,11 +108,75 @@ int cmd_create(const std::string& project_path, bool verbose) {
     return 0;
 }
 
-static bool recursive_chown(const fs::path& p, const std::string& owner) {
-    auto result = utils::exec_safe({"chown", "-R", owner + ":" + owner, p.string()});
-    if (result.exit_code != 0) {
-        utils::get_logger()->error("chown -R failed for {}: {}", p.string(), result.stderr_output);
+static bool safe_chown_file(const fs::path& p, const std::string& owner) {
+    int fd = open(p.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (fd < 0) {
+        utils::get_logger()->error("safe_chown_file: open({}) failed: {}", p.string(), strerror(errno));
         return false;
+    }
+    struct passwd* pw = getpwnam(owner.c_str());
+    if (!pw) {
+        close(fd);
+        utils::get_logger()->error("safe_chown_file: user '{}' not found", owner);
+        return false;
+    }
+    int ret = fchown(fd, pw->pw_uid, pw->pw_gid);
+    close(fd);
+    if (ret != 0) {
+        utils::get_logger()->error("safe_chown_file: fchown({}) failed: {}", p.string(), strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool safe_chown_single(const fs::path& p, uid_t uid, gid_t gid) {
+    int fd = open(p.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ELOOP && fs::is_directory(p)) {
+            if (chown(p.c_str(), uid, gid) != 0) {
+                utils::get_logger()->error("safe_chown: chown({}) failed: {}", p.string(), strerror(errno));
+                return false;
+            }
+            return true;
+        }
+        utils::get_logger()->error("safe_chown: open({}) failed: {}", p.string(), strerror(errno));
+        return false;
+    }
+    int ret = fchown(fd, uid, gid);
+    close(fd);
+    if (ret != 0) {
+        utils::get_logger()->error("safe_chown: fchown({}) failed: {}", p.string(), strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool safe_chown_path(const fs::path& p, const std::string& owner) {
+    struct passwd* pw = getpwnam(owner.c_str());
+    if (!pw) {
+        utils::get_logger()->error("safe_chown_path: user '{}' not found", owner);
+        return false;
+    }
+    if (!fs::is_directory(p)) {
+        return safe_chown_single(p, pw->pw_uid, pw->pw_gid);
+    }
+    if (!safe_chown_single(p, pw->pw_uid, pw->pw_gid)) {
+        return false;
+    }
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(p, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) {
+            utils::get_logger()->warn("safe_chown_path: iterator error: {}", ec.message());
+            ec.clear();
+            continue;
+        }
+        if (!safe_chown_single(it->path(), pw->pw_uid, pw->pw_gid)) {
+            return false;
+        }
+    }
+    auto chmod_result = utils::exec_safe({"chmod", "-R", "ug-s", p.string()});
+    if (chmod_result.exit_code != 0) {
+        utils::get_logger()->warn("safe_chown_path: chmod ug-s failed for {}: {}", p.string(), chmod_result.stderr_output);
     }
     return true;
 }
@@ -209,7 +278,7 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
         }
     }
 
-    if (!recursive_chown(file_path, ai_user)) {
+    if (!safe_chown_file(file_path, ai_user)) {
         std::cerr << "Failed to set ownership for " << ai_user << std::endl;
         return 1;
     }
@@ -261,14 +330,14 @@ int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai
         return 1;
     }
 
-    auto cp_result = utils::exec_safe({"cp", "-a", src_path.string(), dst_path.string()});
+    auto cp_result = utils::exec_safe({"cp", "-r", "--no-preserve=mode", src_path.string(), dst_path.string()});
     if (cp_result.exit_code != 0) {
         std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
         return 1;
     }
 
     fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-    if (!recursive_chown(chown_target, ai_user)) {
+    if (!safe_chown_path(chown_target, ai_user)) {
         std::cerr << "Failed to set ownership for " << ai_user << std::endl;
         return 1;
     }
@@ -323,14 +392,14 @@ int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai
     std::error_code ec;
     fs::rename(src_path, dst_path, ec);
     if (ec) {
-        auto cp_result = utils::exec_safe({"cp", "-a", src_path.string(), dst_path.string()});
+        auto cp_result = utils::exec_safe({"cp", "-r", "--no-preserve=mode", src_path.string(), dst_path.string()});
         if (cp_result.exit_code != 0) {
             std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
             return 1;
         }
 
         fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-        if (!recursive_chown(chown_target, ai_user)) {
+        if (!safe_chown_path(chown_target, ai_user)) {
             std::cerr << "Failed to set ownership after copy" << std::endl;
             return 1;
         }
@@ -347,7 +416,7 @@ int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai
     }
 
     fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-    if (!recursive_chown(chown_target, ai_user)) {
+    if (!safe_chown_path(chown_target, ai_user)) {
         utils::get_logger()->warn("Rename succeeded but chown failed for {}", chown_target.string());
     }
 
@@ -444,8 +513,12 @@ int cmd_force_destroy(const std::string& project_or_user, bool verbose) {
 
     std::string username = project_or_user;
     if (!ctx.user_mgr->user_exists(username)) {
-        fs::path proj(project_or_user);
-        username = ctx.user_mgr->derive_username(project_or_user);
+        auto derived = ctx.user_mgr->derive_username(project_or_user);
+        if (!derived) {
+            std::cerr << "Username collision: cannot derive unique username for: " << project_or_user << std::endl;
+            return 1;
+        }
+        username = std::move(*derived);
         if (!ctx.user_mgr->user_exists(username)) {
             std::cerr << "User not found: " << project_or_user << std::endl;
             return 1;
@@ -486,7 +559,19 @@ int cmd_rm(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    std::string username = ctx.user_mgr->derive_username(proj.string());
+    auto derived = ctx.user_mgr->derive_username(proj.string());
+    if (!derived) {
+        std::cerr << "Username collision: cannot derive unique username for: " << proj.string() << std::endl;
+        return 1;
+    }
+    std::string username = std::move(*derived);
+
+    std::string main_user = utils::get_effective_username();
+    if (!validate_ai_user_ownership(username, main_user, ctx.config.user.prefix)) {
+        std::cerr << "ai_user '" << username << "' does not belong to user '" << main_user << "'" << std::endl;
+        return 1;
+    }
+
     if (!ctx.user_mgr->user_exists(username)) {
         std::cerr << "AI user not found for project: " << proj.string() << std::endl;
         std::cerr << "Expected user: " << username << std::endl;

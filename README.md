@@ -47,87 +47,254 @@ sudo ./install.sh --skip-pull    # 安装（跳过 git pull）
 
 ## 使用
 
-### 创建项目用户
+### 前置条件
+
+- 当前用户必须属于 `ai-mirror` 组
+- AI 用户不能执行任何命令（会被自动拦截）
+- 需要提权的命令通过 `am` wrapper 自动处理 sudo
+
+### 全局选项
+
+| 选项 | 说明 |
+|------|------|
+| `-v, --verbose` | 显示详细输出 |
+
+---
+
+### `create` — 创建项目用户
 
 ```bash
-am create /home/maxx/projects/alpha
-# 创建用户 imaxx_alpha，只读挂载 ~/.bashrc ~/.config 到其 home
+am create <project_path>
 ```
 
-### 添加写权限目录
+为指定项目创建独立的 ai-user，完成全部初始化。
+
+**适用情形**: 首次为项目启用隔离环境时使用。
+
+**执行流程**:
+1. 创建 Linux 用户（用户名 = `prefix + main_user + "_" + 项目名哈希`）
+2. 设置 SSH 免密登录（生成密钥对 + authorized_keys）
+3. 只读 bind mount 主用户的配置文件（`.bashrc`, `.config` 等）
+4. 授予项目目录读写权限
+5. 输出创建的用户名
+
+**条件**:
+- 需要 root 权限（通过 sudoers 自动提权）
+- `project_path` 必须在主用户 home 目录下
+- 用户名碰撞时拒绝创建并报错
+- 路径含 `..` 或无法 canonicalize 时拒绝
+
+---
+
+### `mkdir` — 授权目录
 
 ```bash
-am mkdir /data/output imaxx_alpha
-# 创建目录并授权 imaxx_alpha 对 /data/output 读写
+am mkdir <path> <ai_user>
 ```
 
-### 创建文件并授权
+创建目录并授权 ai-user 读写。
+
+**适用情形**: 需要给 ai-user 额外的写入目录（如输出目录、缓存目录）。
+
+**条件**:
+- 需要 root 权限
+- `path` 必须在主用户 home 目录下
+- `ai_user` 必须属于当前主用户（ownership 验证）
+- 目录已存在时直接授权，不报错
+
+---
+
+### `touch` — 创建文件并授权
 
 ```bash
-am touch /data/output/result.txt imaxx_alpha
-# 创建空文件并授权 imaxx_alpha 所有（用于授予文件级写权限）
+am touch <path> <ai_user>
 ```
 
-### 复制文件
+创建空文件并设置 ai-user 所有权。
+
+**适用情形**: 需要授予 ai-user 对单个文件的写权限，或预创建配置/状态文件。
+
+**条件**:
+- 需要 root 权限
+- `path` 必须在主用户 home 目录下
+- `ai_user` 必须属于当前主用户
+- 文件已存在时直接修改所有权
+- 父目录不存在时自动递归创建
+- 使用 `O_NOFOLLOW + fchown` 防 TOCTOU 符号链接攻击
+
+---
+
+### `cp` — 复制文件
 
 ```bash
-am cp /home/maxx/config.yaml /data/output/ -u imaxx_alpha
-# 复制文件，自动 chown 给 ai-user
+am cp <src> <dst> -u <ai_user>
 ```
 
-### 移动文件
+复制文件或目录，并设置 ai-user 所有权。
+
+**适用情形**: 需要将配置文件、数据文件复制到 ai-user 可写的目录。
+
+**条件**:
+- 需要 root 权限
+- `src` 和 `dst` 都必须在主用户 home 目录下
+- `src` 必须存在
+- `ai_user` 必须属于当前主用户
+- 使用 `cp -r --no-preserve=mode`：不保留源文件权限模式
+- 自动清除 SUID/SGID 位，防止提权
+- 使用 `O_NOFOLLOW + fchown` 防 TOCTOU 符号链接攻击
+
+---
+
+### `mv` — 移动文件
 
 ```bash
-am mv /data/old_file /data/new_file -u imaxx_alpha
-# 原子移动文件，自动 chown 给 ai-user（跨设备时回退为 copy+delete）
+am mv <src> <dst> -u <ai_user>
 ```
 
-### 切换用户
+移动文件或目录，并设置 ai-user 所有权。
+
+**适用情形**: 需要将文件重新组织到 ai-user 的工作目录。
+
+**执行逻辑**:
+- 同文件系统：原子 rename + chown
+- 跨文件系统：copy + delete（回退方案）
+
+**条件**:
+- 需要 root 权限
+- `src` 和 `dst` 都必须在主用户 home 目录下
+- `src` 必须存在
+- `ai_user` 必须属于当前主用户
+- 跨设备复制时不保留 SUID/SGID 位
+- 使用 `O_NOFOLLOW + fchown` 防 TOCTOU 符号链接攻击
+
+---
+
+### `cd` — 切换身份
 
 ```bash
-am cd /home/imaxx_alpha/project
-# 自动判断并 SSH 切换到 imaxx_alpha
+am cd <path>
 ```
 
-### 列出所有 ai-user
+根据目标路径所属用户，自动切换到对应的身份上下文。
+
+**适用情形**: 从主用户 shell 快速切换到 ai-user 工作环境。
+
+**执行逻辑**:
+- 目标属于主用户 → 输出 `cd <path>`
+- 目标属于当前主用户的 ai-user → 输出 `exec ssh <ai-user>@localhost -t "cd <path> && exec bash -l"`
+- 其他情况 → 输出 `cd <path>`
+
+**条件**:
+- 不需要 root 权限
+- `path` 必须存在
+- 路径含 shell 元字符时拒绝（防命令注入）
+- SSH 目标和路径均经过 shell_escape 转义
+
+> **注意**: `am cd` 输出的是 shell 命令，需要通过 `eval $(am cd <path>)` 执行，或由 wrapper 脚本自动 eval。
+
+---
+
+### `rm` — 删除项目
+
+```bash
+am rm <project_path>
+```
+
+安全删除项目的 ai-user，保留输出文件。
+
+**适用情形**: 项目结束，需要清理隔离环境但保留项目目录中的文件。
+
+**执行流程**:
+1. 验证 ai-user 归属当前主用户
+2. 卸载所有 bind mount
+3. 删除 ai-user（保留 home 中的数据文件）
+4. 清理 ai-user home 目录
+5. 撤销项目目录的写权限
+
+**条件**:
+- 需要 root 权限
+- `project_path` 必须能推导出有效的 ai-user
+- ai-user 必须存在
+- ai-user 必须属于当前主用户（ownership 验证）
+
+---
+
+### `force-destroy` — 强制清理
+
+```bash
+am force-destroy <username_or_project_path>
+```
+
+强制卸载并删除 ai-user，不保留任何数据。
+
+**适用情形**: 当 `rm` 无法正常工作（用户损坏、mount 异常等）时的紧急清理。
+
+**条件**:
+- 需要 root 权限
+- 参数可以是 ai-user 用户名或项目路径
+- ai-user 必须属于当前主用户（ownership 验证）
+- **不保留任何数据**，比 `rm` 更彻底
+
+---
+
+### `list` — 列出用户
 
 ```bash
 am list
 ```
 
-### 查看项目状态
+列出所有由 ai-mirror 管理的 ai-user 及其 bind mount 状态。
+
+**适用情形**: 查看当前系统中有哪些 ai-user，以及各自的挂载情况。
+
+**条件**:
+- 不需要 root 权限
+
+---
+
+### `status` — 项目状态
 
 ```bash
 am status
-# 显示所有 ai-user 的 mount 状态、SSH 密钥、authorized_keys 健康状态
 ```
 
-### 健康检查
+显示所有 ai-user 的详细信息：home、UID、mount 状态、SSH 密钥、authorized_keys 健康状态。
+
+**适用情形**: 排查 mount 断开、SSH 密钥缺失等问题。
+
+**条件**:
+- 不需要 root 权限
+- 显示 mount 的 active/broken 状态和 SSH 密钥是否存在
+
+---
+
+### `health` — 健康检查
 
 ```bash
 am health
-# 检查所有 bind mount 状态
 ```
 
-### 删除项目
+检查所有 bind mount 是否正常。退出码 0 = 全部健康，1 = 存在异常。
 
-```bash
-am rm /home/maxx/projects/alpha
-# 卸载 bind mount → 删除用户 → 清理 home
-```
+**适用情形**: 监控和告警，可集成到 cron 或 systemd timer。
 
-### 强制清理
+**条件**:
+- 不需要 root 权限
 
-```bash
-am force-destroy imaxx_alpha
-# 强制卸载并删除用户
-```
+---
 
-### 查看配置
+### `config` — 查看配置
 
 ```bash
 am config
 ```
+
+显示当前加载的配置文件路径及所有配置项。
+
+**适用情形**: 确认配置是否正确加载，调试配置问题。
+
+**条件**:
+- 不需要 root 权限
 
 ## 配置文件
 
@@ -168,7 +335,8 @@ ai_default_key = "~/.ssh/id_ed25519.pub"   # 自动读取公钥并授权给 ai-u
 
 安全要点：
 - 无通配符，仅列出命令名，参数验证由 C++ 二进制层强制执行
-- 路径参数经过 `validate_path_allowed()` 验证，系统目录被拒绝
+- 所有文件操作路径限制在主用户 home 目录内（home-only allowlist）
+- ai-user 归属验证确保不同主用户之间隔离
 - 需要将用户加入 `ai-mirror` 组：`sudo usermod -aG ai-mirror $USER`
 
 ## 架构
@@ -210,11 +378,27 @@ src/
 
 ### 路径验证
 
-- **路径白名单**: `cmd_create`, `create_ai_user`, `grant_write_access`, `bind_mount` 均验证路径，拒绝 `/etc`, `/root`, `/var` 等系统目录
+- **Home-only 允许列表**: 所有文件操作命令（`create`, `mkdir`, `touch`, `cp`, `mv`）的路径参数必须在主用户 home 目录下，其他路径一律拒绝
 - **路径包含性检查**: mount 前验证 Target 不是 Source 的子目录，防止循环挂载
-- **符号链接防护**: `is_path_allowed()` 和 `safe_canonical()` 在 canonical 失败时返回失败（不回退原始路径），使用 `fs::path` 迭代器检测 `..` 组件
+- **符号链接防护**: `is_path_allowed()` 在 canonical 失败时返回失败（不回退原始路径），使用 `fs::path` 迭代器检测 `..` 组件
 - **路径存在性验证**: `validate_path_exists()` 使用 `O_PATH | O_NOFOLLOW` + `fstat` 确认路径存在且为目录/文件
 - **Mount 前二次验证**: `bind_mount()` 在验证和执行之间再次检查 canonical 路径一致性，防止 TOCTOU 攻击
+
+### 所有权验证
+
+- **ai-user 归属检查**: 所有涉及 ai-user 的命令（`mkdir`, `touch`, `cp`, `mv`, `rm`, `force-destroy`）均调用 `validate_ai_user_ownership()`，验证 ai-user 名称以 `prefix + main_user` 开头
+- **防止跨用户操作**: 同一 `ai-mirror` 组内的不同主用户无法操作彼此的 ai-user
+
+### TOCTOU 防护
+
+- **fd-based chown**: `cmd_touch` 使用 `open(O_NOFOLLOW) + fchown()` 获取 fd 后再修改所有权，消除符号链接替换攻击窗口
+- **递归安全 chown**: `cmd_cp` 和 `cmd_mv` 使用 `safe_chown_path()`，对每个文件用 `open(O_NOFOLLOW) + fchown()`，对目录递归遍历处理，目录自身的 ELOOP 回退为普通 chown
+- **SUID/SGID 清除**: `safe_chown_path()` 在 chown 后自动调用 `chmod ug-s` 清除所有 SUID/SGID 位
+
+### SUID/SGID 防护
+
+- **cp 不保留模式**: `cmd_cp` 和 `cmd_mv`（跨文件系统时）使用 `cp -r --no-preserve=mode` 而非 `cp -a`，不保留源文件的 SUID/SGID 位和权限模式
+- **二次清除**: chown 后额外执行 `chmod -R ug-s`，防御性清除所有 SUID/SGID 位
 
 ### 权限隔离
 
@@ -226,7 +410,7 @@ src/
 
 - **SSH 隔离**: 通过 SSH 密钥切换身份，非 su/sudo
 - **身份验证**: 优先读取 `/proc/self/loginuid`，防止 `SUDO_USER` 环境变量欺骗
-- **用户名碰撞处理**: `generate_username()` 截断后检测系统用户碰撞，自动追加数字后缀（`_2`, `_3`, ...）确保唯一
+- **用户名碰撞拒绝**: `generate_username()` 截断后检测系统用户碰撞，碰撞时直接返回错误并拒绝创建，不追加后缀
 
 ### 命令注入防护
 
@@ -271,7 +455,7 @@ docker build -t ai-mirror-ubuntu22 -f docker/Dockerfile.ubuntu22 .
 - [x] Phase 1: 核心基础 — 用户管理、路径安全、Bind Mount、SSH、CLI
 - [x] Phase 2: 高级功能 — 配置文件、cd 自动切换、mkdir/touch 权限、cp/mv、心跳检测、强制清理
 - [x] Phase 3: 运维与测试 — Docker 集成测试、install.sh 部署、安全审计
-- [x] 安全加固 (SECURITY-001 ~ SECURITY-018): 18 项安全问题全部修复
+- [x] 安全加固 (SECURITY-001 ~ SECURITY-018, SEC-019 ~ SEC-022): 22 项安全问题全部修复
 
 ## License
 

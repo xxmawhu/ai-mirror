@@ -1,3 +1,18 @@
+# Public release exclusions - internal/dev-only files
+AGENTS.md
+install.sh
+issues/
+end_task/
+plan/
+memory/
+log/
+.cache/
+.pre-commit-config.yaml
+verification/
+pyproject.toml
+docker/
+tests/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

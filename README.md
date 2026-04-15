@@ -196,12 +196,32 @@ am config
 用户配置 `~/.ai-mirror.toml`（首次运行时自动创建）：
 
 ```toml
+# [mount] 只读挂载到每个 ai-user home 目录的文件/目录
+# ai-user 通过 bind mount 以只读方式看到这些内容，无法修改。
+# 用途：让 ai-user 继承主用户的 shell 环境、编辑器配置、语言设置等，
+#       避免每个 ai-user 都需要单独配置一遍。
+# 路径支持 ~ 展开为当前主用户的 home 目录。
 [mount]
 paths = [
-    "~/.bashrc",
-    "~/.config",
+    "~/.bashrc",       # Shell 初始化脚本（别名、环境变量、PATH 等）
+    "~/.config",       # 应用配置目录（git、nvim、bash-completion 等）
 ]
 
+# [ssh] SSH 密钥与身份切换配置
+# ai-mirror 通过 SSH 密钥实现主用户到 ai-user 的免密身份切换，
+# 而非 su/sudo，从而完全避免 ai-user 获取任何提权路径。
+#
+# key_path: 主用户登录 ai-user 时使用的密钥对（私钥 + 公钥）
+#           此密钥对由 ai-mirror 自动生成并管理。
+#           主用户执行 `am cd <project_path>` 时，
+#           底层使用此密钥 SSH 到 ai-user@localhost。
+#
+# ai_default_key: ai-user 的 authorized_keys 中额外追加的公钥
+#                 典型场景：让 ai-user 能以自己的身份读取远程 Git 仓库
+#                 （GitLab、GitHub 等），而不需要主用户的完整 SSH 权限。
+#                 ai-mirror 会读取此公钥文件内容并写入 ai-user 的 authorized_keys。
+#
+# key_type: 密钥算法，推荐 ed25519（更短、更安全、更快）
 [ssh]
 key_type = "ed25519"
 key_path = "~/.ssh/ai-mirror"

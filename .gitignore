@@ -13,6 +13,7 @@ pyproject.toml
 docker/
 tests/
 release.sh
+.dockerignore
 
 # C/C++ build artifacts
 *.o

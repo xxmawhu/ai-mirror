@@ -300,7 +300,7 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
     return 0;
 }
 
-int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai_user, bool verbose) {
+int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
     auto ctx = make_context(verbose);
 
     if (!utils::is_root()) {
@@ -308,16 +308,7 @@ int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai
         return 1;
     }
 
-    if (!utils::validate_username(ai_user)) {
-        std::cerr << "Invalid ai_user name: " << ai_user << std::endl;
-        return 1;
-    }
-
     std::string main_user = utils::get_effective_username();
-    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
-        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
-        return 1;
-    }
 
     fs::path src_path = core::PathResolver::resolve(src);
     if (src_path.empty() || !fs::exists(src_path)) {
@@ -338,6 +329,24 @@ int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai
 
     if (!utils::is_path_allowed(src_path, main_user)) {
         std::cerr << "Source path not allowed: " << src_path.string() << std::endl;
+        return 1;
+    }
+
+    std::string ai_user = core::PathResolver::detect_ai_user_from_path(dst_path, main_user, ctx.config.user.prefix);
+    if (ai_user.empty()) {
+        auto cp_result = utils::exec_safe({"cp", "-r", "--no-preserve=mode", src_path.string(), dst_path.string()});
+        if (cp_result.exit_code != 0) {
+            std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
+            return 1;
+        }
+        if (verbose) {
+            std::cout << "Copied: " << src_path.string() << " -> " << dst_path.string() << std::endl;
+        }
+        return 0;
+    }
+
+    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
+        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
         return 1;
     }
 
@@ -359,7 +368,7 @@ int cmd_cp(const std::string& src, const std::string& dst, const std::string& ai
     return 0;
 }
 
-int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai_user, bool verbose) {
+int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
     auto ctx = make_context(verbose);
 
     if (!utils::is_root()) {
@@ -367,16 +376,7 @@ int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai
         return 1;
     }
 
-    if (!utils::validate_username(ai_user)) {
-        std::cerr << "Invalid ai_user name: " << ai_user << std::endl;
-        return 1;
-    }
-
     std::string main_user = utils::get_effective_username();
-    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
-        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
-        return 1;
-    }
 
     fs::path src_path = core::PathResolver::resolve(src);
     if (src_path.empty() || !fs::exists(src_path)) {
@@ -400,6 +400,16 @@ int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai
         return 1;
     }
 
+    std::string ai_user = core::PathResolver::detect_ai_user_from_path(dst_path, main_user, ctx.config.user.prefix);
+    bool need_chown = !ai_user.empty();
+
+    if (need_chown) {
+        if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
+            std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
+            return 1;
+        }
+    }
+
     std::error_code ec;
     fs::rename(src_path, dst_path, ec);
     if (ec) {
@@ -409,10 +419,12 @@ int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai
             return 1;
         }
 
-        fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-        if (!safe_chown_path(chown_target, ai_user)) {
-            std::cerr << "Failed to set ownership after copy" << std::endl;
-            return 1;
+        if (need_chown) {
+            fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
+            if (!safe_chown_path(chown_target, ai_user)) {
+                std::cerr << "Failed to set ownership after copy" << std::endl;
+                return 1;
+            }
         }
 
         fs::remove_all(src_path, ec);
@@ -421,18 +433,28 @@ int cmd_mv(const std::string& src, const std::string& dst, const std::string& ai
         }
 
         if (verbose) {
-            std::cout << "Moved (copy+delete): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+            if (need_chown) {
+                std::cout << "Moved (copy+delete): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+            } else {
+                std::cout << "Moved (copy+delete): " << src_path.string() << " -> " << dst_path.string() << std::endl;
+            }
         }
         return 0;
     }
 
-    fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-    if (!safe_chown_path(chown_target, ai_user)) {
-        utils::get_logger()->warn("Rename succeeded but chown failed for {}", chown_target.string());
+    if (need_chown) {
+        fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
+        if (!safe_chown_path(chown_target, ai_user)) {
+            utils::get_logger()->warn("Rename succeeded but chown failed for {}", chown_target.string());
+        }
     }
 
     if (verbose) {
-        std::cout << "Moved (atomic): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+        if (need_chown) {
+            std::cout << "Moved (atomic): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+        } else {
+            std::cout << "Moved (atomic): " << src_path.string() << " -> " << dst_path.string() << std::endl;
+        }
     }
     return 0;
 }
@@ -441,8 +463,7 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
     auto config = core::ConfigParser::load_default();
     std::string prefix = config.user.prefix;
 
-    std::string current_user = utils::get_effective_username();
-    std::string ai_prefix = prefix + current_user;
+    std::string main_user = utils::get_effective_username();
 
     fs::path target = core::PathResolver::resolve(path);
     if (!fs::exists(target)) {
@@ -450,27 +471,23 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
         return 1;
     }
 
-    if (!utils::validate_path_no_shell_metachars(target.string())) {
+    std::string target_str = target.string();
+    if (!utils::validate_path_no_shell_metachars(target_str)) {
         std::cerr << "Path contains disallowed characters" << std::endl;
         return 1;
     }
 
-    std::string owner = core::PathResolver::detect_owner_user(target);
+    std::string ai_user = core::PathResolver::detect_ai_user_from_path(target, main_user, prefix);
 
-    if (owner.empty() || owner == current_user) {
-        std::cout << "cd " << utils::shell_escape(target.string()) << std::endl;
+    if (!ai_user.empty()) {
+        std::cout << "action=ssh" << std::endl;
+        std::cout << "user=" << ai_user << std::endl;
+        std::cout << "path=" << target_str << std::endl;
         return 0;
     }
 
-    if (owner.length() >= ai_prefix.length() &&
-        owner.substr(0, ai_prefix.length()) == ai_prefix) {
-        std::string remote_cmd = "cd " + utils::shell_escape(target.string()) + " && exec bash -l";
-        std::cout << "exec ssh -q " << utils::shell_escape(owner)
-                  << "@localhost -t " << utils::shell_escape(remote_cmd) << std::endl;
-        return 0;
-    }
-
-    std::cout << "cd " << utils::shell_escape(target.string()) << std::endl;
+    std::cout << "action=cd" << std::endl;
+    std::cout << "path=" << target_str << std::endl;
     return 0;
 }
 

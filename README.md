@@ -104,20 +104,20 @@ am touch <path> <ai_user>
 ### `cp` — 复制文件
 
 ```bash
-am cp <src> <dst> -u <ai_user>
+am cp <src> <dst>
 ```
 
-复制文件或目录，并设置 ai-user 所有权。自动清除 SUID/SGID 位。
+复制文件或目录，自动检测目标路径是否属于 ai-user 目录。若属于 ai-user 目录，自动设置所有权；否则执行普通复制。自动清除 SUID/SGID 位。
 
 ---
 
 ### `mv` — 移动文件
 
 ```bash
-am mv <src> <dst> -u <ai_user>
+am mv <src> <dst>
 ```
 
-移动文件或目录。同文件系统原子 rename，跨文件系统 copy+delete。
+移动文件或目录，自动检测目标路径是否属于 ai-user 目录。同文件系统原子 rename，跨文件系统 copy+delete。
 
 ---
 
@@ -127,9 +127,9 @@ am mv <src> <dst> -u <ai_user>
 am cd <path>
 ```
 
-根据目标路径所属用户，自动切换到对应的身份上下文。
+根据目标路径所属用户，自动切换到对应的身份上下文。若目标在 ai-user 目录下，wrapper 会自动执行 `ssh ai-user@localhost`；否则输出 `cd` 命令供 shell 执行。
 
-> **注意**: 输出的是 shell 命令，需要通过 `eval $(am cd <path>)` 执行。
+> **跨共享盘支持**: ai-user 检测基于路径结构而非 UID，在 NFS/BeeGFS 等共享存储上也能正确识别。
 
 ---
 

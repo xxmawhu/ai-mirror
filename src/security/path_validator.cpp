@@ -6,9 +6,13 @@
 
 namespace ai_mirror::security {
 
+// FHS system directories - all paths under these are forbidden.
+// Covers both privileged (/etc, /root, /boot) and shared (/tmp, /opt, /srv, /mnt, /media).
+// /lost+found is filesystem-specific recovery directory (ext4 etc.).
 static const std::vector<std::string> SYSTEM_DIRS = {
     "/etc", "/root", "/var", "/proc", "/sys", "/dev",
-    "/boot", "/lib", "/usr", "/sbin", "/bin", "/run"
+    "/boot", "/lib", "/usr", "/sbin", "/bin", "/run",
+    "/opt", "/tmp", "/srv", "/mnt", "/media", "/lost+found"
 };
 
 fs::path safe_canonical(const fs::path& p) {

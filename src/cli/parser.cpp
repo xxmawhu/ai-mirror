@@ -40,18 +40,16 @@ int parse_and_run(int argc, char** argv) {
     mkdir_cmd->add_option("ai_user", mkdir_user, "AI user to grant access")->required();
 
     // cp
-    std::string cp_src, cp_dst, cp_user;
-    auto* cp_cmd = app.add_subcommand("cp", "Copy file/directory and set ai-user ownership");
+    std::string cp_src, cp_dst;
+    auto* cp_cmd = app.add_subcommand("cp", "Copy file/directory, auto-detect ai-user ownership");
     cp_cmd->add_option("src", cp_src, "Source path")->required();
     cp_cmd->add_option("dst", cp_dst, "Destination path")->required();
-    cp_cmd->add_option("--user,-u", cp_user, "AI user to own the copied file")->required();
 
     // mv
-    std::string mv_src, mv_dst, mv_user;
-    auto* mv_cmd = app.add_subcommand("mv", "Move file/directory atomically and set ai-user ownership");
+    std::string mv_src, mv_dst;
+    auto* mv_cmd = app.add_subcommand("mv", "Move file/directory atomically, auto-detect ai-user ownership");
     mv_cmd->add_option("src", mv_src, "Source path")->required();
     mv_cmd->add_option("dst", mv_dst, "Destination path")->required();
-    mv_cmd->add_option("--user,-u", mv_user, "AI user to own the moved file")->required();
 
     // touch
     std::string touch_path, touch_user;
@@ -103,9 +101,9 @@ int parse_and_run(int argc, char** argv) {
     } else if (mkdir_cmd->parsed()) {
         return cmd_mkdir(mkdir_path, mkdir_user, verbose);
     } else if (cp_cmd->parsed()) {
-        return cmd_cp(cp_src, cp_dst, cp_user, verbose);
+        return cmd_cp(cp_src, cp_dst, verbose);
     } else if (mv_cmd->parsed()) {
-        return cmd_mv(mv_src, mv_dst, mv_user, verbose);
+        return cmd_mv(mv_src, mv_dst, verbose);
     } else if (touch_cmd->parsed()) {
         return cmd_touch(touch_path, touch_user, verbose);
     } else if (cd_cmd->parsed()) {

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
 
 namespace fs = std::filesystem;
 
@@ -15,6 +16,12 @@ namespace {
 bool is_path_under(const std::string& path, const std::string& prefix) {
     if (path.find(prefix) != 0) return false;
     return path.length() == prefix.length() || path[prefix.length()] == '/';
+}
+
+bool is_valid_device_path(const std::string& device) {
+    if (device.empty() || device[0] != '/') return false;
+    if (device.find("..") != std::string::npos) return false;
+    return true;
 }
 }
 
@@ -32,10 +39,15 @@ std::vector<fs::path> MountCleaner::find_stale_mounts() {
         iss >> device >> mount_point;
 
         if (is_path_under(mount_point, match)) {
-            std::error_code ec;
-            if (!fs::exists(device, ec)) {
+            if (!is_valid_device_path(device)) {
+                utils::get_logger()->warn("Invalid device path in mount entry: {}", device);
                 stale.push_back(fs::path(mount_point));
-                utils::get_logger()->warn("Stale mount found: {}", mount_point);
+                continue;
+            }
+            struct stat st;
+            if (lstat(device.c_str(), &st) != 0) {
+                stale.push_back(fs::path(mount_point));
+                utils::get_logger()->warn("Stale mount found (device lstat failed): {}", mount_point);
             }
         }
     }

@@ -29,6 +29,15 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
         return false;
     }
 
+    if (read_only) {
+        auto result = utils::exec_safe({"mount", "--bind,ro", source.string(), target.string()});
+        if (result.exit_code == 0) {
+            utils::get_logger()->info("Bind mounted {} -> {} (ro, single-step)", source.string(), target.string());
+            return true;
+        }
+        utils::get_logger()->warn("Single-step mount --bind,ro failed (kernel <5.12?), falling back to two-step: {}", result.stderr_output);
+    }
+
     auto result = utils::exec_safe({"mount", "--bind", source.string(), target.string()});
     if (result.exit_code != 0) {
         utils::get_logger()->error("mount --bind failed: {}", result.stderr_output);
@@ -124,6 +133,18 @@ bool Graft::unmount(const fs::path& target, bool lazy) {
 }
 
 bool Graft::unmount_all(const std::string& username) {
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error("Invalid username for unmount_all: {}", username);
+        return false;
+    }
+
+    std::string prefix_check = prefix_ + utils::get_effective_username() + "_";
+    if (username.length() <= prefix_check.length()
+        || username.substr(0, prefix_check.length()) != prefix_check) {
+        utils::get_logger()->error("Refusing to unmount_all non-ai-mirror user: {}", username);
+        return false;
+    }
+
     auto mounts = parse_mount_table();
     bool all_ok = true;
 

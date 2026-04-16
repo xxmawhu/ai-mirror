@@ -80,6 +80,8 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
+    int mount_failures = 0;
+
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 
@@ -104,7 +106,15 @@ int cmd_create(const std::string& project_path, bool verbose) {
         }
 
         fs::path target = core::PathResolver::to_ai_user_path(source, user_info.username, main_user);
-        ctx.graft->bind_mount(source, target, true);
+        if (!ctx.graft->bind_mount(source, target, true)) {
+            mount_failures++;
+            utils::get_logger()->error("Mount failed: {} -> {}", source.string(), target.string());
+        }
+    }
+
+    if (mount_failures > 0) {
+        utils::get_logger()->warn("cmd_create completed with {} mount failure(s)", mount_failures);
+        return 1;
     }
 
     ctx.graft->grant_write_access(proj, user_info.username);
@@ -435,11 +445,12 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
                 return 1;
             }
         }
-        std::ofstream ofs(file_path);
-        if (!ofs.is_open()) {
+        int fd = open(file_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+        if (fd < 0) {
             std::cerr << "Failed to create file: " << file_path.string() << std::endl;
             return 1;
         }
+        close(fd);
     }
 
     if (!safe_chown_file(file_path, ai_user)) {

@@ -253,8 +253,11 @@ bool SSHManager::generate_key_pair(const fs::path& key_path, const std::string& 
         return true;
     }
 
-    auto result = utils::exec_safe({"ssh-keygen", "-t", key_type,
-        "-f", key_path.string(), "-N", "", "-C", "ai-mirror", "-q"});
+    auto result = utils::exec_safe({
+        "ssh-keygen", "-t", key_type,
+        "-f", key_path.string(), "-N", "", "-C", "ai-mirror", "-q",
+        "-b", (key_type == "rsa" ? "4096" : (key_type == "ecdsa" ? "521" : ""))
+    });
     if (result.exit_code != 0) {
         utils::get_logger()->error("ssh-keygen failed: {}", result.stderr_output.c_str());
         return false;
@@ -275,8 +278,7 @@ bool SSHManager::ensure_ssh_dir(const std::string& username) {
 
     std::error_code ec;
     if (!fs::exists(ssh_dir, ec)) {
-        auto r1 = utils::exec_safe({"mkdir", "-p", ssh_dir.string()});
-        if (r1.exit_code != 0) {
+        if (!security::safe_create_directories(ssh_dir)) {
             utils::get_logger()->error("Failed to create .ssh dir for {}", username.c_str());
             return false;
         }

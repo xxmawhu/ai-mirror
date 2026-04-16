@@ -17,15 +17,19 @@
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
+#include <dirent.h>
 
 namespace fs = std::filesystem;
 
 namespace ai_mirror::cli {
 
+// Validates that ai_user belongs to main_user. The "_" separator after
+// main_user prevents prefix collision (e.g. "alice" vs "alice_bob").
+// The size > check ensures at least one project-name char follows the prefix.
 static bool validate_ai_user_ownership(const std::string& ai_user, const std::string& main_user, const std::string& prefix) {
     if (ai_user.empty() || main_user.empty()) return false;
-    std::string expected_prefix = prefix + main_user;
-    return ai_user.size() >= expected_prefix.size()
+    std::string expected_prefix = prefix + main_user + "_";
+    return ai_user.size() > expected_prefix.size()
         && ai_user.substr(0, expected_prefix.size()) == expected_prefix;
 }
 
@@ -151,43 +155,189 @@ static bool safe_chown_single(const fs::path& p, uid_t uid, gid_t gid) {
     return true;
 }
 
+// FD-based recursive chown using openat()+fchownat() with O_NOFOLLOW.
+// Opens each directory by fd to prevent TOCTOU symlink injection during
+// traversal: an attacker cannot inject a symlink that redirects the walk
+// outside the intended subtree because every component is opened relative
+// to its parent directory fd with O_NOFOLLOW (symlinks fail with ELOOP).
+// Symlinks at the leaf are handled with lchown (change the link itself).
+static bool chown_recursive_fd(int dirfd, uid_t uid, gid_t gid) {
+    DIR* d = fdopendir(dirfd);
+    if (!d) {
+        utils::get_logger()->error("safe_chown_path: fdopendir failed: {}", strerror(errno));
+        close(dirfd);
+        return false;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(d)) != nullptr) {
+        if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
+
+        int fd = -1;
+        int retries = 0;
+        while (retries < 3) {
+            fd = openat(dirfd, entry->d_name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            if (fd >= 0 || errno != EINTR) break;
+            retries++;
+        }
+        if (fd < 0) {
+            if (errno == ELOOP) {
+                if (fchownat(dirfd, entry->d_name, uid, gid, AT_SYMLINK_NOFOLLOW) != 0) {
+                    utils::get_logger()->warn("safe_chown_path: lchown {} failed: {}", entry->d_name, strerror(errno));
+                }
+                continue;
+            }
+            utils::get_logger()->warn("safe_chown_path: openat {} failed: {}", entry->d_name, strerror(errno));
+            continue;
+        }
+
+        struct stat st;
+        if (fstat(fd, &st) != 0) {
+            close(fd);
+            utils::get_logger()->warn("safe_chown_path: fstat {} failed: {}", entry->d_name, strerror(errno));
+            continue;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            if (!chown_recursive_fd(fd, uid, gid)) {
+                closedir(d);
+                return false;
+            }
+        } else {
+            if (fchown(fd, uid, gid) != 0) {
+                utils::get_logger()->warn("safe_chown_path: fchown {} failed: {}", entry->d_name, strerror(errno));
+            }
+            close(fd);
+        }
+    }
+
+    closedir(d);
+    return true;
+}
+
+// FD-based recursive chmod to strip setuid/setgid bits without following symlinks.
+// Uses fchmodat(AT_SYMLINK_NOFOLLOW) so symlinks are chmod'ed directly,
+// preventing symlink traversal attacks.  Regular files/dirs use fchmod.
+static bool chmod_recursive_fd(int dirfd, mode_t clear_bits) {
+    DIR* d = fdopendir(dirfd);
+    if (!d) {
+        utils::get_logger()->error("chmod_recursive_fd: fdopendir failed: {}", strerror(errno));
+        close(dirfd);
+        return false;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(d)) != nullptr) {
+        if (entry->d_name[0] == '.' && (entry->d_name[1] == '\0' || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
+
+        int fd = -1;
+        int retries = 0;
+        while (retries < 3) {
+            fd = openat(dirfd, entry->d_name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            if (fd >= 0 || errno != EINTR) break;
+            retries++;
+        }
+        if (fd < 0) {
+            if (errno == ELOOP) {
+                mode_t link_mode = 0777;
+                struct stat link_st;
+                if (fstatat(dirfd, entry->d_name, &link_st, AT_SYMLINK_NOFOLLOW) == 0) {
+                    link_mode = link_st.st_mode;
+                }
+                mode_t new_mode = link_mode & ~clear_bits;
+                if (fchmodat(dirfd, entry->d_name, new_mode, AT_SYMLINK_NOFOLLOW) != 0) {
+                    utils::get_logger()->warn("chmod_recursive_fd: fchmodat symlink {} failed: {}", entry->d_name, strerror(errno));
+                }
+                continue;
+            }
+            if (errno == ENOTDIR || errno == ENOENT) {
+                continue;
+            }
+            utils::get_logger()->warn("chmod_recursive_fd: openat {} failed: {}", entry->d_name, strerror(errno));
+            continue;
+        }
+
+        struct stat st;
+        if (fstat(fd, &st) != 0) {
+            close(fd);
+            utils::get_logger()->warn("chmod_recursive_fd: fstat {} failed: {}", entry->d_name, strerror(errno));
+            continue;
+        }
+
+        mode_t new_mode = st.st_mode & ~clear_bits;
+        if (S_ISDIR(st.st_mode)) {
+            if (fchmod(fd, new_mode) != 0) {
+                utils::get_logger()->warn("chmod_recursive_fd: fchmod dir {} failed: {}", entry->d_name, strerror(errno));
+            }
+            if (!chmod_recursive_fd(fd, clear_bits)) {
+                closedir(d);
+                return false;
+            }
+        } else {
+            if (fchmod(fd, new_mode) != 0) {
+                utils::get_logger()->warn("chmod_recursive_fd: fchmod {} failed: {}", entry->d_name, strerror(errno));
+            }
+            close(fd);
+        }
+    }
+
+    closedir(d);
+    return true;
+}
+
+// Recursively changes ownership of a path using fd-based traversal.
+// Uses O_NOFOLLOW at every level to detect and skip symlinks, preventing
+// TOCTOU attacks where an attacker replaces a directory entry with a symlink
+// pointing outside the subtree between readdir() and chown().  The root
+// directory is also opened with O_NOFOLLOW so the entry point itself cannot
+// be a symlink.  After ownership transfer, setuid/setgid bits are stripped.
 static bool safe_chown_path(const fs::path& p, const std::string& owner) {
     struct passwd* pw = getpwnam(owner.c_str());
     if (!pw) {
         utils::get_logger()->error("safe_chown_path: user '{}' not found", owner);
         return false;
     }
-    if (!fs::is_directory(p)) {
-        return safe_chown_single(p, pw->pw_uid, pw->pw_gid);
-    }
 
-    std::vector<fs::path> entries;
-    std::error_code ec;
-    for (auto it = fs::recursive_directory_iterator(p, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
-        if (ec) {
-            utils::get_logger()->warn("safe_chown_path: iterator error: {}", ec.message());
-            ec.clear();
-            continue;
+    int rootfd = open(p.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (rootfd < 0) {
+        if (errno == ENOTDIR || errno == ELOOP) {
+            return safe_chown_single(p, pw->pw_uid, pw->pw_gid);
         }
-        if (fs::is_symlink(it->symlink_status(ec))) {
-            continue;
-        }
-        entries.push_back(it->path());
-    }
-
-    for (auto rit = entries.rbegin(); rit != entries.rend(); ++rit) {
-        if (!safe_chown_single(*rit, pw->pw_uid, pw->pw_gid)) {
-            return false;
-        }
-    }
-
-    if (!safe_chown_single(p, pw->pw_uid, pw->pw_gid)) {
+        utils::get_logger()->error("safe_chown_path: open({}) failed: {}", p.string(), strerror(errno));
         return false;
     }
 
-    auto chmod_result = utils::exec_safe({"chmod", "-R", "ug-s", p.string()});
-    if (chmod_result.exit_code != 0) {
-        utils::get_logger()->warn("safe_chown_path: chmod ug-s failed for {}: {}", p.string(), chmod_result.stderr_output);
+    if (!chown_recursive_fd(rootfd, pw->pw_uid, pw->pw_gid)) {
+        return false;
+    }
+
+    int topfd = open(p.c_str(), O_RDONLY | O_DIRECTORY);
+    if (topfd >= 0) {
+        if (fchown(topfd, pw->pw_uid, pw->pw_gid) != 0) {
+            utils::get_logger()->error("safe_chown_path: fchown root {} failed: {}", p.string(), strerror(errno));
+            close(topfd);
+            return false;
+        }
+        close(topfd);
+    }
+
+    int chmodfd = open(p.c_str(), O_RDONLY | O_DIRECTORY);
+    if (chmodfd >= 0) {
+        mode_t clear_bits = S_ISUID | S_ISGID;
+        struct stat root_st;
+        if (fstat(chmodfd, &root_st) == 0) {
+            mode_t new_root_mode = root_st.st_mode & ~clear_bits;
+            if (fchmod(chmodfd, new_root_mode) != 0) {
+                utils::get_logger()->warn("safe_chown_path: fchmod root {} failed: {}", p.string(), strerror(errno));
+            }
+        }
+        if (!chmod_recursive_fd(chmodfd, clear_bits)) {
+            utils::get_logger()->warn("safe_chown_path: chmod_recursive_fd failed for {}", p.string());
+        }
     }
     return true;
 }
@@ -276,6 +426,10 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
         std::error_code ec;
         fs::path parent = file_path.parent_path();
         if (!parent.empty() && !fs::exists(parent)) {
+            if (!utils::is_path_allowed(parent, main_user)) {
+                std::cerr << "Parent path not allowed: " << parent.string() << std::endl;
+                return 1;
+            }
             fs::create_directories(parent, ec);
             if (ec) {
                 std::cerr << "Failed to create parent directory: " << parent.string() << std::endl;
@@ -334,7 +488,11 @@ int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
 
     std::string ai_user = core::PathResolver::detect_ai_user_from_path(dst_path, main_user, ctx.config.user.prefix);
     if (ai_user.empty()) {
-        auto cp_result = utils::exec_safe({"cp", "-r", "--no-preserve=mode", src_path.string(), dst_path.string()});
+        std::cerr << "Warning: destination '" << dst_path.string()
+                  << "' is not under any ai-user directory. Ownership will not be set."
+                  << std::endl;
+        std::cerr << "Consider using the regular 'cp' command for non-ai-user destinations." << std::endl;
+        auto cp_result = utils::exec_safe({"cp", "-rP", "--no-preserve=mode", src_path.string(), dst_path.string()});
         if (cp_result.exit_code != 0) {
             std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
             return 1;
@@ -350,7 +508,7 @@ int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
         return 1;
     }
 
-    auto cp_result = utils::exec_safe({"cp", "-r", "--no-preserve=mode", src_path.string(), dst_path.string()});
+    auto cp_result = utils::exec_safe({"cp", "-rP", "--no-preserve=mode", src_path.string(), dst_path.string()});
     if (cp_result.exit_code != 0) {
         std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
         return 1;
@@ -413,7 +571,7 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
     std::error_code ec;
     fs::rename(src_path, dst_path, ec);
     if (ec) {
-        auto cp_result = utils::exec_safe({"cp", "-r", "--no-preserve=mode", src_path.string(), dst_path.string()});
+        auto cp_result = utils::exec_safe({"cp", "-rP", "--no-preserve=mode", src_path.string(), dst_path.string()});
         if (cp_result.exit_code != 0) {
             std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
             return 1;
@@ -427,9 +585,35 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
             }
         }
 
-        fs::remove_all(src_path, ec);
-        if (ec) {
-            utils::get_logger()->warn("Failed to remove source after copy: {}", ec.message());
+        struct stat src_stat;
+        if (lstat(src_path.c_str(), &src_stat) != 0) {
+            utils::get_logger()->warn("Failed to stat source after copy: {}", strerror(errno));
+        } else if (S_ISLNK(src_stat.st_mode)) {
+            if (unlink(src_path.c_str()) != 0) {
+                utils::get_logger()->warn("Failed to unlink symlink source: {}", strerror(errno));
+            }
+        } else if (S_ISDIR(src_stat.st_mode)) {
+            int srcfd = open(src_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+            if (srcfd < 0) {
+                if (errno == ELOOP) {
+                    utils::get_logger()->warn("Source became symlink, refusing recursive delete: {}", src_path.string());
+                } else {
+                    fs::remove_all(src_path, ec);
+                    if (ec) {
+                        utils::get_logger()->warn("Failed to remove source directory: {}", ec.message());
+                    }
+                }
+            } else {
+                auto remove_result = fs::remove_all(src_path);
+                if (remove_result == static_cast<std::uintmax_t>(-1)) {
+                    utils::get_logger()->warn("Failed to remove source directory");
+                }
+                close(srcfd);
+            }
+        } else {
+            if (unlink(src_path.c_str()) != 0) {
+                utils::get_logger()->warn("Failed to remove source file: {}", strerror(errno));
+            }
         }
 
         if (verbose) {
@@ -445,7 +629,14 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
     if (need_chown) {
         fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
         if (!safe_chown_path(chown_target, ai_user)) {
-            utils::get_logger()->warn("Rename succeeded but chown failed for {}", chown_target.string());
+            utils::get_logger()->error("Rename succeeded but chown failed for {}, attempting rollback", chown_target.string());
+            std::error_code rollback_ec;
+            fs::rename(dst_path, src_path, rollback_ec);
+            if (rollback_ec) {
+                utils::get_logger()->error("Rollback failed: {}", rollback_ec.message());
+            }
+            std::cerr << "Failed to set ownership after atomic rename" << std::endl;
+            return 1;
         }
     }
 
@@ -500,8 +691,12 @@ int cmd_list(bool verbose) {
         return 0;
     }
 
+    std::string main_user = utils::get_effective_username();
+    std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+
     std::cout << "ai-mirror managed users:" << std::endl;
     for (const auto& u : users) {
+        if (u.username.substr(0, expected_prefix.length()) != expected_prefix) continue;
         std::cout << "  " << u.username << " (uid=" << u.uid << ", home=" << u.home_dir << ")" << std::endl;
         auto mounts = ctx.graft->list_mounts(u.username);
         for (const auto& m : mounts) {
@@ -540,17 +735,17 @@ int cmd_force_destroy(const std::string& project_or_user, bool verbose) {
     }
 
     std::string username = project_or_user;
-    if (!ctx.user_mgr->user_exists(username)) {
+    if (!utils::validate_username(username)) {
         auto derived = ctx.user_mgr->derive_username(project_or_user);
         if (!derived) {
-            std::cerr << "Username collision: cannot derive unique username for: " << project_or_user << std::endl;
+            std::cerr << "Cannot derive valid username for: " << project_or_user << std::endl;
             return 1;
         }
         username = std::move(*derived);
-        if (!ctx.user_mgr->user_exists(username)) {
-            std::cerr << "User not found: " << project_or_user << std::endl;
-            return 1;
-        }
+    }
+    if (!ctx.user_mgr->user_exists(username)) {
+        std::cerr << "User not found: " << username << std::endl;
+        return 1;
     }
 
     std::string main_user = utils::get_effective_username();
@@ -675,8 +870,10 @@ int cmd_status([[maybe_unused]] bool verbose) {
     }
 
     std::string main_user = utils::get_effective_username();
+    std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
 
     for (const auto& u : users) {
+        if (u.username.substr(0, expected_prefix.length()) != expected_prefix) continue;
         std::cout << "Project: " << u.username << std::endl;
         std::cout << "  Home: " << u.home_dir << std::endl;
         std::cout << "  UID:  " << u.uid << std::endl;

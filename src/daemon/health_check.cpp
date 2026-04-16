@@ -2,8 +2,25 @@
 #include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <filesystem>
+#include <atomic>
+#include <csignal>
+#include <condition_variable>
+#include <mutex>
 
 namespace ai_mirror::daemon {
+
+// Graceful shutdown: signal handler sets running_ = false and wakes the
+// condition variable so run_periodic() exits its loop promptly instead of
+// waiting for the full sleep interval.  This ensures SIGTERM/SIGINT are
+// handled within one health check cycle.
+static std::atomic<bool> running_{true};
+static std::condition_variable cv_;
+static std::mutex mtx_;
+
+static void signal_handler([[maybe_unused]] int sig) {
+    running_ = false;
+    cv_.notify_all();
+}
 
 std::vector<HealthStatus> HealthCheck::check_all() {
     core::Graft graft;
@@ -35,9 +52,12 @@ HealthStatus HealthCheck::check_mount(const std::string& mount_point) {
 }
 
 int HealthCheck::run_periodic(int interval_seconds) {
+    std::signal(SIGTERM, signal_handler);
+    std::signal(SIGINT, signal_handler);
+
     utils::get_logger()->info("Health check running every {} seconds", interval_seconds);
 
-    while (true) {
+    while (running_) {
         auto statuses = check_all();
         int unhealthy = 0;
         for (const auto& s : statuses) {
@@ -50,9 +70,11 @@ int HealthCheck::run_periodic(int interval_seconds) {
             utils::get_logger()->debug("Health check: all {} mounts healthy", statuses.size());
         }
 
-        std::this_thread::sleep_for(std::chrono::seconds(interval_seconds));
+        std::unique_lock<std::mutex> lock(mtx_);
+        cv_.wait_for(lock, std::chrono::seconds(interval_seconds), [] { return !running_.load(); });
     }
 
+    utils::get_logger()->info("Health check shutting down gracefully");
     return 0;
 }
 

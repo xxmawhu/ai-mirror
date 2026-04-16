@@ -56,6 +56,16 @@ cmake --build .
 - AI 用户不能执行任何命令（会被自动拦截）
 - 需要提权的命令通过 `am` wrapper 自动处理 sudo
 
+### sudoers 安全说明
+
+虽然 sudoers 规则允许 `ai-mirror` 组无密码执行 `am`，但程序内部实现了多层验证：
+- 路径验证 (`is_path_allowed`) 拒绝非 `/home/` 路径
+- 用户名验证 (`validate_username`) 拒绝 shell 元字符注入
+- 配置文件所有权检查防止预置恶意配置
+- wrapper 输出解析时额外校验 path/user 格式
+
+建议定期审计 `ai-mirror` 组成员，确保仅授权用户可执行特权命令。
+
 ### 全局选项
 
 | 选项 | 说明 |
@@ -109,6 +119,8 @@ am cp <src> <dst>
 
 复制文件或目录，自动检测目标路径是否属于 ai-user 目录。若属于 ai-user 目录，自动设置所有权；否则执行普通复制。自动清除 SUID/SGID 位。
 
+> **非 ai-user 目标警告**: 若目标不在任何 ai-user 目录下，将输出警告并建议使用普通 `cp` 命令。这是因为非 ai-user 目录无需所有权设置，`am cp` 的主要价值在于自动权限管理。
+
 ---
 
 ### `mv` — 移动文件
@@ -151,6 +163,8 @@ am force-destroy <username_or_project_path>
 
 强制卸载并删除 ai-user，不保留任何数据。用于异常情况下的紧急清理。
 
+> **输入识别**: 若输入符合有效用户名格式，直接使用该用户名；否则尝试从路径推导用户名。这避免了用户名碰撞问题——显式输入用户名时不会发生意外推导。
+
 ---
 
 ### `list` — 列出用户
@@ -159,7 +173,7 @@ am force-destroy <username_or_project_path>
 am list
 ```
 
-列出所有由 ai-mirror 管理的 ai-user 及其 bind mount 状态。
+列出当前用户所拥有的 ai-user 及其 bind mount 状态（仅显示属于调用者的 ai-user，其他用户的不可见）。
 
 ---
 
@@ -169,7 +183,7 @@ am list
 am status
 ```
 
-显示所有 ai-user 的详细信息：home、UID、mount 状态、SSH 密钥、authorized_keys 健康状态。
+显示当前用户的 ai-user 详细信息：home、UID、mount 状态、SSH 密钥、authorized_keys 健康状态（仅显示属于调用者的 ai-user）。
 
 ---
 
@@ -269,12 +283,19 @@ ai-mirror 从设计之初就把安全作为核心约束，不是事后补丁：
 
 ### 路径验证
 - **Home-only 允许列表**: 所有文件操作路径必须在主用户 home 目录下
+- **系统目录黑名单**: 阻止对系统关键目录的操作（/bin, /sbin, /usr, /lib, /etc, /root, /var, /proc, /sys, /dev, /run, /boot, /opt, /tmp, /srv, /mnt, /media, /lost+found），防止系统级破坏
 - **符号链接防护**: canonical 失败时返回失败，不回退原始路径
 - **Mount 前二次验证**: 防止 TOCTOU 攻击
 
 ### 所有权验证
 - **ai-user 归属检查**: 所有涉及 ai-user 的命令均验证归属关系
 - **防止跨用户操作**: 不同主用户无法操作彼此的 ai-user
+
+### 配置文件安全
+- **所有权校验**: `load_default()` 使用 `lstat()` 检查配置文件 UID 必须等于当前用户 UID，拒绝被其他用户篡改的配置
+- **符号链接拒绝**: 配置文件为符号链接时直接拒绝加载，防止 symlink 攻击
+- **O_EXCL 创建**: 新建配置文件使用 `open(O_CREAT|O_EXCL, 0600)`，防止预置文件攻击（attacker 预先创建指向恶意内容的文件）
+- **权限警告**: 检测到 group/world 可写时发出警告
 
 ### TOCTOU 防护
 - **fd-based chown**: `open(O_NOFOLLOW) + fchown()` 消除符号链接替换攻击窗口

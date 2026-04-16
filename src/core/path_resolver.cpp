@@ -12,11 +12,16 @@ fs::path PathResolver::resolve(const fs::path& p) {
 
     fs::path expanded = p;
 
+    // Use get_effective_username() instead of get_current_username() because
+    // ai-mirror runs via sudo where geteuid() returns root. get_effective_username()
+    // resolves the actual calling user via SUDO_USER/loginuid, ensuring ~/ expands
+    // to the calling user's home directory, not root's.
     if (p.string().substr(0, 2) == "~/") {
-        expanded = fs::path(utils::get_home_dir(utils::get_current_username())) / p.string().substr(2);
+        expanded = fs::path(utils::get_home_dir(utils::get_effective_username())) / p.string().substr(2);
     } else if (p.string() == "~") {
-        expanded = utils::get_home_dir(utils::get_current_username());
+        expanded = utils::get_home_dir(utils::get_effective_username());
     }
+
 
     std::error_code ec;
     return fs::canonical(expanded, ec);

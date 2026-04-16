@@ -2,9 +2,33 @@
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <fstream>
+#include <sstream>
 #include <toml.hpp>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace ai_mirror::core {
+
+static bool validate_config_file_security(const fs::path& p) {
+    struct stat st;
+    if (lstat(p.c_str(), &st) != 0) {
+        return false;
+    }
+    if (S_ISLNK(st.st_mode)) {
+        utils::get_logger()->error("Config file is a symlink, rejecting: {}", p.string());
+        return false;
+    }
+    if (st.st_uid != getuid()) {
+        utils::get_logger()->error("Config file not owned by current user (uid {} != {}), rejecting: {}",
+            st.st_uid, getuid(), p.string());
+        return false;
+    }
+    if (st.st_mode & (S_IWGRP | S_IWOTH)) {
+        utils::get_logger()->warn("Config file is group/world writable: {}", p.string());
+    }
+    return true;
+}
 
 static std::string toml_escape(const std::string& s) {
     std::string out;
@@ -91,11 +115,26 @@ Config ConfigParser::load(const fs::path& config_path) {
 }
 
 static bool try_auto_create_config(const fs::path& config_path) {
-    if (fs::exists(config_path)) return true;
+    auto parent = config_path.parent_path();
+    std::error_code ec;
+    if (!parent.empty() && !fs::exists(parent, ec)) {
+        fs::create_directories(parent, ec);
+    }
+
+    int fd = open(config_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        if (errno == EEXIST) {
+            return fs::exists(config_path);
+        }
+        utils::get_logger()->warn("Failed to create config (O_EXCL|O_NOFOLLOW): {}", config_path.string());
+        return false;
+    }
+    close(fd);
 
     auto default_cfg = ConfigParser::create_default_config(config_path);
     if (!ConfigParser::save(default_cfg, config_path)) {
         utils::get_logger()->warn("Failed to auto-create config: {}", config_path.string());
+        fs::remove(config_path);
         return false;
     }
 
@@ -109,6 +148,14 @@ Config ConfigParser::load_default() {
     try_auto_create_config(default_path);
 
     if (fs::exists(default_path)) {
+        if (!validate_config_file_security(default_path)) {
+            utils::get_logger()->error("Config file security validation failed, using defaults");
+            Config config;
+            config.config_path = default_path;
+            config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
+            config.loaded = false;
+            return config;
+        }
         return load(default_path);
     }
 
@@ -135,21 +182,38 @@ Config ConfigParser::create_default_config(const fs::path& config_path) {
 }
 
 bool ConfigParser::save(const Config& config, const fs::path& config_path) {
-    std::ofstream ofs(config_path);
-    if (!ofs.is_open()) {
+    struct stat st;
+    if (lstat(config_path.c_str(), &st) == 0 && S_ISLNK(st.st_mode)) {
+        utils::get_logger()->error("Config path is a symlink, rejecting: {}", config_path.string());
         return false;
     }
 
-    ofs << "[mount]\n"
+    int fd = open(config_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        utils::get_logger()->error("Failed to open config for writing: {}", config_path.string());
+        return false;
+    }
+
+    std::ostringstream oss;
+    oss << "[mount]\n"
         << "paths = [\n";
     for (const auto& p : config.mount.paths) {
-        ofs << "    \"" << toml_escape(p.string()) << "\",\n";
+        oss << "    \"" << toml_escape(p.string()) << "\",\n";
     }
-    ofs << "]\n\n"
+    oss << "]\n\n"
         << "[ssh]\n"
         << "key_type = \"" << toml_escape(config.ssh.key_type) << "\"\n"
         << "key_path = \"" << toml_escape(config.ssh.key_path.string()) << "\"\n"
         << "ai_default_key = \"" << toml_escape(config.ssh.ai_default_key.string()) << "\"\n";
+
+    std::string content = oss.str();
+    ssize_t written = write(fd, content.c_str(), content.size());
+    close(fd);
+
+    if (written != static_cast<ssize_t>(content.size())) {
+        utils::get_logger()->error("Failed to write config content: {}", config_path.string());
+        return false;
+    }
 
     return true;
 }

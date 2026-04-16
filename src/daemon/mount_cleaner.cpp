@@ -11,6 +11,13 @@ namespace fs = std::filesystem;
 
 namespace ai_mirror::daemon {
 
+namespace {
+bool is_path_under(const std::string& path, const std::string& prefix) {
+    if (path.find(prefix) != 0) return false;
+    return path.length() == prefix.length() || path[prefix.length()] == '/';
+}
+}
+
 MountCleaner::MountCleaner(const std::string& user_prefix) : prefix_(user_prefix) {}
 
 std::vector<fs::path> MountCleaner::find_stale_mounts() {
@@ -24,7 +31,7 @@ std::vector<fs::path> MountCleaner::find_stale_mounts() {
         std::string device, mount_point;
         iss >> device >> mount_point;
 
-        if (mount_point.find(match) == 0) {
+        if (is_path_under(mount_point, match)) {
             std::error_code ec;
             if (!fs::exists(device, ec)) {
                 stale.push_back(fs::path(mount_point));
@@ -69,7 +76,7 @@ int MountCleaner::cleanup_for_user(const std::string& username) {
         std::string device, mount_point;
         iss >> device >> mount_point;
 
-        if (mount_point.find(user_home) == 0) {
+        if (is_path_under(mount_point, user_home)) {
             user_mounts.push_back(fs::path(mount_point));
         }
     }

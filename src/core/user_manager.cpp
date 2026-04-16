@@ -5,13 +5,27 @@
 #include <algorithm>
 #include <random>
 #include <sstream>
+#include <functional>
+#include <fstream>
+#include <array>
+#include <iomanip>
 #include <pwd.h>
 #include <grp.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace ai_mirror::core {
 
 UserManager::UserManager(const std::string& prefix) : prefix_(prefix) {}
 
+// Generates a unique ai-user username from project_path.  Strategy:
+// 1. Extract filename stem, sanitize dots/hyphens to underscores
+// 2. Combine prefix + main_user + "_" + stem, lowercase
+// 3. Truncate stem to 20 chars to leave room for hash suffix
+// 4. Append 4-char hex hash of full path (hash & 0xFFFF) as collision breaker
+// 5. Final truncation to Linux username limit (32 chars)
+// The hash suffix ensures uniqueness even when project names are truncated
+// (e.g. "/home/alice/my-very-long-project-name-001" vs "...-002").
 std::optional<std::string> UserManager::generate_username(const fs::path& project_path) const {
     std::string stem = project_path.filename().string();
     std::replace(stem.begin(), stem.end(), '.', '_');
@@ -21,8 +35,19 @@ std::optional<std::string> UserManager::generate_username(const fs::path& projec
     std::transform(base.begin(), base.end(), base.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
-    const size_t max_len = 32;
-    std::string username = base.substr(0, max_len);
+    size_t hash_val = std::hash<std::string>{}(project_path.string());
+    std::ostringstream oss;
+    oss << std::hex << (hash_val & 0xFFFF);
+    std::string hash_suffix = oss.str();
+    while (hash_suffix.size() < 4) hash_suffix = "0" + hash_suffix;
+
+    const size_t max_stem_len = 20;
+    std::string truncated = base.substr(0, max_stem_len);
+    std::string username = truncated + "_" + hash_suffix;
+
+    if (username.size() > 32) {
+        username = username.substr(0, 32);
+    }
 
     if (user_exists(username)) {
         utils::get_logger()->error(
@@ -88,14 +113,19 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
         return {"", "", 0, 0, false};
     }
 
+    // Validate caller's home directory exists and project is under it.
+    // An empty home directory means getpwnam() failed or pw_dir is NULL,
+    // which would skip the path-below-home check below — a security bypass.
     std::string main_user = utils::get_effective_username();
     std::string main_home = utils::get_home_dir(main_user);
-    if (!main_home.empty()) {
-        std::string ps = fs::absolute(proj).string();
-        if (ps.length() < main_home.length() || ps.substr(0, main_home.length()) != main_home) {
-            utils::get_logger()->error("Project path must be under caller home ({}): {}", main_home, ps);
-            return {"", "", 0, 0, false};
-        }
+    if (main_home.empty()) {
+        utils::get_logger()->error("Cannot determine home directory for user '{}', rejecting", main_user);
+        return {"", "", 0, 0, false};
+    }
+    std::string ps = fs::absolute(proj).string();
+    if (ps.length() < main_home.length() || ps.substr(0, main_home.length()) != main_home) {
+        utils::get_logger()->error("Project path must be under caller home ({}): {}", main_home, ps);
+        return {"", "", 0, 0, false};
     }
 
     auto username_opt = generate_username(proj);

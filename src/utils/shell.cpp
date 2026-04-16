@@ -1,10 +1,13 @@
 #include "ai_mirror/utils/shell.hpp"
+#include "ai_mirror/utils/logger.hpp"
 #include <array>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <set>
+#include <map>
 #include <unistd.h>
 #include <pwd.h>
 #include <sys/wait.h>
@@ -13,41 +16,62 @@
 namespace ai_mirror::utils {
 
 static constexpr size_t PIPE_BUF_SIZE = 4096;
+// Maximum bytes to read from a subprocess pipe (10MB).  Prevents memory
+// exhaustion if a malicious or buggy subprocess produces infinite output
+// (e.g. `while true; do echo x; done`).  Once exceeded, the read is truncated
+// and a warning logged; the caller receives partial output rather than OOM.
+static constexpr size_t MAX_READ_SIZE = 10 * 1024 * 1024;
 
 static std::string read_fd(int fd) {
     std::string result;
+    result.reserve(PIPE_BUF_SIZE);
     std::array<char, PIPE_BUF_SIZE> buf{};
     ssize_t n;
     while ((n = ::read(fd, buf.data(), buf.size() - 1)) > 0) {
         buf.data()[n] = '\0';
         result += buf.data();
+        if (result.size() > MAX_READ_SIZE) {
+            get_logger()->warn("read_fd: output exceeded {} bytes, truncating", MAX_READ_SIZE);
+            break;
+        }
     }
     return result;
 }
 
 static std::string resolve_command(const std::string& cmd) {
     if (cmd.empty()) return "";
-    if (cmd.find('/') != std::string::npos) return cmd;
 
-    std::string path_env;
-    if (const char* p = std::getenv("PATH")) {
-        path_env = p;
-    }
-    if (path_env.empty()) {
-        path_env = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+    static const std::map<std::string, std::string> COMMAND_PATHS = {
+        {"mount", "/usr/bin/mount"},
+        {"umount", "/usr/bin/umount"},
+        {"chmod", "/usr/bin/chmod"},
+        {"chown", "/usr/bin/chown"},
+        {"chgrp", "/usr/bin/chgrp"},
+        {"useradd", "/usr/sbin/useradd"},
+        {"userdel", "/usr/sbin/userdel"},
+        {"groupadd", "/usr/sbin/groupadd"},
+        {"groupdel", "/usr/sbin/groupdel"},
+        {"gpasswd", "/usr/bin/gpasswd"},
+        {"ssh-keygen", "/usr/bin/ssh-keygen"},
+        {"mkdir", "/usr/bin/mkdir"},
+        {"cp", "/usr/bin/cp"},
+        {"mv", "/usr/bin/mv"},
+        {"getent", "/usr/bin/getent"},
+        {"findmnt", "/usr/bin/findmnt"},
+        {"which", "/usr/bin/which"},
+        {"ssh", "/usr/bin/ssh"},
+    };
+
+    if (cmd.find('/') != std::string::npos) {
+        return cmd;
     }
 
-    std::istringstream iss(path_env);
-    std::string dir;
-    while (std::getline(iss, dir, ':')) {
-        if (dir.empty()) continue;
-        fs::path candidate = fs::path(dir) / cmd;
-        std::error_code ec;
-        if (fs::exists(candidate, ec) && !ec) {
-            return candidate.string();
-        }
+    auto it = COMMAND_PATHS.find(cmd);
+    if (it != COMMAND_PATHS.end()) {
+        return it->second;
     }
-    return cmd;
+
+    return "";
 }
 
 static ShellResult do_fork_exec(const std::string& file, char* const argv[]) {
@@ -116,6 +140,17 @@ ShellResult exec_safe(const std::string& file, const std::vector<std::string>& a
         return {-1, "", "empty command file"};
     }
 
+    static const std::set<std::string> ALLOWED_COMMANDS = {
+        "mount", "umount", "chmod", "chown", "chgrp",
+        "useradd", "userdel", "groupadd", "groupdel",
+        "gpasswd", "ssh-keygen", "mkdir", "cp", "mv",
+        "getent", "findmnt", "which", "ssh", "rm", "ln"
+    };
+    std::string cmd_name = fs::path(file).filename().string();
+    if (ALLOWED_COMMANDS.find(cmd_name) == ALLOWED_COMMANDS.end()) {
+        return {-1, "", "command not in allowed list: " + cmd_name};
+    }
+
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
     for (auto& a : args) {
@@ -137,6 +172,21 @@ bool validate_ssh_public_key(const std::string& key) {
     if (key.find('\'') != std::string::npos) return false;
     if (key.find('\n') != std::string::npos) return false;
     if (key.find('\r') != std::string::npos) return false;
+
+    static const std::vector<std::string> valid_prefixes = {
+        "ssh-ed25519 ", "ssh-rsa ",
+        "ecdsa-sha2-nistp256 ", "ecdsa-sha2-nistp384 ", "ecdsa-sha2-nistp521 ",
+        "sk-ssh-ed25519@openssh.com ", "sk-ecdsa-sha2-nistp256@openssh.com "
+    };
+    bool has_valid_prefix = false;
+    for (const auto& p : valid_prefixes) {
+        if (key.size() > p.size() && key.compare(0, p.size(), p) == 0) {
+            has_valid_prefix = true;
+            break;
+        }
+    }
+    if (!has_valid_prefix) return false;
+
     std::regex re("^[a-zA-Z0-9+/=@._-]+(\\s+.+)?$");
     return std::regex_match(key, re);
 }
@@ -169,22 +219,6 @@ std::string get_effective_username() {
     if (login_uid != 0) {
         auto* pw = getpwuid(login_uid);
         if (pw && pw->pw_name) return pw->pw_name;
-    }
-
-    if (geteuid() == 0) {
-        if (const char* sudo_user = std::getenv("SUDO_USER")) {
-            if (sudo_user[0] != '\0' && validate_username(sudo_user)) {
-                if (const char* sudo_uid_str = std::getenv("SUDO_UID")) {
-                    try {
-                        auto sudo_uid = static_cast<uid_t>(std::stoul(sudo_uid_str));
-                        auto* pw = getpwuid(sudo_uid);
-                        if (pw && pw->pw_name && pw->pw_name == std::string(sudo_user)) {
-                            return sudo_user;
-                        }
-                    } catch (...) {}
-                }
-            }
-        }
     }
     return get_current_username();
 }
@@ -247,6 +281,16 @@ bool is_path_allowed(const fs::path& p, const std::string& main_user) {
     std::error_code ec;
     fs::path canon = fs::canonical(p, ec);
     if (ec) {
+        fs::path parent = p.parent_path();
+        fs::path canon_parent = fs::canonical(parent, ec);
+        if (ec) return false;
+        std::string parent_str = canon_parent.string();
+        if (parent_str != main_home
+            && !(parent_str.length() > main_home.length()
+                 && parent_str[main_home.length()] == '/'
+                 && parent_str.substr(0, main_home.length()) == main_home)) {
+            return false;
+        }
         canon = fs::weakly_canonical(p, ec);
         if (ec) return false;
         for (const auto& part : canon) {

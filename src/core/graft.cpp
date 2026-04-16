@@ -6,18 +6,77 @@
 #include <fstream>
 #include <sstream>
 #include <sys/mount.h>
+#include <grp.h>
 #include <sys/stat.h>
 
 namespace ai_mirror::core {
 
 Graft::Graft(const std::string& user_prefix) : prefix_(user_prefix) {}
 
+// Safely create mount target directory using fd-based approach to prevent
+// TOCTOU symlink races.  Each path component is opened with O_NOFOLLOW so
+// an attacker cannot replace an intermediate directory with a symlink between
+// the existence check and mkdirat().  The final component is created with
+// mkdirat() which fails with EEXIST if it already exists (expected case).
+static bool safe_create_directories(const fs::path& p) {
+    if (p.empty()) return true;
+
+    std::error_code ec;
+    if (fs::exists(p, ec)) return true;
+
+    std::vector<std::string> parts;
+    fs::path cur = p;
+    while (!cur.empty()) {
+        parts.insert(parts.begin(), cur.filename().string());
+        cur = cur.parent_path();
+        if (cur == "/") break;
+    }
+
+    int dirfd = AT_FDCWD;
+    int owned_fd = -1;
+
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const std::string& part = parts[i];
+        int fd = openat(dirfd, part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) {
+            if (errno == ENOENT && i + 1 <= parts.size()) {
+                if (mkdirat(dirfd, part.c_str(), 0755) != 0) {
+                    if (errno != EEXIST) {
+                        utils::get_logger()->error("safe_create_directories: mkdirat {} failed: {}", part, strerror(errno));
+                        if (owned_fd >= 0) close(owned_fd);
+                        return false;
+                    }
+                }
+                fd = openat(dirfd, part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                if (fd < 0) {
+                    utils::get_logger()->error("safe_create_directories: openat {} after mkdir: {}", part, strerror(errno));
+                    if (owned_fd >= 0) close(owned_fd);
+                    return false;
+                }
+            } else if (errno == ELOOP) {
+                utils::get_logger()->error("safe_create_directories: symlink found at component '{}', rejecting", part);
+                if (owned_fd >= 0) close(owned_fd);
+                return false;
+            } else {
+                utils::get_logger()->error("safe_create_directories: openat {} failed: {}", part, strerror(errno));
+                if (owned_fd >= 0) close(owned_fd);
+                return false;
+            }
+        }
+
+        if (owned_fd >= 0) close(owned_fd);
+        owned_fd = fd;
+        dirfd = fd;
+    }
+
+    if (owned_fd >= 0) close(owned_fd);
+    return true;
+}
+
 bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool read_only) {
     std::error_code ec;
     if (!fs::exists(target, ec)) {
-        fs::create_directories(target, ec);
-        if (ec) {
-            utils::get_logger()->error("Failed to create mount target: {}", target.string());
+        if (!safe_create_directories(target)) {
             return false;
         }
     }
@@ -180,18 +239,88 @@ bool Graft::ensure_group_exists(const std::string& groupname) {
 }
 
 bool Graft::set_directory_group(const fs::path& path, const std::string& groupname) {
-    auto result = utils::exec_safe({"chgrp", groupname, path.string()});
-    if (result.exit_code != 0) {
-        utils::get_logger()->error("chgrp failed: {}", result.stderr_output);
+    struct group* gr = getgrnam(groupname.c_str());
+    if (!gr) {
+        utils::get_logger()->error("set_directory_group: group '{}' not found", groupname);
+        return false;
+    }
+
+    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ELOOP) {
+            utils::get_logger()->error("set_directory_group: path is a symlink, rejecting: {}", path.string());
+            return false;
+        }
+        if (errno == ENOTDIR) {
+            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
+            if (fd < 0) {
+                if (errno == ELOOP) {
+                    if (lchown(path.c_str(), -1, gr->gr_gid) != 0) {
+                        utils::get_logger()->error("set_directory_group: lchown failed for {}: {}", path.string(), strerror(errno));
+                        return false;
+                    }
+                    return true;
+                }
+                utils::get_logger()->error("set_directory_group: open file failed for {}: {}", path.string(), strerror(errno));
+                return false;
+            }
+        } else {
+            utils::get_logger()->error("set_directory_group: open {} failed: {}", path.string(), strerror(errno));
+            return false;
+        }
+    }
+
+    int ret = fchown(fd, -1, gr->gr_gid);
+    close(fd);
+    if (ret != 0) {
+        utils::get_logger()->error("set_directory_group: fchown failed for {}: {}", path.string(), strerror(errno));
         return false;
     }
     return true;
 }
 
 bool Graft::set_sgid(const fs::path& path) {
-    auto result = utils::exec_safe({"chmod", "g+s", path.string()});
-    if (result.exit_code != 0) {
-        utils::get_logger()->error("chmod g+s failed: {}", result.stderr_output);
+    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ELOOP) {
+            utils::get_logger()->error("set_sgid: path is a symlink, rejecting: {}", path.string());
+            return false;
+        }
+        if (errno == ENOTDIR) {
+            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
+            if (fd < 0) {
+                if (errno == ELOOP) {
+                    struct stat st;
+                    if (lstat(path.c_str(), &st) == 0) {
+                        mode_t new_mode = st.st_mode | S_ISGID;
+                        if (fchmodat(AT_FDCWD, path.c_str(), new_mode, AT_SYMLINK_NOFOLLOW) != 0) {
+                            utils::get_logger()->error("set_sgid: fchmodat symlink failed for {}: {}", path.string(), strerror(errno));
+                            return false;
+                        }
+                        return true;
+                    }
+                }
+                utils::get_logger()->error("set_sgid: open file failed for {}: {}", path.string(), strerror(errno));
+                return false;
+            }
+        } else {
+            utils::get_logger()->error("set_sgid: open {} failed: {}", path.string(), strerror(errno));
+            return false;
+        }
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        utils::get_logger()->error("set_sgid: fstat failed for {}: {}", path.string(), strerror(errno));
+        return false;
+    }
+
+    mode_t new_mode = st.st_mode | S_ISGID;
+    int ret = fchmod(fd, new_mode);
+    close(fd);
+    if (ret != 0) {
+        utils::get_logger()->error("set_sgid: fchmod failed for {}: {}", path.string(), strerror(errno));
         return false;
     }
     return true;
@@ -212,17 +341,10 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
         return false;
     }
 
-    auto mod_result = utils::exec_safe({"usermod", "-aG", username, username});
-    if (mod_result.exit_code != 0) {
-        utils::get_logger()->error("usermod -aG failed: {}", mod_result.stderr_output);
-        return false;
-    }
-
     std::error_code ec;
     if (!fs::exists(path, ec)) {
-        fs::create_directories(path, ec);
-        if (ec) {
-            utils::get_logger()->error("Failed to create directory: {}", path.string());
+        if (!safe_create_directories(path)) {
+            utils::get_logger()->error("Failed to create directory (safe): {}", path.string());
             return false;
         }
     }
@@ -231,11 +353,45 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
         return false;
     }
 
-    auto chmod_result = utils::exec_safe({"chmod", "g+rwX", path.string()});
-    if (chmod_result.exit_code != 0) {
-        utils::get_logger()->error("chmod g+rwX failed: {}", chmod_result.stderr_output);
+    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ELOOP) {
+            utils::get_logger()->error("grant_write_access: path is a symlink, rejecting: {}", path.string());
+            return false;
+        }
+        if (errno == ENOTDIR) {
+            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
+            if (fd < 0) {
+                if (errno == ELOOP) {
+                    utils::get_logger()->error("grant_write_access: file path is symlink, rejecting: {}", path.string());
+                    return false;
+                }
+                utils::get_logger()->error("grant_write_access: open file failed for {}: {}", path.string(), strerror(errno));
+                return false;
+            }
+        } else {
+            utils::get_logger()->error("grant_write_access: open {} failed: {}", path.string(), strerror(errno));
+            return false;
+        }
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        utils::get_logger()->error("grant_write_access: fstat failed for {}: {}", path.string(), strerror(errno));
         return false;
     }
+
+    mode_t new_mode = st.st_mode | (S_IRGRP | S_IWGRP | S_IXGRP);
+    if (S_ISDIR(st.st_mode)) {
+        new_mode |= S_IXGRP;
+    }
+    if (fchmod(fd, new_mode) != 0) {
+        close(fd);
+        utils::get_logger()->error("grant_write_access: fchmod failed for {}: {}", path.string(), strerror(errno));
+        return false;
+    }
+    close(fd);
 
     if (fs::is_directory(path)) {
         set_sgid(path);
@@ -251,9 +407,41 @@ bool Graft::revoke_write_access(const fs::path& path, const std::string& usernam
         return false;
     }
 
-    auto chmod_result = utils::exec_safe({"chmod", "g-s", path.string()});
-    if (chmod_result.exit_code != 0) {
-        utils::get_logger()->warn("chmod g-s failed (may not be set): {}", chmod_result.stderr_output);
+    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    bool is_dir = true;
+    if (fd < 0) {
+        if (errno == ELOOP) {
+            utils::get_logger()->error("revoke_write_access: path is a symlink, rejecting: {}", path.string());
+            return false;
+        }
+        if (errno == ENOTDIR) {
+            is_dir = false;
+            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
+            if (fd < 0) {
+                if (errno == ELOOP) {
+                    utils::get_logger()->error("revoke_write_access: file path is symlink, rejecting: {}", path.string());
+                    return false;
+                }
+                utils::get_logger()->warn("revoke_write_access: open file failed for {}: {}", path.string(), strerror(errno));
+            }
+        } else {
+            utils::get_logger()->warn("revoke_write_access: open {} failed: {}", path.string(), strerror(errno));
+        }
+    }
+
+    if (fd >= 0) {
+        struct stat st;
+        if (fstat(fd, &st) == 0) {
+            mode_t new_mode = st.st_mode;
+            if (is_dir) {
+                new_mode &= ~S_ISGID;
+            }
+            new_mode &= ~(S_IRGRP | S_IWGRP | S_IXGRP);
+            if (fchmod(fd, new_mode) != 0) {
+                utils::get_logger()->warn("revoke_write_access: fchmod failed for {}: {}", path.string(), strerror(errno));
+            }
+        }
+        close(fd);
     }
 
     auto gpasswd_result = utils::exec_safe({"gpasswd", "-d", username, username});
@@ -261,13 +449,28 @@ bool Graft::revoke_write_access(const fs::path& path, const std::string& usernam
         utils::get_logger()->warn("gpasswd -d failed (user may not be in group): {}", gpasswd_result.stderr_output);
     }
 
-    auto chmod_rw_result = utils::exec_safe({"chmod", "g-rwx", path.string()});
-    if (chmod_rw_result.exit_code != 0) {
-        utils::get_logger()->error("chmod g-rwx failed: {}", chmod_rw_result.stderr_output);
-        return false;
+    // Safety check: only delete group if it has no other members.  An attacker
+    // could add themselves or another user to the ai-user's group before revoke,
+    // causing groupdel to fail or remove a legitimate group used by others.
+    // This prevents accidental DoS on shared groups.
+    struct group* gr = getgrnam(username.c_str());
+    if (!gr) {
+        utils::get_logger()->info("Group '{}' does not exist, skipping groupdel", username);
+    } else {
+        bool has_others = false;
+        for (char** mem = gr->gr_mem; *mem != nullptr; ++mem) {
+            if (std::string(*mem) != username) {
+                has_others = true;
+                break;
+            }
+        }
+        if (has_others) {
+            utils::get_logger()->warn("Group '{}' has other members besides '{}', skipping groupdel to avoid DoS",
+                username, username);
+        } else {
+            utils::exec_safe({"groupdel", username});
+        }
     }
-
-    utils::exec_safe({"groupdel", username});
 
     utils::get_logger()->info("Revoked write access: {} from group {}", path.string(), username);
     return true;

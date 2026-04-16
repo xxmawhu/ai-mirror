@@ -15,19 +15,15 @@ static const std::vector<std::string> SYSTEM_DIRS = {
     "/opt", "/tmp", "/srv", "/mnt", "/media", "/lost+found"
 };
 
+// Resolve path to canonical form using fs::canonical().  Returns empty path
+// if the path does not exist or cannot be resolved — callers must treat this
+// as a validation failure.  We intentionally do NOT fall back to
+// weakly_canonical because it does not resolve symlinks, leaving ".."
+// components unresolved in some cases, which could bypass SYSTEM_DIRS checks.
 fs::path safe_canonical(const fs::path& p) {
     std::error_code ec;
     auto canonical = fs::canonical(p, ec);
     if (!ec) return canonical;
-
-    auto weak = fs::weakly_canonical(p, ec);
-    if (!ec) {
-        for (const auto& part : weak) {
-            if (part == "..") return fs::path{};
-        }
-        return weak;
-    }
-
     return fs::path{};
 }
 

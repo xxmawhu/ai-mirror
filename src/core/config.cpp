@@ -114,6 +114,11 @@ Config ConfigParser::load(const fs::path& config_path) {
     return config;
 }
 
+// Atomic config file creation with TOCTOU protection:
+// 1. O_CREAT|O_EXCL: Rejects if file already exists (prevents pre-placement attacks)
+// 2. O_NOFOLLOW: Rejects symlink targets (prevents symlink attacks)
+// 3. EEXIST case: Verify file exists rather than blindly trusting errno
+// 4. Cleanup on write failure: Remove newly created empty file
 static bool try_auto_create_config(const fs::path& config_path) {
     auto parent = config_path.parent_path();
     std::error_code ec;

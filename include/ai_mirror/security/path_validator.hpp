@@ -54,4 +54,10 @@ bool validate_mount_source(const fs::path& source);
 // Uses O_PATH|O_NOFOLLOW to avoid symlink following.
 bool validate_path_exists(const fs::path& p);
 
+// Safely create directory hierarchy using fd-based approach.
+// Each component is opened with O_NOFOLLOW to prevent TOCTOU symlink races.
+// mkdirat() creates final component, fails with EEXIST if already exists.
+// Returns true on success or if path already exists.
+bool safe_create_directories(const fs::path& p);
+
 }

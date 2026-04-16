@@ -1,4 +1,5 @@
 #include "ai_mirror/core/ssh_manager.hpp"
+#include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <filesystem>
@@ -90,6 +91,51 @@ bool safe_write_temp_file(const fs::path& path, const std::vector<std::string>& 
     return true;
 }
 
+bool safe_read_authorized_keys(const fs::path& path, std::vector<std::string>& lines_out) {
+    struct stat st;
+    if (::lstat(path.c_str(), &st) != 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        utils::get_logger()->error("safe_read_authorized_keys: lstat({}) failed: {}",
+            path.c_str(), strerror(errno));
+        return false;
+    }
+    if (S_ISLNK(st.st_mode)) {
+        utils::get_logger()->error("safe_read_authorized_keys: rejecting symlink: {}", path.c_str());
+        return false;
+    }
+
+    int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) {
+        utils::get_logger()->error("safe_read_authorized_keys: open({}) failed: {}",
+            path.c_str(), strerror(errno));
+        return false;
+    }
+
+    char buf[4096];
+    std::string content;
+    ssize_t n;
+    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
+        content.append(buf, n);
+    }
+    ::close(fd);
+
+    if (n < 0) {
+        utils::get_logger()->error("safe_read_authorized_keys: read failed: {}", strerror(errno));
+        return false;
+    }
+
+    std::istringstream iss(content);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (!line.empty()) {
+            lines_out.push_back(line);
+        }
+    }
+    return true;
+}
+
 bool safe_read_public_key_file(const fs::path& path, std::string& content_out, uid_t expected_uid) {
     struct stat st;
     if (::lstat(path.c_str(), &st) != 0) {
@@ -159,7 +205,10 @@ bool SSHManager::generate_key_pair(const fs::path& key_path, const std::string& 
     fs::path ssh_dir = key_path.parent_path();
     std::error_code ec;
     if (!fs::exists(ssh_dir, ec)) {
-        fs::create_directories(ssh_dir, ec);
+        if (!security::safe_create_directories(ssh_dir)) {
+            utils::get_logger()->error("Failed to create SSH directory: {}", ssh_dir.c_str());
+            return false;
+        }
         auto r = utils::exec_safe({"chmod", "700", ssh_dir.string()});
         if (r.exit_code != 0) {
             utils::get_logger()->error("chmod 700 failed: {}", r.stderr_output);
@@ -263,12 +312,8 @@ bool SSHManager::authorize_key(const std::string& username, const fs::path& publ
     }
 
     std::vector<std::string> existing_lines;
-    {
-        std::ifstream ifs(auth_keys);
-        std::string line;
-        while (std::getline(ifs, line)) {
-            if (!line.empty()) existing_lines.push_back(line);
-        }
+    if (!safe_read_authorized_keys(auth_keys, existing_lines)) {
+        return false;
     }
 
     for (const auto& l : existing_lines) {
@@ -318,12 +363,8 @@ bool SSHManager::authorize_public_key_string(const std::string& username, const 
     fs::path auth_keys = fs::path(home) / ".ssh" / "authorized_keys";
 
     std::vector<std::string> existing_lines;
-    {
-        std::ifstream ifs(auth_keys);
-        std::string line;
-        while (std::getline(ifs, line)) {
-            if (!line.empty()) existing_lines.push_back(line);
-        }
+    if (!safe_read_authorized_keys(auth_keys, existing_lines)) {
+        return false;
     }
 
     for (const auto& l : existing_lines) {

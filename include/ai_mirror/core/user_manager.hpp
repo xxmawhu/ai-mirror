@@ -17,6 +17,17 @@ struct UserInfo {
     bool exists;
 };
 
+// AI user management with deterministic username generation.
+//
+// Username generation strategy:
+// - Format: {prefix}_{sanitized_project_name}_{hash_suffix}
+// - sanitized_project_name: basename of project path, [a-z0-9_] only, truncated to 20 chars
+// - hash_suffix: 8-char hex from /dev/urandom (cryptographic, not std::hash)
+// - Underscore separator ensures no prefix collision between users
+// - Total username length <= 32 chars (Linux limit)
+//
+// remove_ai_user() and list_ai_users() validate underscore separator
+// to prevent prefix collision attacks (e.g., prefix_alice matching prefix_alice2).
 class UserManager {
 public:
     explicit UserManager(const std::string& prefix);
@@ -25,7 +36,7 @@ public:
     bool remove_ai_user(const std::string& username, bool force = false);
     std::optional<UserInfo> get_user_info(const std::string& username) const;
     bool user_exists(const std::string& username) const;
-    std::optional<std::string> derive_username(const std::string& project_path) const;
+    std::optional<std::string> derive_username(const fs::path& project_path) const;
     std::vector<UserInfo> list_ai_users() const;
 
     std::string get_prefix() const { return prefix_; }

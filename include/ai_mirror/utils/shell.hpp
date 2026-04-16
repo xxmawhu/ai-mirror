@@ -22,7 +22,8 @@ struct ShellResult {
 ShellResult exec_safe(const std::vector<std::string>& args);
 ShellResult exec_safe(const std::string& file, const std::vector<std::string>& args);
 
-// Validate username format: [a-z_][a-z0-9_-]*, max 32 chars, no shell metacharacters.
+// Validate username format: [a-z0-9_] only, max 32 chars, first char non-digit.
+// No hyphens allowed to ensure consistency with path_resolver detection logic.
 bool validate_username(const std::string& username);
 
 // Validate SSH public key format:

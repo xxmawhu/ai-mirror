@@ -1,8 +1,10 @@
 #include "ai_mirror/security/path_validator.hpp"
+#include "ai_mirror/utils/logger.hpp"
 #include <algorithm>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <filesystem>
 
 namespace ai_mirror::security {
 
@@ -118,6 +120,66 @@ bool validate_path_exists(const fs::path& p) {
     if (ret < 0) return false;
 
     return S_ISDIR(st.st_mode) || S_ISREG(st.st_mode);
+}
+
+bool safe_create_directories(const fs::path& p) {
+    if (p.empty()) return true;
+
+    std::error_code ec;
+    if (fs::exists(p, ec)) return true;
+
+    std::vector<std::string> parts;
+    fs::path cur = p;
+    while (!cur.empty()) {
+        parts.insert(parts.begin(), cur.filename().string());
+        cur = cur.parent_path();
+        if (cur == "/") break;
+    }
+
+    int dirfd = AT_FDCWD;
+    int owned_fd = -1;
+
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const std::string& part = parts[i];
+        int fd = openat(dirfd, part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) {
+            if (errno == ENOENT && i + 1 <= parts.size()) {
+                if (mkdirat(dirfd, part.c_str(), 0755) != 0) {
+                    if (errno != EEXIST) {
+                        utils::get_logger()->error("safe_create_directories: mkdirat {} failed: {}", part, strerror(errno));
+                        if (owned_fd >= 0) close(owned_fd);
+                        return false;
+                    }
+                }
+                fd = openat(dirfd, part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+                if (fd < 0) {
+                    struct stat st;
+                    if (fstatat(dirfd, part.c_str(), &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(st.st_mode)) {
+                        utils::get_logger()->error("safe_create_directories: TOCTOU - directory '{}' replaced by symlink after mkdirat", part);
+                    } else {
+                        utils::get_logger()->error("safe_create_directories: openat {} after mkdir: {}", part, strerror(errno));
+                    }
+                    if (owned_fd >= 0) close(owned_fd);
+                    return false;
+                }
+            } else if (errno == ELOOP) {
+                utils::get_logger()->error("safe_create_directories: symlink found at component '{}', rejecting", part);
+                if (owned_fd >= 0) close(owned_fd);
+                return false;
+            } else {
+                utils::get_logger()->error("safe_create_directories: openat {} failed: {}", part, strerror(errno));
+                if (owned_fd >= 0) close(owned_fd);
+                return false;
+            }
+        }
+
+        if (owned_fd >= 0) close(owned_fd);
+        owned_fd = fd;
+        dirfd = fd;
+    }
+
+    if (owned_fd >= 0) close(owned_fd);
+    return true;
 }
 
 }

@@ -87,8 +87,8 @@ std::optional<std::string> UserManager::generate_username(const fs::path& projec
     return username;
 }
 
-std::optional<std::string> UserManager::derive_username(const std::string& project_path) const {
-    return generate_username(fs::path(project_path));
+std::optional<std::string> UserManager::derive_username(const fs::path& project_path) const {
+    return generate_username(project_path);
 }
 
 bool UserManager::execute_useradd(const std::string& username, const fs::path& home_dir) {
@@ -188,8 +188,9 @@ bool UserManager::remove_ai_user(const std::string& username, bool force) {
         return false;
     }
 
-    std::string prefix_check = prefix_ + utils::get_effective_username();
-    if (username.substr(0, prefix_check.length()) != prefix_check) {
+    std::string prefix_check = prefix_ + utils::get_effective_username() + "_";
+    if (username.length() <= prefix_check.length()
+        || username.substr(0, prefix_check.length()) != prefix_check) {
         utils::get_logger()->error("Refusing to remove non-ai-mirror user: {}", username);
         return false;
     }
@@ -211,12 +212,13 @@ bool UserManager::user_exists(const std::string& username) const {
 
 std::vector<UserInfo> UserManager::list_ai_users() const {
     std::vector<UserInfo> users;
-    std::string prefix_str = prefix_ + utils::get_effective_username();
+    std::string prefix_str = prefix_ + utils::get_effective_username() + "_";
 
     setpwent();
     while (auto* pw = getpwent()) {
         std::string name(pw->pw_name);
-        if (name.substr(0, prefix_str.length()) == prefix_str) {
+        if (name.length() > prefix_str.length()
+            && name.substr(0, prefix_str.length()) == prefix_str) {
             users.push_back({name, pw->pw_dir, pw->pw_uid, pw->pw_gid, true});
         }
     }

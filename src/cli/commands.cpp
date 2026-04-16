@@ -6,6 +6,7 @@
 #include "ai_mirror/core/path_resolver.hpp"
 #include "ai_mirror/daemon/health_check.hpp"
 #include "ai_mirror/daemon/mount_cleaner.hpp"
+#include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <filesystem>
@@ -374,8 +375,7 @@ int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose)
 
     std::error_code ec;
     if (!fs::exists(dir_path, ec)) {
-        fs::create_directories(dir_path, ec);
-        if (ec) {
+        if (!security::safe_create_directories(dir_path)) {
             std::cerr << "Failed to create directory: " << dir_path.string() << std::endl;
             return 1;
         }
@@ -430,8 +430,7 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
                 std::cerr << "Parent path not allowed: " << parent.string() << std::endl;
                 return 1;
             }
-            fs::create_directories(parent, ec);
-            if (ec) {
+            if (!security::safe_create_directories(parent)) {
                 std::cerr << "Failed to create parent directory: " << parent.string() << std::endl;
                 return 1;
             }
@@ -768,6 +767,14 @@ int cmd_force_destroy(const std::string& project_or_user, bool verbose) {
     return 0;
 }
 
+static void terminate_user_processes(const std::string& username) {
+    auto result = utils::exec_safe({"pkill", "-u", username});
+    if (result.exit_code == 0) {
+        utils::get_logger()->info("Terminated processes for user {}", username);
+        usleep(500000);
+    }
+}
+
 int cmd_rm(const std::string& project_path, bool verbose) {
     auto ctx = make_context(verbose);
 
@@ -816,6 +823,8 @@ int cmd_rm(const std::string& project_path, bool verbose) {
     }
     daemon::MountCleaner cleaner(ctx.config.user.prefix);
     cleaner.cleanup_for_user(username);
+
+    terminate_user_processes(username);
 
     if (verbose) {
         std::cout << "Step 2: Removing user " << username << std::endl;

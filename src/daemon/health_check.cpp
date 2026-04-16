@@ -9,15 +9,15 @@
 
 namespace ai_mirror::daemon {
 
-// Graceful shutdown: signal handler sets running_ = false and wakes the
-// condition variable so run_periodic() exits its loop promptly instead of
-// waiting for the full sleep interval.  This ensures SIGTERM/SIGINT are
-// handled within one health check cycle.
-static std::atomic<bool> running_{true};
-static std::condition_variable cv_;
-static std::mutex mtx_;
+HealthCheck* HealthCheck::instance_ = nullptr;
 
-static void signal_handler([[maybe_unused]] int sig) {
+void HealthCheck::signal_handler([[maybe_unused]] int sig) {
+    if (instance_) {
+        instance_->stop();
+    }
+}
+
+void HealthCheck::stop() {
     running_ = false;
     cv_.notify_all();
 }
@@ -52,6 +52,7 @@ HealthStatus HealthCheck::check_mount(const std::string& mount_point) {
 }
 
 int HealthCheck::run_periodic(int interval_seconds) {
+    instance_ = this;
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGINT, signal_handler);
 
@@ -71,9 +72,10 @@ int HealthCheck::run_periodic(int interval_seconds) {
         }
 
         std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait_for(lock, std::chrono::seconds(interval_seconds), [] { return !running_.load(); });
+        cv_.wait_for(lock, std::chrono::seconds(interval_seconds), [this] { return !running_.load(); });
     }
 
+    instance_ = nullptr;
     utils::get_logger()->info("Health check shutting down gracefully");
     return 0;
 }

@@ -1,4 +1,5 @@
 #include "ai_mirror/core/config.hpp"
+#include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <fstream>
@@ -121,9 +122,11 @@ Config ConfigParser::load(const fs::path& config_path) {
 // 4. Cleanup on write failure: Remove newly created empty file
 static bool try_auto_create_config(const fs::path& config_path) {
     auto parent = config_path.parent_path();
-    std::error_code ec;
-    if (!parent.empty() && !fs::exists(parent, ec)) {
-        fs::create_directories(parent, ec);
+    if (!parent.empty() && !fs::exists(parent)) {
+        if (!security::safe_create_directories(parent)) {
+            utils::get_logger()->warn("Failed to create parent directory: {}", parent.string());
+            return false;
+        }
     }
 
     int fd = open(config_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);

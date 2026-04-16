@@ -144,7 +144,7 @@ ShellResult exec_safe(const std::string& file, const std::vector<std::string>& a
         "mount", "umount", "chmod", "chown", "chgrp",
         "useradd", "userdel", "groupadd", "groupdel",
         "gpasswd", "ssh-keygen", "mkdir", "cp", "mv",
-        "getent", "findmnt", "which", "ssh", "rm", "ln"
+        "getent", "findmnt", "which", "ssh", "pkill"
     };
     std::string cmd_name = fs::path(file).filename().string();
     if (ALLOWED_COMMANDS.find(cmd_name) == ALLOWED_COMMANDS.end()) {
@@ -163,8 +163,11 @@ ShellResult exec_safe(const std::string& file, const std::vector<std::string>& a
 
 bool validate_username(const std::string& username) {
     if (username.empty() || username.size() > 32) return false;
-    std::regex re("^[a-z_][a-z0-9_-]*$");
-    return std::regex_match(username, re);
+    if (username[0] >= '0' && username[0] <= '9') return false;
+    for (char c : username) {
+        if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '_') return false;
+    }
+    return true;
 }
 
 bool validate_ssh_public_key(const std::string& key) {

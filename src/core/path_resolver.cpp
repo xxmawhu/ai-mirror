@@ -50,14 +50,6 @@ std::string PathResolver::detect_owner_user(const fs::path& p) {
     return pw ? pw->pw_name : "";
 }
 
-static bool username_valid(const std::string& s) {
-    if (s.empty() || s.size() > 32) return false;
-    for (char c : s) {
-        if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '_') return false;
-    }
-    return true;
-}
-
 std::string PathResolver::detect_ai_user_from_path(const fs::path& p, const std::string& main_user, const std::string& prefix) {
     if (main_user.empty() || prefix.empty()) return "";
 
@@ -68,7 +60,7 @@ std::string PathResolver::detect_ai_user_from_path(const fs::path& p, const std:
         std::string name = component.string();
         if (name.length() <= expected_prefix.length()) return "";
         if (name.substr(0, expected_prefix.length()) != expected_prefix) return "";
-        if (!username_valid(name)) return "";
+        if (!utils::validate_username(name)) return "";
         fs::path candidate_home = "/home/" + name;
         if (fs::is_directory(candidate_home, ec) && !ec) {
             return name;

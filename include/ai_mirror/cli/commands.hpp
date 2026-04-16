@@ -2,6 +2,17 @@
 
 #include <string>
 
+// CLI command handlers for ai-mirror.
+//
+// cmd_rm() performs user deletion with process cleanup:
+// 1. Unmount bind mounts via MountCleaner
+// 2. Terminate active user processes via pkill -u
+// 3. Remove Linux user via userdel
+// 4. Delete home directory
+// 5. Revoke write grants on project path
+//
+// All commands validate paths and usernames before execution.
+
 namespace ai_mirror::cli {
 
 int cmd_create(const std::string& project_path, bool verbose);

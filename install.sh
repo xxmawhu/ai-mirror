@@ -33,13 +33,13 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ---- Helpers ----
-log() { echo -e "${GREEN}[install]${NC} $*" | tee -a "$INSTALL_LOG"; }
-warn() { echo -e "${YELLOW}[warn]${NC} $*" | tee -a "$INSTALL_LOG"; }
-error() { echo -e "${RED}[error]${NC} $*" | tee -a "$INSTALL_LOG" >&2; }
-info() { echo -e "${CYAN}[info]${NC} $*" | tee -a "$INSTALL_LOG"; }
+log() { echo -e "${GREEN}[install]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}; }
+warn() { echo -e "${YELLOW}[warn]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}; }
+error() { echo -e "${RED}[error]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"} >&2; }
+info() { echo -e "${CYAN}[info]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}; }
 
 separator() {
-	echo "============================================================" | tee -a "$INSTALL_LOG"
+	echo "============================================================" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}
 }
 
 check_root() {
@@ -53,6 +53,7 @@ check_root() {
 phase_setup() {
 	mkdir -p "${LOG_DIR}"
 	mkdir -p "${BUILD_DIR}"
+	LOG_DIR_READY=1
 
 	: >"$INSTALL_LOG"
 

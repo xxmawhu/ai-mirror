@@ -1,6 +1,5 @@
 # Internal/dev-only files (not for public release)
 AGENTS.md
-install.sh
 issues/
 end_task/
 plan/

@@ -241,42 +241,8 @@ WRAPPER
 	install -d "${DATA_DIR}"
 	chmod 0755 "${DATA_DIR}"
 
-	log "Installing default config to ${CONFIG_DIR}/..."
+	log "Setting up config directory ${CONFIG_DIR}/..."
 	install -d "${CONFIG_DIR}"
-
-	local config_file="${CONFIG_DIR}/ai-mirror.toml"
-	# Reject symlink config files to prevent symlink attacks: an attacker
-	# could replace the config file with a symlink pointing to a sensitive
-	# file, causing chmod 0600 to change permissions on the target.
-	if [[ -L "$config_file" ]]; then
-		log "Error: ${config_file} is a symlink, refusing to operate"
-		return 1
-	fi
-	if [[ ! -f "$config_file" ]]; then
-		cat >"$config_file" <<'TOML'
-# ai-mirror configuration
-# See: ai-mirror config
-
-[mount]
-paths = [
-    "~/.bashrc",
-    "~/.config",
-]
-
-[ssh]
-key_type = "ed25519"
-key_path = "~/.ssh/ai-mirror"
-ai_default_key = "~/.ssh/id_ed25519.pub"
-TOML
-		# Config permissions: 0640 (owner rw, group r) so ai-mirror group members
-		# can read the config while non-members cannot. Ownership root:ai-mirror
-		# ensures only root can write and group members can read.
-		chmod 0640 "$config_file"
-		chown "root:ai-mirror" "$config_file" 2>/dev/null || true
-		log "  ${config_file} (created, mode 0640, group ai-mirror)"
-	else
-		log "  Preserving existing config: ${config_file}"
-	fi
 
 	install -d "${CONFIG_DIR}/sudoers.d"
 	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
@@ -482,11 +448,6 @@ phase_clean() {
 	fi
 
 	if [[ -d "${CONFIG_DIR}" ]]; then
-		if [[ -f "${CONFIG_DIR}/ai-mirror.toml" ]]; then
-			local backup="/tmp/ai-mirror.toml.bak.$(date +%Y%m%d%H%M%S)"
-			cp "${CONFIG_DIR}/ai-mirror.toml" "$backup" 2>/dev/null || true
-			log "  Backed up config to ${backup}"
-		fi
 		rm -rf "${CONFIG_DIR}"
 		log "  Removed config dir ${CONFIG_DIR}/"
 	fi

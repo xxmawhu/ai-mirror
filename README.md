@@ -68,7 +68,6 @@ sudo ./install.sh --clean
 | 构建 | CMake Release 编译，增量构建支持 |
 | 验证 | 检查二进制文件完整性 + `--help` 冒烟测试 |
 | 安装 | 部署 `ai-mirror-bin` + `am` wrapper 到 `/usr/local/bin/` |
-| 配置 | 创建 `/etc/ai-mirror/ai-mirror.toml`（权限 0640, 属组 root:ai-mirror） |
 | Sudoers | 创建 `/etc/ai-mirror/sudoers.d/ai-mirror`，无通配符白名单规则 |
 | 用户组 | 创建 `ai-mirror` 系统组 |
 
@@ -247,7 +246,9 @@ am config
 
 ## 配置文件
 
-用户配置 `~/.ai-mirror.toml`（首次运行时自动创建）：
+默认配置编译在二进制中（mount `~/.bashrc` + `~/.config`，SSH ed25519），无需配置文件即可运行。
+
+用户级配置 `~/.ai-mirror.toml`（首次运行自动创建，用于覆盖默认值）：
 
 ```toml
 # [mount] 只读挂载到每个 ai-user home 目录的文件/目录

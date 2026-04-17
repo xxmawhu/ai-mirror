@@ -233,7 +233,7 @@ fi
 if [ "\$(id -u)" -eq 0 ]; then
     exec "\$AM_BIN" "\$@"
 fi
-exec sudo "\$AM_BIN" "\$@"
+exec sudo --preserve-env=HOME "\$AM_BIN" "\$@"
 WRAPPER
 		chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}"
 		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper, inline)"

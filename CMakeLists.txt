@@ -7,6 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+set(CMAKE_LINK_SEARCH_START_STATIC ON)
+set(CMAKE_LINK_SEARCH_END_STATIC ON)
+
 find_package(PkgConfig)
 
 file(GLOB_RECURSE AI_MIRROR_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
@@ -26,6 +30,7 @@ target_compile_options(ai-mirror PRIVATE
 
 target_link_options(ai-mirror PRIVATE
     -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+    -static-libstdc++ -static-libgcc
 )
 
 include(FetchContent)

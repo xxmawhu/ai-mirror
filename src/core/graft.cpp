@@ -20,8 +20,25 @@ Graft::Graft(const std::string& user_prefix) : prefix_(user_prefix) {}
 bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool read_only) {
     std::error_code ec;
     if (!fs::exists(target, ec)) {
-        if (!safe_create_directories(target)) {
-            return false;
+        if (fs::is_regular_file(source)) {
+            fs::path parent = target.parent_path();
+            if (!parent.empty() && !fs::exists(parent, ec)) {
+                if (!safe_create_directories(parent)) {
+                    utils::get_logger()->error("execute_mount: failed to create parent dir for {}", target.string());
+                    return false;
+                }
+            }
+            int fd = open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+            if (fd < 0) {
+                utils::get_logger()->error("execute_mount: create target file failed: {} ({})", target.string(), strerror(errno));
+                return false;
+            }
+            close(fd);
+        } else {
+            if (!safe_create_directories(target)) {
+                utils::get_logger()->error("execute_mount: failed to create target dir {}", target.string());
+                return false;
+            }
         }
     }
 

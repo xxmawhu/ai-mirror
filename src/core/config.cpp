@@ -20,9 +20,11 @@ static bool validate_config_file_security(const fs::path& p) {
         utils::get_logger()->error("Config file is a symlink, rejecting: {}", p.string());
         return false;
     }
-    if (st.st_uid != getuid()) {
-        utils::get_logger()->error("Config file not owned by current user (uid {} != {}), rejecting: {}",
-            st.st_uid, getuid(), p.string());
+    uid_t expected_uid = utils::get_login_uid();
+    if (expected_uid == 0) expected_uid = getuid();
+    if (st.st_uid != expected_uid) {
+        utils::get_logger()->error("Config file not owned by expected user (uid {} != {}), rejecting: {}",
+            st.st_uid, expected_uid, p.string());
         return false;
     }
     if (st.st_mode & (S_IWGRP | S_IWOTH)) {
@@ -138,6 +140,13 @@ static bool try_auto_create_config(const fs::path& config_path) {
         return false;
     }
     close(fd);
+
+    uid_t login_uid = utils::get_login_uid();
+    if (login_uid != 0) {
+        if (chown(config_path.c_str(), login_uid, (gid_t)-1) != 0) {
+            utils::get_logger()->warn("Failed to chown config to uid {}: {}", login_uid, strerror(errno));
+        }
+    }
 
     auto default_cfg = ConfigParser::create_default_config(config_path);
     if (!ConfigParser::save(default_cfg, config_path)) {

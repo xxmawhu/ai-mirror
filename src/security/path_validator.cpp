@@ -32,12 +32,25 @@ fs::path safe_canonical(const fs::path& p) {
 bool validate_path_allowed(const fs::path& p) {
     if (p.empty()) return false;
     auto resolved = safe_canonical(p);
+    if (resolved.empty()) return false;
     std::string s = resolved.string();
+
+    std::string effective_home;
+    if (const char* env_home = std::getenv("HOME")) {
+        if (env_home[0] == '/' && env_home[1] != '\0') effective_home = env_home;
+    }
+
     for (const auto& d : SYSTEM_DIRS) {
-        if (s.length() >= d.length() && s.substr(0, d.length()) == d) {
-            if (s.length() == d.length() || s[d.length()] == '/') {
-                return false;
+        if (s == d) return false;
+        if (s.length() > d.length() && s[d.length()] == '/' && s.substr(0, d.length()) == d) {
+            if (!effective_home.empty() && effective_home.length() > d.length()
+                && effective_home[d.length()] == '/'
+                && effective_home.substr(0, d.length()) == d
+                && s.length() >= effective_home.length()
+                && s.substr(0, effective_home.length()) == effective_home) {
+                continue;
             }
+            return false;
         }
     }
     return true;

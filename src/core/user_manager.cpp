@@ -144,7 +144,10 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     // An empty home directory means getpwnam() failed or pw_dir is NULL,
     // which would skip the path-below-home check below — a security bypass.
     std::string main_user = utils::get_effective_username();
-    std::string main_home = utils::get_home_dir(main_user);
+    std::string main_home = utils::get_effective_home();
+    if (main_home.empty()) {
+        main_home = utils::get_home_dir(main_user);
+    }
     if (main_home.empty()) {
         utils::get_logger()->error("Cannot determine home directory for user '{}', rejecting", main_user);
         return {"", "", 0, 0, false};

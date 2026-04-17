@@ -205,17 +205,17 @@ fi
 # Security: validate parsed output before use.  The wrapper parses output from
 # the C++ binary (run via sudo) and passes it to ssh/cd.  A compromised or
 # buggy binary could emit injected values.  These guards ensure:
-# - path must start with /home/ (prevent arbitrary directory access)
+# - path must start with $HOME or /home/ (prevent arbitrary directory access)
 # - user must start with ai- (prevent SSH to arbitrary users)
 if [ "\${1:-}" = "cd" ]; then
     shift
-    output=\$(sudo "\$AM_BIN" cd "\$@")
+    output=\$(sudo --preserve-env=HOME "\$AM_BIN" cd "\$@")
     action=\$(echo "\$output" | grep '^action=' | cut -d= -f2)
     if [ "\$action" = "ssh" ]; then
         user=\$(echo "\$output" | grep '^user=' | cut -d= -f2)
         path=\$(echo "\$output" | grep '^path=' | cut -d= -f2)
-        if ! echo "\$path" | grep -qE '^/home/'; then
-            echo "error: invalid path from am cd: '\$path' (must start with /home/)" >&2
+        if ! echo "\$path" | grep -qE "^(\$HOME/|/home/)"; then
+            echo "error: invalid path from am cd: '\$path'" >&2
             exit 1
         fi
         if ! echo "\$user" | grep -qE '^ai-'; then
@@ -225,8 +225,8 @@ if [ "\${1:-}" = "cd" ]; then
         exec ssh "\${user}@localhost" -t "cd '\${path}'"
     elif [ "\$action" = "cd" ]; then
         path=\$(echo "\$output" | grep '^path=' | cut -d= -f2)
-        if ! echo "\$path" | grep -qE '^/home/'; then
-            echo "error: invalid path from am cd: '\$path' (must start with /home/)" >&2
+        if ! echo "\$path" | grep -qE "^(\$HOME/|/home/)"; then
+            echo "error: invalid path from am cd: '\$path'" >&2
             exit 1
         fi
         echo "cd '\${path}'"

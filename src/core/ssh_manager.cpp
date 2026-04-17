@@ -48,16 +48,15 @@ fs::path make_random_tmp_path(const fs::path& base) {
     return tmp;
 }
 
-bool safe_write_temp_file(const fs::path& path, const std::vector<std::string>& lines) {
+bool safe_write_temp_file(const fs::path& path, const std::vector<std::string>& lines, fs::path& out_tmp_path) {
     int fd = -1;
-    fs::path tmp_path;
     for (int attempt = 0; attempt < 3; ++attempt) {
-        tmp_path = make_random_tmp_path(path);
-        fd = ::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        out_tmp_path = make_random_tmp_path(path);
+        fd = ::open(out_tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (fd >= 0) break;
         if (errno != EEXIST) {
             utils::get_logger()->error("safe_write_temp_file: open({}) failed: {}",
-                tmp_path.c_str(), strerror(errno));
+                out_tmp_path.c_str(), strerror(errno));
             return false;
         }
     }
@@ -69,22 +68,22 @@ bool safe_write_temp_file(const fs::path& path, const std::vector<std::string>& 
     FILE* f = ::fdopen(fd, "w");
     if (!f) {
         ::close(fd);
-        fs::remove(tmp_path);
-        utils::get_logger()->error("safe_write_temp_file: fdopen failed for {}", tmp_path.c_str());
+        fs::remove(out_tmp_path);
+        utils::get_logger()->error("safe_write_temp_file: fdopen failed for {}", out_tmp_path.c_str());
         return false;
     }
     for (const auto& l : lines) {
         if (::fputs(l.c_str(), f) == EOF || ::fputc('\n', f) == EOF) {
             ::fclose(f);
-            fs::remove(tmp_path);
-            utils::get_logger()->error("safe_write_temp_file: write failed for {}", tmp_path.c_str());
+            fs::remove(out_tmp_path);
+            utils::get_logger()->error("safe_write_temp_file: write failed for {}", out_tmp_path.c_str());
             return false;
         }
     }
     if (::fflush(f) != 0) {
         ::fclose(f);
-        fs::remove(tmp_path);
-        utils::get_logger()->error("safe_write_temp_file: fflush failed for {}", tmp_path.c_str());
+        fs::remove(out_tmp_path);
+        utils::get_logger()->error("safe_write_temp_file: fflush failed for {}", out_tmp_path.c_str());
         return false;
     }
     ::fclose(f);
@@ -344,8 +343,8 @@ bool SSHManager::authorize_key(const std::string& username, const fs::path& publ
 
     existing_lines.push_back(key_content);
 
-    fs::path tmp_path = make_random_tmp_path(auth_keys);
-    if (!safe_write_temp_file(tmp_path, existing_lines)) {
+    fs::path tmp_path;
+    if (!safe_write_temp_file(auth_keys, existing_lines, tmp_path)) {
         utils::get_logger()->error("safe_write_temp_file failed for {}", username);
         return false;
     }
@@ -395,8 +394,8 @@ bool SSHManager::authorize_public_key_string(const std::string& username, const 
 
     existing_lines.push_back(public_key);
 
-    fs::path tmp_path2 = make_random_tmp_path(auth_keys);
-    if (!safe_write_temp_file(tmp_path2, existing_lines)) {
+    fs::path tmp_path2;
+    if (!safe_write_temp_file(auth_keys, existing_lines, tmp_path2)) {
         utils::get_logger()->error("safe_write_temp_file failed for {}", username);
         return false;
     }

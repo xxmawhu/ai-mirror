@@ -16,32 +16,10 @@
 
 namespace ai_mirror::core {
 
-static std::string get_crypto_hash_suffix(const std::string& input) {
-    unsigned char buf[8];
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-        utils::get_logger()->warn("Failed to open /dev/urandom for hash suffix, falling back to std::hash");
-        size_t h = std::hash<std::string>{}(input);
-        std::ostringstream oss;
-        oss << std::hex << (h & 0xFFFF);
-        std::string suffix = oss.str();
-        while (suffix.size() < 4) suffix = "0" + suffix;
-        return suffix;
-    }
-    ssize_t n = read(fd, buf, 2);
-    close(fd);
-    if (n != 2) {
-        utils::get_logger()->warn("Failed to read /dev/urandom for hash suffix");
-        size_t h = std::hash<std::string>{}(input);
-        std::ostringstream oss;
-        oss << std::hex << (h & 0xFFFF);
-        std::string suffix = oss.str();
-        while (suffix.size() < 4) suffix = "0" + suffix;
-        return suffix;
-    }
-    unsigned short val = (buf[0] << 8) | buf[1];
+static std::string get_deterministic_hash_suffix(const std::string& input) {
+    size_t h = std::hash<std::string>{}(input);
     std::ostringstream oss;
-    oss << std::hex << val;
+    oss << std::hex << (h & 0xFFFF);
     std::string suffix = oss.str();
     while (suffix.size() < 4) suffix = "0" + suffix;
     return suffix;
@@ -66,7 +44,7 @@ std::optional<std::string> UserManager::generate_username(const fs::path& projec
     std::transform(base.begin(), base.end(), base.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
-    std::string hash_suffix = get_crypto_hash_suffix(project_path.string());
+    std::string hash_suffix = get_deterministic_hash_suffix(project_path.string());
 
     const size_t max_stem_len = 20;
     std::string truncated = base.substr(0, max_stem_len);

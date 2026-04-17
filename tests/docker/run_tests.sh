@@ -103,14 +103,14 @@ run_test "1.1: Create ai-user (standard HOME)" \
 
 run_test "1.2: List ai-users" \
 	"/usr/local/bin/am list" \
-	"contains" "imaxx_"
+	"contains" "itestuser_"
 
 run_test "1.3: Remove ai-user" \
 	"/usr/local/bin/am rm /home/testuser/projects/project1" \
 	"success"
 
 run_test "1.4: Verify user removed" \
-	"id imaxx_project1 2>&1; true" \
+	"id itestuser_project1 2>&1; true" \
 	"contains" "no such user"
 
 echo ""
@@ -204,7 +204,7 @@ run_test "5.3: Create project multi3" \
 	"success"
 
 run_test "5.4: List shows all 3 projects" \
-	"/usr/local/bin/am list | grep -c 'imaxx_multi'" \
+	"/usr/local/bin/am list | grep -c 'itestuser_multi'" \
 	"contains" "3"
 
 run_test "5.5: Remove all projects" \

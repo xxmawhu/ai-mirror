@@ -255,11 +255,19 @@ bool SSHManager::generate_key_pair(const fs::path& key_path, const std::string& 
         return true;
     }
 
-    auto result = utils::exec_safe({
+    std::vector<std::string> keygen_args = {
         "ssh-keygen", "-t", key_type,
-        "-f", key_path.string(), "-N", "", "-C", "ai-mirror", "-q",
-        "-b", (key_type == "rsa" ? "4096" : (key_type == "ecdsa" ? "521" : ""))
-    });
+        "-f", key_path.string(), "-N", "", "-C", "ai-mirror", "-q"
+    };
+    if (key_type == "rsa") {
+        keygen_args.push_back("-b");
+        keygen_args.push_back("4096");
+    } else if (key_type == "ecdsa") {
+        keygen_args.push_back("-b");
+        keygen_args.push_back("521");
+    }
+
+    auto result = utils::exec_safe(keygen_args);
     if (result.exit_code != 0) {
         utils::get_logger()->error("ssh-keygen failed: {}", result.stderr_output.c_str());
         return false;
@@ -337,7 +345,7 @@ bool SSHManager::authorize_key(const std::string& username, const fs::path& publ
     existing_lines.push_back(key_content);
 
     fs::path tmp_path = make_random_tmp_path(auth_keys);
-    if (!safe_write_temp_file(auth_keys, existing_lines)) {
+    if (!safe_write_temp_file(tmp_path, existing_lines)) {
         utils::get_logger()->error("safe_write_temp_file failed for {}", username);
         return false;
     }
@@ -387,17 +395,17 @@ bool SSHManager::authorize_public_key_string(const std::string& username, const 
 
     existing_lines.push_back(public_key);
 
-    fs::path tmp_path = make_random_tmp_path(auth_keys);
-    if (!safe_write_temp_file(auth_keys, existing_lines)) {
+    fs::path tmp_path2 = make_random_tmp_path(auth_keys);
+    if (!safe_write_temp_file(tmp_path2, existing_lines)) {
         utils::get_logger()->error("safe_write_temp_file failed for {}", username);
         return false;
     }
 
-    std::error_code ec;
-    fs::rename(tmp_path, auth_keys, ec);
-    if (ec) {
-        utils::get_logger()->error("Atomic rename failed for {}: {}", username, ec.message());
-        fs::remove(tmp_path);
+    std::error_code ec2;
+    fs::rename(tmp_path2, auth_keys, ec2);
+    if (ec2) {
+        utils::get_logger()->error("Atomic rename failed for {}: {}", username, ec2.message());
+        fs::remove(tmp_path2);
         return false;
     }
 

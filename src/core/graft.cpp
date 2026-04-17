@@ -8,6 +8,8 @@
 #include <sys/mount.h>
 #include <grp.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace ai_mirror::core {
 

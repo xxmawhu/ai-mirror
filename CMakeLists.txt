@@ -45,7 +45,7 @@ FetchContent_MakeAvailable(cli11)
 target_link_libraries(ai-mirror PRIVATE CLI11::CLI11)
 
 FetchContent_Declare(toml11
-    URL "/tmp/toml11-4.2.0.tar.gz"
+    URL "https://github.com/ToruNiina/toml11/archive/refs/tags/v4.2.0.tar.gz"
 )
 FetchContent_MakeAvailable(toml11)
 target_link_libraries(ai-mirror PRIVATE toml11::toml11)

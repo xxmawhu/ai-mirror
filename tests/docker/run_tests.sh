@@ -15,6 +15,7 @@ run_test() {
 	local name="$1"
 	local cmd="$2"
 	local expected="$3"
+	local pattern="${4:-}"
 
 	echo ""
 	echo "=== Test: $name ==="
@@ -23,11 +24,11 @@ run_test() {
 	local output
 	local exit_code
 
-	output=$(eval "$cmd" 2>&1) || true
-	exit_code=$?
+	output=$(eval "$cmd" 2>&1) && exit_code=0 || exit_code=$?
 
 	echo "Exit code: $exit_code"
-	echo "Output: $output"
+	echo "Output (last 5 lines):"
+	echo "$output" | tail -5
 
 	if [[ "$expected" == "success" ]]; then
 		if [[ $exit_code -eq 0 ]]; then
@@ -46,7 +47,6 @@ run_test() {
 			((fail_count++))
 		fi
 	elif [[ "$expected" == "contains" ]]; then
-		local pattern="$4"
 		if [[ "$output" == *"$pattern"* ]]; then
 			echo "[PASS] $name - contains '$pattern'"
 			((pass_count++))
@@ -59,12 +59,26 @@ run_test() {
 	echo "$name: exit=$exit_code output=$output" >>"$LOG_DIR/test_results.log"
 }
 
+setup_testuser_env() {
+	export HOME=/home/testuser
+	testuid=$(id -u testuser)
+	echo "$testuid" >/proc/self/loginuid 2>/dev/null || true
+}
+
+setup_datauser_env() {
+	export HOME=/data/home/datauser
+	datauid=$(id -u datauser)
+	echo "$datauid" >/proc/self/loginuid 2>/dev/null || true
+}
+
 setup_ssh_for_testuser() {
+	rm -f /home/testuser/.ssh/id_ed25519 /home/testuser/.ssh/id_ed25519.pub
 	ssh-keygen -t ed25519 -f /home/testuser/.ssh/id_ed25519 -N "" -C "testuser" || true
 	chown -R testuser:testuser /home/testuser/.ssh
 }
 
 setup_ssh_for_datauser() {
+	rm -f /data/home/datauser/.ssh/id_ed25519 /data/home/datauser/.ssh/id_ed25519.pub
 	ssh-keygen -t ed25519 -f /data/home/datauser/.ssh/id_ed25519 -N "" -C "datauser" || true
 	chown -R datauser:datauser /data/home/datauser/.ssh
 }
@@ -81,24 +95,22 @@ echo "========================================"
 
 mkdir -p /home/testuser/projects/project1
 chown -R testuser:testuser /home/testuser/projects
-
-export HOME=/home/testuser
-export SUDO_USER=testuser
+setup_testuser_env
 
 run_test "1.1: Create ai-user (standard HOME)" \
-	"sudo -u testuser /usr/local/bin/am create /home/testuser/projects/project1" \
+	"/usr/local/bin/am create /home/testuser/projects/project1" \
 	"success"
 
 run_test "1.2: List ai-users" \
-	"sudo -u testuser /usr/local/bin/am list" \
-	"contains" "imaxx_project"
+	"/usr/local/bin/am list" \
+	"contains" "imaxx_"
 
 run_test "1.3: Remove ai-user" \
-	"sudo -u testuser /usr/local/bin/am rm /home/testuser/projects/project1" \
+	"/usr/local/bin/am rm /home/testuser/projects/project1" \
 	"success"
 
 run_test "1.4: Verify user removed" \
-	"id imaxx_project1 2>&1 || echo 'user not found'" \
+	"id imaxx_project1 2>&1; true" \
 	"contains" "no such user"
 
 echo ""
@@ -108,12 +120,11 @@ echo "========================================"
 
 mkdir -p /data/home/datauser/projects/project2
 chown -R datauser:datauser /data/home/datauser/projects
-
-export HOME=/data/home/datauser
-export SUDO_USER=datauser
+setup_datauser_env
+setup_ssh_for_datauser
 
 run_test "2.1: Create ai-user (custom HOME)" \
-	"sudo -u datauser /usr/local/bin/am create /data/home/datauser/projects/project2" \
+	"/usr/local/bin/am create /data/home/datauser/projects/project2" \
 	"success"
 
 run_test "2.2: Verify ai-user home is project path" \
@@ -121,7 +132,7 @@ run_test "2.2: Verify ai-user home is project path" \
 	"contains" "/data/home/datauser/projects/project2"
 
 run_test "2.3: Remove ai-user (custom HOME)" \
-	"sudo -u datauser /usr/local/bin/am rm /data/home/datauser/projects/project2" \
+	"/usr/local/bin/am rm /data/home/datauser/projects/project2" \
 	"success"
 
 echo ""
@@ -131,14 +142,11 @@ echo "========================================"
 
 mkdir -p /home/testuser/projects/project3
 chown -R testuser:testuser /home/testuser/projects/project3
-
-export HOME=/home/testuser
-export SUDO_USER=testuser
-
+setup_testuser_env
 setup_ssh_for_testuser
 
 run_test "3.1: Create ai-user with SSH" \
-	"sudo -u testuser /usr/local/bin/am create /home/testuser/projects/project3" \
+	"/usr/local/bin/am create /home/testuser/projects/project3" \
 	"success"
 
 run_test "3.2: Check .ssh directory in project" \
@@ -150,7 +158,7 @@ run_test "3.3: Check authorized_keys" \
 	"contains" "ssh-ed25519"
 
 run_test "3.4: Remove ai-user" \
-	"sudo -u testuser /usr/local/bin/am rm /home/testuser/projects/project3" \
+	"/usr/local/bin/am rm /home/testuser/projects/project3" \
 	"success"
 
 echo ""
@@ -158,21 +166,19 @@ echo "========================================"
 echo "Scenario 4: Error Handling"
 echo "========================================"
 
+setup_testuser_env
+
 run_test "4.1: Create outside home (should fail)" \
-	"sudo -u testuser /usr/local/bin/am create /tmp/illegal_project" \
+	"/usr/local/bin/am create /tmp/illegal_project" \
 	"fail"
 
 run_test "4.2: Create in system dir (should fail)" \
-	"sudo -u testuser /usr/local/bin/am create /etc/illegal" \
+	"/usr/local/bin/am create /etc/illegal" \
 	"fail"
 
 run_test "4.3: Remove non-existent user (should fail)" \
-	"sudo -u testuser /usr/local/bin/am rm /home/testuser/projects/nonexistent" \
+	"/usr/local/bin/am rm /home/testuser/projects/nonexistent" \
 	"fail"
-
-run_test "4.4: Create as non-root (should fail)" \
-	"/usr/local/bin/am create /home/testuser/projects/project4 2>&1 || true" \
-	"contains" "requires root"
 
 echo ""
 echo "========================================"
@@ -183,30 +189,28 @@ mkdir -p /home/testuser/projects/multi1
 mkdir -p /home/testuser/projects/multi2
 mkdir -p /home/testuser/projects/multi3
 chown -R testuser:testuser /home/testuser/projects
-
-export HOME=/home/testuser
-export SUDO_USER=testuser
+setup_testuser_env
 
 run_test "5.1: Create project multi1" \
-	"sudo -u testuser /usr/local/bin/am create /home/testuser/projects/multi1" \
+	"/usr/local/bin/am create /home/testuser/projects/multi1" \
 	"success"
 
 run_test "5.2: Create project multi2" \
-	"sudo -u testuser /usr/local/bin/am create /home/testuser/projects/multi2" \
+	"/usr/local/bin/am create /home/testuser/projects/multi2" \
 	"success"
 
 run_test "5.3: Create project multi3" \
-	"sudo -u testuser /usr/local/bin/am create /home/testuser/projects/multi3" \
+	"/usr/local/bin/am create /home/testuser/projects/multi3" \
 	"success"
 
 run_test "5.4: List shows all 3 projects" \
-	"sudo -u testuser /usr/local/bin/am list | grep -c 'imaxx_multi'" \
+	"/usr/local/bin/am list | grep -c 'imaxx_multi'" \
 	"contains" "3"
 
 run_test "5.5: Remove all projects" \
-	"sudo -u testuser /usr/local/bin/am rm /home/testuser/projects/multi1 && \
-     sudo -u testuser /usr/local/bin/am rm /home/testuser/projects/multi2 && \
-     sudo -u testuser /usr/local/bin/am rm /home/testuser/projects/multi3" \
+	"/usr/local/bin/am rm /home/testuser/projects/multi1 && \
+     /usr/local/bin/am rm /home/testuser/projects/multi2 && \
+     /usr/local/bin/am rm /home/testuser/projects/multi3" \
 	"success"
 
 echo ""

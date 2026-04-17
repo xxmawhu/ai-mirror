@@ -149,8 +149,19 @@ bool safe_create_directories(const fs::path& p) {
         if (cur == "/") break;
     }
 
+    bool is_absolute = p.is_absolute();
     int dirfd = AT_FDCWD;
-    int owned_fd = -1;
+    int root_fd = -1;
+    if (is_absolute) {
+        root_fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (root_fd < 0) {
+            utils::get_logger()->error("safe_create_directories: cannot open root '/': {}", strerror(errno));
+            return false;
+        }
+        dirfd = root_fd;
+    }
+
+    int owned_fd = root_fd;
 
     for (size_t i = 0; i < parts.size(); ++i) {
         const std::string& part = parts[i];

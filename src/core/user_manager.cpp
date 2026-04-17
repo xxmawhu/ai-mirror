@@ -126,6 +126,11 @@ bool UserManager::execute_userdel(const std::string& username, bool remove_home)
 
     auto result = utils::exec_safe(args);
     if (result.exit_code != 0) {
+        if (result.stderr_output.find("mail spool") != std::string::npos
+            && result.stderr_output.find("not found") != std::string::npos) {
+            utils::get_logger()->info("userdel: mail spool not found (expected for ai-users): {}", username);
+            return true;
+        }
         utils::get_logger()->error("userdel failed: {}", result.stderr_output);
         return false;
     }

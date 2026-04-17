@@ -1,0 +1,50 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+
+RUN apt-get update && apt-get install -y \
+    build-essential cmake git \
+    openssh-server sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir /var/run/sshd
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+RUN sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+
+RUN useradd -m -s /bin/bash testuser && \
+    echo "testuser:testpassword" | chpasswd && \
+    usermod -aG sudo testuser
+
+RUN mkdir -p /data/home && \
+    useradd -m -d /data/home/datauser -s /bin/bash datauser && \
+    echo "datauser:testpassword" | chpasswd && \
+    usermod -aG sudo datauser
+
+WORKDIR /app
+
+COPY . /app/
+
+RUN mkdir -p build && \
+    cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc)
+
+RUN cp build/bin/ai-mirror /usr/local/bin/am && \
+    chmod +x /usr/local/bin/am
+
+RUN mkdir -p /home/testuser/.ssh && \
+    ssh-keygen -t ed25519 -f /home/testuser/.ssh/testkey -N "" -C "test" && \
+    chown -R testuser:testuser /home/testuser/.ssh
+
+RUN mkdir -p /data/home/datauser/.ssh && \
+    ssh-keygen -t ed25519 -f /data/home/datauser/.ssh/testkey -N "" -C "test" && \
+    chown -R datauser:datauser /data/home/datauser/.ssh
+
+COPY tests/docker/run_tests.sh /run_tests.sh
+RUN chmod +x /run_tests.sh
+
+CMD ["/run_tests.sh"]

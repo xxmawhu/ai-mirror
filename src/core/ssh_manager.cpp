@@ -276,18 +276,25 @@ bool SSHManager::ensure_ssh_dir(const std::string& username) {
     }
 
     std::string home = utils::get_home_dir(username);
+    if (home.empty()) {
+        utils::get_logger()->error("Cannot determine home for user '{}'", username);
+        return false;
+    }
     fs::path ssh_dir = fs::path(home) / ".ssh";
 
     std::error_code ec;
     if (!fs::exists(ssh_dir, ec)) {
         if (!security::safe_create_directories(ssh_dir)) {
-            utils::get_logger()->error("Failed to create .ssh dir for {}", username.c_str());
+            utils::get_logger()->error("Failed to create .ssh dir for {}: {}", username, ssh_dir.string());
             return false;
         }
-        utils::exec_safe({"chown", username + ":" + username, ssh_dir.string()});
-        auto r2 = utils::exec_safe({"chmod", "700", ssh_dir.string()});
-        if (r2.exit_code != 0) {
-            utils::get_logger()->error("chmod 700 .ssh failed for {}", username.c_str());
+        auto chown_r = utils::exec_safe({"chown", username + ":" + username, ssh_dir.string()});
+        if (chown_r.exit_code != 0) {
+            utils::get_logger()->error("chown .ssh failed for {}: {}", username, chown_r.stderr_output);
+        }
+        auto chmod_r = utils::exec_safe({"chmod", "700", ssh_dir.string()});
+        if (chmod_r.exit_code != 0) {
+            utils::get_logger()->error("chmod 700 .ssh failed for {}: {} (path: {})", username, chmod_r.stderr_output, ssh_dir.string());
             return false;
         }
     }

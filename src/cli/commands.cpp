@@ -86,11 +86,15 @@ int cmd_create(const std::string& project_path, bool verbose) {
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 
     if (!ctx.ssh_mgr->setup_passwordless(main_user, user_info.username)) {
-        std::cerr << "Warning: SSH setup failed" << std::endl;
+        std::cerr << "Error: SSH setup failed, aborting" << std::endl;
+        ctx.user_mgr->remove_ai_user(user_info.username, true);
+        return 1;
     }
 
     if (!ctx.config.ssh.ai_default_key.empty()) {
-        ctx.ssh_mgr->setup_default_key_from_file(user_info.username, ctx.config.ssh.ai_default_key);
+        if (!ctx.ssh_mgr->setup_default_key_from_file(user_info.username, ctx.config.ssh.ai_default_key)) {
+            utils::get_logger()->warn("Failed to authorize default key for {}", user_info.username);
+        }
     }
 
     for (const auto& mount_path : ctx.config.mount.paths) {
@@ -105,7 +109,7 @@ int cmd_create(const std::string& project_path, bool verbose) {
             continue;
         }
 
-        fs::path target = core::PathResolver::to_ai_user_path(source, user_info.username, main_user);
+        fs::path target = core::PathResolver::to_ai_user_path(source, user_info.username, main_user, user_info.home_dir);
         if (!ctx.graft->bind_mount(source, target, true)) {
             mount_failures++;
             utils::get_logger()->error("Mount failed: {} -> {}", source.string(), target.string());

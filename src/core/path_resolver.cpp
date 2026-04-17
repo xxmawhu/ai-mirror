@@ -37,6 +37,9 @@ fs::path PathResolver::to_ai_user_path(const fs::path& main_path, const std::str
     auto main_str = main_path.string();
     if (!main_home.empty() && main_str.length() >= main_home.length() && main_str.substr(0, main_home.length()) == main_home) {
         std::string relative = main_str.substr(main_home.length());
+        if (!relative.empty() && relative[0] == '/') {
+            relative = relative.substr(1);
+        }
         return fs::path(ai_home) / relative;
     }
 

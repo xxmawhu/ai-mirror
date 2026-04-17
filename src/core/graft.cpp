@@ -79,12 +79,35 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
     std::ifstream mounts("/proc/mounts");
     std::string line;
 
+    std::string main_user = utils::get_effective_username();
+    std::string main_home = utils::get_effective_home();
+    if (main_home.empty()) {
+        main_home = utils::get_home_dir(main_user);
+    }
+
     while (std::getline(mounts, line)) {
         std::istringstream iss(line);
         std::string device, mount_point, fs_type, options;
         iss >> device >> mount_point >> fs_type >> options;
 
-        if (mount_point.find("/home/" + prefix_) == 0) {
+        std::string expected_prefix = prefix_ + main_user + "_";
+        bool is_ai_user_mount = false;
+        if (!main_home.empty() && mount_point.find(main_home) == 0) {
+            for (size_t i = main_home.length(); i < mount_point.length(); ++i) {
+                if (mount_point[i] == '/') {
+                    std::string segment = mount_point.substr(0, i);
+                    std::string name = fs::path(segment).filename().string();
+                    if (name.length() > expected_prefix.length()
+                        && name.substr(0, expected_prefix.length()) == expected_prefix
+                        && utils::validate_username(name)) {
+                        is_ai_user_mount = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (is_ai_user_mount) {
             MountEntry entry;
             entry.source = device;
             entry.target = mount_point;
@@ -148,9 +171,9 @@ bool Graft::unmount_all(const std::string& username) {
     auto mounts = parse_mount_table();
     bool all_ok = true;
 
-    std::string user_home = "/home/" + username;
+    std::string user_home = utils::get_home_dir(username);
     for (const auto& m : mounts) {
-        if (m.target.string().find(user_home) == 0) {
+        if (!user_home.empty() && m.target.string().find(user_home) == 0) {
             if (!unmount(m.target, false)) {
                 all_ok = false;
             }
@@ -162,12 +185,12 @@ bool Graft::unmount_all(const std::string& username) {
 
 std::vector<MountEntry> Graft::list_mounts(const std::string& username) const {
     auto all = parse_mount_table();
-    std::string user_home = "/home/" + username;
+    std::string user_home = utils::get_home_dir(username);
 
     std::vector<MountEntry> user_mounts;
     std::copy_if(all.begin(), all.end(), std::back_inserter(user_mounts),
                  [&](const MountEntry& m) {
-                     return m.target.string().find(user_home) == 0;
+                     return !user_home.empty() && m.target.string().find(user_home) == 0;
                  });
 
     return user_mounts;

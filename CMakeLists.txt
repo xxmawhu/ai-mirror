@@ -26,11 +26,13 @@ target_compile_options(ai-mirror PRIVATE
     -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
     -Wformat -Wformat-security
     -fvisibility=hidden
+    -ffunction-sections -fdata-sections
 )
 
 target_link_options(ai-mirror PRIVATE
     -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
     -static-libstdc++ -static-libgcc
+    -Wl,--gc-sections -Wl,--strip-all
 )
 
 include(FetchContent)

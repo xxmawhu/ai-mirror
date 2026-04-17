@@ -3,6 +3,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <atomic>
 
 namespace ai_mirror::daemon {
 
@@ -24,7 +25,7 @@ public:
 
 private:
     std::string auth_log_path_;
-    bool running_ = false;
+    std::atomic<bool> running_{false};
 };
 
 }

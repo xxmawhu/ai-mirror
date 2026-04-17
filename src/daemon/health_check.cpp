@@ -9,12 +9,11 @@
 
 namespace ai_mirror::daemon {
 
-HealthCheck* HealthCheck::instance_ = nullptr;
+std::atomic<HealthCheck*> HealthCheck::instance_{nullptr};
+std::atomic<bool> HealthCheck::signal_received_{false};
 
 void HealthCheck::signal_handler([[maybe_unused]] int sig) {
-    if (instance_) {
-        instance_->stop();
-    }
+    signal_received_.store(true);
 }
 
 void HealthCheck::stop() {
@@ -52,13 +51,13 @@ HealthStatus HealthCheck::check_mount(const std::string& mount_point) {
 }
 
 int HealthCheck::run_periodic(int interval_seconds) {
-    instance_ = this;
+    instance_.store(this);
     std::signal(SIGTERM, signal_handler);
     std::signal(SIGINT, signal_handler);
 
     utils::get_logger()->info("Health check running every {} seconds", interval_seconds);
 
-    while (running_) {
+    while (running_.load() && !signal_received_.load()) {
         auto statuses = check_all();
         int unhealthy = 0;
         for (const auto& s : statuses) {
@@ -72,10 +71,10 @@ int HealthCheck::run_periodic(int interval_seconds) {
         }
 
         std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait_for(lock, std::chrono::seconds(interval_seconds), [this] { return !running_.load(); });
+        cv_.wait_for(lock, std::chrono::seconds(interval_seconds), [this] { return !running_.load() || signal_received_.load(); });
     }
 
-    instance_ = nullptr;
+    instance_.store(nullptr);
     utils::get_logger()->info("Health check shutting down gracefully");
     return 0;
 }

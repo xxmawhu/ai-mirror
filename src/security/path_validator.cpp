@@ -37,7 +37,19 @@ bool validate_path_allowed(const fs::path& p) {
 
     std::string effective_home;
     if (const char* env_home = std::getenv("HOME")) {
-        if (env_home[0] == '/' && env_home[1] != '\0') effective_home = env_home;
+        if (env_home[0] == '/' && env_home[1] != '\0') {
+            bool in_system_dir = false;
+            for (const auto& d : SYSTEM_DIRS) {
+                std::string ep(env_home);
+                if (ep == d || (ep.length() > d.length() && ep[d.length()] == '/' && ep.substr(0, d.length()) == d)) {
+                    in_system_dir = true;
+                    break;
+                }
+            }
+            if (!in_system_dir) {
+                effective_home = env_home;
+            }
+        }
     }
 
     for (const auto& d : SYSTEM_DIRS) {

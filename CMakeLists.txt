@@ -13,7 +13,23 @@ set(CMAKE_LINK_SEARCH_END_STATIC ON)
 
 find_package(PkgConfig)
 
-file(GLOB_RECURSE AI_MIRROR_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+set(AI_MIRROR_SOURCES
+    src/main.cpp
+    src/cli/parser.cpp
+    src/cli/commands.cpp
+    src/core/config.cpp
+    src/core/user_manager.cpp
+    src/core/graft.cpp
+    src/core/ssh_manager.cpp
+    src/core/path_resolver.cpp
+    src/security/path_validator.cpp
+    src/security/audit.cpp
+    src/daemon/health_check.cpp
+    src/daemon/auth_monitor.cpp
+    src/daemon/mount_cleaner.cpp
+    src/utils/shell.cpp
+    src/utils/logger.cpp
+)
 
 add_executable(ai-mirror ${AI_MIRROR_SOURCES})
 
@@ -68,7 +84,7 @@ target_link_libraries(ai-mirror PRIVATE pthread)
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     enable_testing()
-    file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
+    set(TEST_SOURCES "")
     set(COMMON_SOURCES ${AI_MIRROR_SOURCES})
     list(FILTER COMMON_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
 

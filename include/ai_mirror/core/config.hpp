@@ -30,6 +30,7 @@ struct Config {
 
     fs::path config_path;
     bool loaded = false;
+    std::string load_error;
 };
 
 class ConfigParser {

@@ -2,10 +2,10 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
+#include "ai_mirror/utils/unique_fd.hpp"
 #include <filesystem>
 #include <fstream>
 #include <fcntl.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <array>
 #include <sstream>
@@ -23,13 +23,13 @@ namespace {
 // symlink / TOCTOU attacks on the temporary authorized_keys file.
 std::string get_crypto_random_hex(size_t bytes) {
     std::array<unsigned char, 16> buf{};
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
+    utils::unique_fd ufd(::open("/dev/urandom", O_RDONLY | O_CLOEXEC));
+    if (!ufd) {
         utils::get_logger()->error("Failed to open /dev/urandom");
         return "";
     }
-    ssize_t n = read(fd, buf.data(), bytes);
-    close(fd);
+    ssize_t n = ::read(ufd.get(), buf.data(), bytes);
+    ufd.reset();
     if (n != static_cast<ssize_t>(bytes)) {
         utils::get_logger()->error("Failed to read from /dev/urandom");
         return "";
@@ -49,25 +49,24 @@ fs::path make_random_tmp_path(const fs::path& base) {
 }
 
 bool safe_write_temp_file(const fs::path& path, const std::vector<std::string>& lines, fs::path& out_tmp_path) {
-    int fd = -1;
+    utils::unique_fd ufd;
     for (int attempt = 0; attempt < 3; ++attempt) {
         out_tmp_path = make_random_tmp_path(path);
-        fd = ::open(out_tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-        if (fd >= 0) break;
+        ufd.reset(::open(out_tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+        if (ufd) break;
         if (errno != EEXIST) {
             utils::get_logger()->error("safe_write_temp_file: open({}) failed: {}",
                 out_tmp_path.c_str(), strerror(errno));
             return false;
         }
     }
-    if (fd < 0) {
+    if (!ufd) {
         utils::get_logger()->error("safe_write_temp_file: exhausted retries for {}", path.c_str());
         return false;
     }
 
-    FILE* f = ::fdopen(fd, "w");
+    FILE* f = ::fdopen(ufd.release(), "w");
     if (!f) {
-        ::close(fd);
         fs::remove(out_tmp_path);
         utils::get_logger()->error("safe_write_temp_file: fdopen failed for {}", out_tmp_path.c_str());
         return false;
@@ -105,8 +104,8 @@ bool safe_read_authorized_keys(const fs::path& path, std::vector<std::string>& l
         return false;
     }
 
-    int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) {
+    utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+    if (!ufd) {
         utils::get_logger()->error("safe_read_authorized_keys: open({}) failed: {}",
             path.c_str(), strerror(errno));
         return false;
@@ -115,10 +114,10 @@ bool safe_read_authorized_keys(const fs::path& path, std::vector<std::string>& l
     char buf[4096];
     std::string content;
     ssize_t n;
-    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
+    while ((n = ::read(ufd.get(), buf, sizeof(buf))) > 0) {
         content.append(buf, n);
     }
-    ::close(fd);
+    ufd.reset();
 
     if (n < 0) {
         utils::get_logger()->error("safe_read_authorized_keys: read failed: {}", strerror(errno));
@@ -152,8 +151,8 @@ bool safe_read_public_key_file(const fs::path& path, std::string& content_out, u
         return false;
     }
 
-    int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) {
+    utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+    if (!ufd) {
         utils::get_logger()->error("safe_read_public_key_file: open({}) failed: {}",
             path.c_str(), strerror(errno));
         return false;
@@ -162,10 +161,10 @@ bool safe_read_public_key_file(const fs::path& path, std::string& content_out, u
     char buf[4096];
     std::string content;
     ssize_t n;
-    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
+    while ((n = ::read(ufd.get(), buf, sizeof(buf))) > 0) {
         content.append(buf, n);
     }
-    ::close(fd);
+    ufd.reset();
 
     if (n < 0) {
         utils::get_logger()->error("safe_read_public_key_file: read failed: {}", strerror(errno));
@@ -452,15 +451,23 @@ bool SSHManager::setup_default_key_from_file(const std::string& ai_user, const f
     return true;
 }
 
-bool SSHManager::setup_default_keys(const std::string& ai_user, const std::vector<SSHKeyEntry>& default_keys) {
+KeySetupResult SSHManager::setup_default_keys(const std::string& ai_user, const std::vector<SSHKeyEntry>& default_keys) {
+    KeySetupResult result;
+    result.total_count = default_keys.size();
+    result.authorized_count = 0;
+    
     for (const auto& entry : default_keys) {
         if (entry.public_key.empty()) continue;
-        if (!authorize_public_key_string(ai_user, entry.public_key)) {
+        if (authorize_public_key_string(ai_user, entry.public_key)) {
+            ++result.authorized_count;
+        } else {
             std::string name = entry.name.empty() ? std::string("(unnamed)") : entry.name;
             utils::get_logger()->warn(std::string("Failed to authorize default key '") + name + "' for " + ai_user);
         }
     }
-    return true;
+    
+    result.success = (result.authorized_count == result.total_count);
+    return result;
 }
 
 bool SSHManager::setup_passwordless(const std::string& main_user, const std::string& ai_user) {

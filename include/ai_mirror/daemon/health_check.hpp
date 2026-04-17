@@ -25,7 +25,8 @@ private:
     std::atomic<bool> running_{true};
     std::condition_variable cv_;
     std::mutex mtx_;
-    static HealthCheck* instance_;
+    static std::atomic<HealthCheck*> instance_;
+    static std::atomic<bool> signal_received_;
     static void signal_handler(int sig);
 };
 

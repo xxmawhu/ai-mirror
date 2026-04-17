@@ -522,17 +522,21 @@ int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
         return 1;
     }
 
+    mode_t old_umask = umask(0077);
     auto cp_result = utils::exec_safe({"cp", "-rP", "--no-preserve=mode", src_path.string(), dst_path.string()});
     if (cp_result.exit_code != 0) {
+        umask(old_umask);
         std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
         return 1;
     }
 
     fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
     if (!safe_chown_path(chown_target, ai_user)) {
+        umask(old_umask);
         std::cerr << "Failed to set ownership for " << ai_user << std::endl;
         return 1;
     }
+    umask(old_umask);
 
     if (verbose) {
         std::cout << "Copied: " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
@@ -645,9 +649,12 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
         if (!safe_chown_path(chown_target, ai_user)) {
             utils::get_logger()->error("Rename succeeded but chown failed for {}, attempting rollback", chown_target.string());
             std::error_code rollback_ec;
-            fs::rename(dst_path, src_path, rollback_ec);
+            for (int retry = 0; retry < 3; ++retry) {
+                fs::rename(dst_path, src_path, rollback_ec);
+                if (!rollback_ec) break;
+            }
             if (rollback_ec) {
-                utils::get_logger()->error("Rollback failed: {}", rollback_ec.message());
+                utils::get_logger()->error("Rollback failed after 3 retries: {} - MANUAL INTERVENTION REQUIRED for {}", rollback_ec.message(), dst_path.string());
             }
             std::cerr << "Failed to set ownership after atomic rename" << std::endl;
             return 1;
@@ -670,6 +677,11 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
 
     std::string main_user = utils::get_effective_username();
 
+    if (path.find("..") != std::string::npos) {
+        std::cerr << "Path traversal detected: input contains '..' components" << std::endl;
+        return 1;
+    }
+
     fs::path target = core::PathResolver::resolve(path);
     if (!fs::exists(target)) {
         std::cerr << "Path does not exist: " << path << std::endl;
@@ -679,6 +691,16 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
     std::string target_str = target.string();
     if (!utils::validate_path_no_shell_metachars(target_str)) {
         std::cerr << "Path contains disallowed characters" << std::endl;
+        return 1;
+    }
+
+    if (target_str == "/") {
+        std::cerr << "Path traversal detected: resolves to root directory" << std::endl;
+        return 1;
+    }
+
+    if (!security::validate_path_allowed(target)) {
+        std::cerr << "Path not in allowed directory: " << target_str << std::endl;
         return 1;
     }
 

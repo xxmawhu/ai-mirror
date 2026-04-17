@@ -9,6 +9,12 @@ namespace fs = std::filesystem;
 
 namespace ai_mirror::core {
 
+struct KeySetupResult {
+    bool success = false;
+    size_t authorized_count = 0;
+    size_t total_count = 0;
+};
+
 // SSH key management for passwordless access from main user to ai-user.
 // All tempfile operations use safe_write_temp_file() which creates files
 // with O_CREAT|O_EXCL|O_NOFOLLOW to prevent symlink/TOCTOU attacks.
@@ -40,7 +46,7 @@ public:
     bool setup_default_key_from_file(const std::string& ai_user, const fs::path& public_key_path);
 
     // Setup multiple default keys from SSHKeyEntry vector.
-    bool setup_default_keys(const std::string& ai_user, const std::vector<SSHKeyEntry>& default_keys);
+    KeySetupResult setup_default_keys(const std::string& ai_user, const std::vector<SSHKeyEntry>& default_keys);
 
     fs::path get_public_key_path(const fs::path& key_path) const;
     bool test_connection(const std::string& username) const;

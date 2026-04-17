@@ -351,6 +351,18 @@ PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE、NX
 ### Sudoers 安全模型
 无通配符，仅列出命令名，参数验证由 C++ 二进制层强制执行。
 
+### 安全审查结果 (2026-04-17)
+
+| ID | Severity | 文件 | 问题 | 状态 |
+|----|----------|------|------|------|
+| SEC-145 | MEDIUM (5.3) | health_check.cpp | signal handler 中调用 `cv_.notify_all()` 是 UB | **Fixed**: 改为 `std::atomic<bool> signal_received_` |
+| SEC-146 | MEDIUM (4.7) | health_check.cpp | 静态裸指针 `instance_` 无同步保护 | **Fixed**: 改为 `std::atomic<HealthCheck*>` |
+| SEC-147 | MEDIUM (4.3) | auth_monitor.hpp | `running_` 非 atomic 存在数据竞争 | **Fixed**: 改为 `std::atomic<bool>` |
+| SEC-148 | LOW (3.1) | graft.cpp | `is_mounted→execute_mount` 非原子序列 | **Fixed**: EBUSY 捕获视为成功 |
+| SEC-149 | LOW (2.4) | commands.cpp | `cd` 命令允许路径穿越 | **Fixed**: 输入 `..` 检查 + `validate_path_allowed` |
+
+测试通过率: 74/74 (100%)
+
 ## 适合谁？
 
 - **独立开发者**：同时让多个 AI Agent 在不同项目上工作，互不干扰

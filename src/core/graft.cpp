@@ -2,6 +2,7 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
+#include "ai_mirror/utils/unique_fd.hpp"
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -9,7 +10,6 @@
 #include <grp.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 namespace ai_mirror::core {
 
@@ -28,12 +28,12 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
                     return false;
                 }
             }
-            int fd = open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-            if (fd < 0) {
+            utils::unique_fd ufd(open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600));
+            if (!ufd) {
                 utils::get_logger()->error("execute_mount: create target file failed: {} ({})", target.string(), strerror(errno));
                 return false;
             }
-            close(fd);
+            ufd.reset();
         } else {
             if (!safe_create_directories(target)) {
                 utils::get_logger()->error("execute_mount: failed to create target dir {}", target.string());
@@ -49,16 +49,21 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
     }
 
     if (read_only) {
-        auto result = utils::exec_safe({"mount", "--bind,ro", source.string(), target.string()});
+        auto result = utils::exec_safe({"mount", "--bind", "-o", "ro", source.string(), target.string()});
         if (result.exit_code == 0) {
             utils::get_logger()->info("Bind mounted {} -> {} (ro, single-step)", source.string(), target.string());
             return true;
         }
-        utils::get_logger()->warn("Single-step mount --bind,ro failed (kernel <5.12?), falling back to two-step: {}", result.stderr_output);
+        utils::get_logger()->warn("Single-step ro mount failed (kernel <5.12?), falling back to two-step: {}", result.stderr_output);
     }
 
     auto result = utils::exec_safe({"mount", "--bind", source.string(), target.string()});
     if (result.exit_code != 0) {
+        if (result.stderr_output.find("busy") != std::string::npos
+            || result.stderr_output.find("EBUSY") != std::string::npos) {
+            utils::get_logger()->info("Target already mounted (EBUSY): {}", target.string());
+            return true;
+        }
         utils::get_logger()->error("mount --bind failed: {}", result.stderr_output);
         return false;
     }
@@ -250,15 +255,15 @@ bool Graft::set_directory_group(const fs::path& path, const std::string& groupna
         return false;
     }
 
-    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    if (fd < 0) {
+    utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+    if (!ufd) {
         if (errno == ELOOP) {
             utils::get_logger()->error("set_directory_group: path is a symlink, rejecting: {}", path.string());
             return false;
         }
         if (errno == ENOTDIR) {
-            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
-            if (fd < 0) {
+            ufd.reset(::open(path.c_str(), O_RDONLY | O_NOFOLLOW));
+            if (!ufd) {
                 if (errno == ELOOP) {
                     if (lchown(path.c_str(), -1, gr->gr_gid) != 0) {
                         utils::get_logger()->error("set_directory_group: lchown failed for {}: {}", path.string(), strerror(errno));
@@ -275,8 +280,8 @@ bool Graft::set_directory_group(const fs::path& path, const std::string& groupna
         }
     }
 
-    int ret = fchown(fd, -1, gr->gr_gid);
-    close(fd);
+    int ret = fchown(ufd.get(), -1, gr->gr_gid);
+    ufd.reset();
     if (ret != 0) {
         utils::get_logger()->error("set_directory_group: fchown failed for {}: {}", path.string(), strerror(errno));
         return false;
@@ -285,15 +290,15 @@ bool Graft::set_directory_group(const fs::path& path, const std::string& groupna
 }
 
 bool Graft::set_sgid(const fs::path& path) {
-    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    if (fd < 0) {
+    utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+    if (!ufd) {
         if (errno == ELOOP) {
             utils::get_logger()->error("set_sgid: path is a symlink, rejecting: {}", path.string());
             return false;
         }
         if (errno == ENOTDIR) {
-            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
-            if (fd < 0) {
+            ufd.reset(::open(path.c_str(), O_RDONLY | O_NOFOLLOW));
+            if (!ufd) {
                 if (errno == ELOOP) {
                     struct stat st;
                     if (lstat(path.c_str(), &st) == 0) {
@@ -315,15 +320,15 @@ bool Graft::set_sgid(const fs::path& path) {
     }
 
     struct stat st;
-    if (fstat(fd, &st) != 0) {
-        close(fd);
+    if (fstat(ufd.get(), &st) != 0) {
+        ufd.reset();
         utils::get_logger()->error("set_sgid: fstat failed for {}: {}", path.string(), strerror(errno));
         return false;
     }
 
     mode_t new_mode = st.st_mode | S_ISGID;
-    int ret = fchmod(fd, new_mode);
-    close(fd);
+    int ret = fchmod(ufd.get(), new_mode);
+    ufd.reset();
     if (ret != 0) {
         utils::get_logger()->error("set_sgid: fchmod failed for {}: {}", path.string(), strerror(errno));
         return false;
@@ -358,15 +363,15 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
         return false;
     }
 
-    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    if (fd < 0) {
+    utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+    if (!ufd) {
         if (errno == ELOOP) {
             utils::get_logger()->error("grant_write_access: path is a symlink, rejecting: {}", path.string());
             return false;
         }
         if (errno == ENOTDIR) {
-            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
-            if (fd < 0) {
+            ufd.reset(::open(path.c_str(), O_RDONLY | O_NOFOLLOW));
+            if (!ufd) {
                 if (errno == ELOOP) {
                     utils::get_logger()->error("grant_write_access: file path is symlink, rejecting: {}", path.string());
                     return false;
@@ -381,8 +386,8 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
     }
 
     struct stat st;
-    if (fstat(fd, &st) != 0) {
-        close(fd);
+    if (fstat(ufd.get(), &st) != 0) {
+        ufd.reset();
         utils::get_logger()->error("grant_write_access: fstat failed for {}: {}", path.string(), strerror(errno));
         return false;
     }
@@ -391,12 +396,12 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
     if (S_ISDIR(st.st_mode)) {
         new_mode |= S_IXGRP;
     }
-    if (fchmod(fd, new_mode) != 0) {
-        close(fd);
+    if (fchmod(ufd.get(), new_mode) != 0) {
+        ufd.reset();
         utils::get_logger()->error("grant_write_access: fchmod failed for {}: {}", path.string(), strerror(errno));
         return false;
     }
-    close(fd);
+    ufd.reset();
 
     if (fs::is_directory(path)) {
         set_sgid(path);
@@ -412,17 +417,17 @@ bool Graft::revoke_write_access(const fs::path& path, const std::string& usernam
         return false;
     }
 
-    int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
     bool is_dir = true;
-    if (fd < 0) {
+    if (!ufd) {
         if (errno == ELOOP) {
             utils::get_logger()->error("revoke_write_access: path is a symlink, rejecting: {}", path.string());
             return false;
         }
         if (errno == ENOTDIR) {
             is_dir = false;
-            fd = open(path.c_str(), O_RDONLY | O_NOFOLLOW);
-            if (fd < 0) {
+            ufd.reset(::open(path.c_str(), O_RDONLY | O_NOFOLLOW));
+            if (!ufd) {
                 if (errno == ELOOP) {
                     utils::get_logger()->error("revoke_write_access: file path is symlink, rejecting: {}", path.string());
                     return false;
@@ -434,19 +439,19 @@ bool Graft::revoke_write_access(const fs::path& path, const std::string& usernam
         }
     }
 
-    if (fd >= 0) {
+    if (ufd) {
         struct stat st;
-        if (fstat(fd, &st) == 0) {
+        if (fstat(ufd.get(), &st) == 0) {
             mode_t new_mode = st.st_mode;
             if (is_dir) {
                 new_mode &= ~S_ISGID;
             }
             new_mode &= ~(S_IRGRP | S_IWGRP | S_IXGRP);
-            if (fchmod(fd, new_mode) != 0) {
+            if (fchmod(ufd.get(), new_mode) != 0) {
                 utils::get_logger()->warn("revoke_write_access: fchmod failed for {}: {}", path.string(), strerror(errno));
             }
         }
-        close(fd);
+        ufd.reset();
     }
 
     auto gpasswd_result = utils::exec_safe({"gpasswd", "-d", username, username});

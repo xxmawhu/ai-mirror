@@ -2,14 +2,16 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
+#include "ai_mirror/utils/unique_fd.hpp"
 #include <fstream>
 #include <sstream>
 #include <toml.hpp>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 namespace ai_mirror::core {
+
+static constexpr size_t MAX_CONFIG_SIZE = 1048576;
 
 static bool validate_config_file_security(const fs::path& p) {
     struct stat st;
@@ -80,38 +82,61 @@ Config ConfigParser::load(const fs::path& config_path) {
     Config config;
     config.config_path = config_path;
 
+    std::error_code ec;
+    auto file_size = fs::file_size(config_path, ec);
+    if (ec || file_size > MAX_CONFIG_SIZE) {
+        utils::get_logger()->error("Config file too large or inaccessible (size={}, max={}): {}",
+            ec ? 0 : file_size, MAX_CONFIG_SIZE, config_path.string());
+        return config;
+    }
+
     try {
         auto data = toml::parse(config_path.string());
 
         if (data.as_table().contains("mount")) {
-            auto& mount = data["mount"];
-            if (mount.as_table().contains("paths")) {
-                auto paths = toml::get<std::vector<std::string>>(mount["paths"]);
-                for (const auto& p : paths) {
-                    config.mount.paths.push_back(expand_path(p));
+            try {
+                auto& mount = data["mount"];
+                if (mount.as_table().contains("paths")) {
+                    auto paths = toml::get<std::vector<std::string>>(mount["paths"]);
+                    for (const auto& p : paths) {
+                        config.mount.paths.push_back(expand_path(p));
+                    }
                 }
+            } catch (const std::exception& e) {
+                std::string field_err = std::string("mount.paths: ") + e.what();
+                config.load_error += (config.load_error.empty() ? "" : "; ") + field_err;
+                utils::get_logger()->warn("Config field error: {}", field_err);
             }
         }
 
         if (data.as_table().contains("ssh")) {
-            auto& ssh = data["ssh"];
-            if (ssh.as_table().contains("key_type")) {
-                config.ssh.key_type = toml::get<std::string>(ssh["key_type"]);
-            }
-            if (ssh.as_table().contains("key_path")) {
-                config.ssh.key_path = expand_path(toml::get<std::string>(ssh["key_path"]));
-            } else {
-                config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
-            }
-            if (ssh.as_table().contains("ai_default_key")) {
-                config.ssh.ai_default_key = expand_path(toml::get<std::string>(ssh["ai_default_key"]));
+            try {
+                auto& ssh = data["ssh"];
+                if (ssh.as_table().contains("key_type")) {
+                    config.ssh.key_type = toml::get<std::string>(ssh["key_type"]);
+                }
+                if (ssh.as_table().contains("key_path")) {
+                    config.ssh.key_path = expand_path(toml::get<std::string>(ssh["key_path"]));
+                } else {
+                    config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
+                }
+                if (ssh.as_table().contains("ai_default_key")) {
+                    config.ssh.ai_default_key = expand_path(toml::get<std::string>(ssh["ai_default_key"]));
+                }
+            } catch (const std::exception& e) {
+                std::string field_err = std::string("ssh: ") + e.what();
+                config.load_error += (config.load_error.empty() ? "" : "; ") + field_err;
+                utils::get_logger()->warn("Config field error: {}", field_err);
             }
         }
 
         config.loaded = true;
     } catch (const std::exception& e) {
-        std::string msg = e.what();
-        utils::get_logger()->warn(std::string("Failed to load config: ") + msg + ", using defaults");
+        config.load_error = std::string("TOML parse error: ") + e.what();
+        utils::get_logger()->warn("Failed to parse config: {}, using defaults", config.load_error);
+    } catch (...) {
+        config.load_error = "Unknown error during config parsing";
+        utils::get_logger()->warn("Failed to parse config: unknown error, using defaults");
     }
 
     return config;
@@ -124,22 +149,22 @@ Config ConfigParser::load(const fs::path& config_path) {
 // 4. Cleanup on write failure: Remove newly created empty file
 static bool try_auto_create_config(const fs::path& config_path) {
     auto parent = config_path.parent_path();
-    if (!parent.empty() && !fs::exists(parent)) {
+    if (!parent.empty()) {
         if (!security::safe_create_directories(parent)) {
             utils::get_logger()->warn("Failed to create parent directory: {}", parent.string());
             return false;
         }
     }
 
-    int fd = open(config_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-    if (fd < 0) {
+    utils::unique_fd ufd(open(config_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600));
+    if (!ufd) {
         if (errno == EEXIST) {
             return fs::exists(config_path);
         }
         utils::get_logger()->warn("Failed to create config (O_EXCL|O_NOFOLLOW): {}", config_path.string());
         return false;
     }
-    close(fd);
+    ufd.reset();
 
     uid_t login_uid = utils::get_login_uid();
     if (login_uid != 0) {
@@ -205,10 +230,19 @@ bool ConfigParser::save(const Config& config, const fs::path& config_path) {
         return false;
     }
 
-    int fd = open(config_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
-    if (fd < 0) {
-        utils::get_logger()->error("Failed to open config for writing: {}", config_path.string());
-        return false;
+    fs::path tmp_path = config_path;
+    tmp_path += ".tmp";
+
+    utils::unique_fd ufd(::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+    if (!ufd) {
+        if (errno == EEXIST) {
+            fs::remove(tmp_path);
+            ufd.reset(::open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+        }
+        if (!ufd) {
+            utils::get_logger()->error("Failed to create temp config file: {}", tmp_path.string());
+            return false;
+        }
     }
 
     std::ostringstream oss;
@@ -224,11 +258,20 @@ bool ConfigParser::save(const Config& config, const fs::path& config_path) {
         << "ai_default_key = \"" << toml_escape(config.ssh.ai_default_key.string()) << "\"\n";
 
     std::string content = oss.str();
-    ssize_t written = write(fd, content.c_str(), content.size());
-    close(fd);
+    ssize_t written = ::write(ufd.get(), content.c_str(), content.size());
+    ufd.reset();
 
     if (written != static_cast<ssize_t>(content.size())) {
-        utils::get_logger()->error("Failed to write config content: {}", config_path.string());
+        utils::get_logger()->error("Failed to write config content: {}", tmp_path.string());
+        fs::remove(tmp_path);
+        return false;
+    }
+
+    std::error_code ec;
+    fs::rename(tmp_path, config_path, ec);
+    if (ec) {
+        utils::get_logger()->error("Atomic rename failed for config: {} -> {}: {}", tmp_path.string(), config_path.string(), ec.message());
+        fs::remove(tmp_path);
         return false;
     }
 

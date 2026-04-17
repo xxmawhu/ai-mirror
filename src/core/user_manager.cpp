@@ -19,9 +19,9 @@ namespace ai_mirror::core {
 static std::string get_deterministic_hash_suffix(const std::string& input) {
     size_t h = std::hash<std::string>{}(input);
     std::ostringstream oss;
-    oss << std::hex << (h & 0xFFFF);
+    oss << std::hex << (h & 0xFFFFFFFF);
     std::string suffix = oss.str();
-    while (suffix.size() < 4) suffix = "0" + suffix;
+    while (suffix.size() < 8) suffix = "0" + suffix;
     return suffix;
 }
 
@@ -137,26 +137,26 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     fs::path proj(project_path);
 
     if (!security::validate_path_allowed(proj)) {
-        utils::get_logger()->error("Project path rejected (system directory): {}", proj.string());
-        return {"", "", 0, 0, false};
+        std::string err = "Project path rejected (system directory): " + proj.string();
+        utils::get_logger()->error("{}", err);
+        return {"", "", 0, 0, false, err};
     }
 
-    // Validate caller's home directory exists and project is under it.
-    // An empty home directory means getpwnam() failed or pw_dir is NULL,
-    // which would skip the path-below-home check below — a security bypass.
     std::string main_user = utils::get_effective_username();
     std::string main_home = utils::get_effective_home();
     if (main_home.empty()) {
         main_home = utils::get_home_dir(main_user);
     }
     if (main_home.empty()) {
-        utils::get_logger()->error("Cannot determine home directory for user '{}', rejecting", main_user);
-        return {"", "", 0, 0, false};
+        std::string err = "Cannot determine home directory for user '" + main_user + "'";
+        utils::get_logger()->error("{}", err);
+        return {"", "", 0, 0, false, err};
     }
     std::string ps = fs::absolute(proj).string();
     if (ps.length() < main_home.length() || ps.substr(0, main_home.length()) != main_home) {
-        utils::get_logger()->error("Project path must be under caller home ({}): {}", main_home, ps);
-        return {"", "", 0, 0, false};
+        std::string err = "Project path must be under caller home (" + main_home + "): " + ps;
+        utils::get_logger()->error("{}", err);
+        return {"", "", 0, 0, false, err};
     }
 
     auto username_opt = generate_username(proj);
@@ -166,27 +166,30 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
             auto info = get_user_info(*derived);
             utils::get_logger()->info("User already exists for project: {} ({})",
                 *derived, proj.string());
-            return info.value_or(UserInfo{*derived, proj.string(), 0, 0, true});
+            auto result = info.value_or(UserInfo{*derived, proj.string(), 0, 0, true, ""});
         }
-        return {"", "", 0, 0, false};
+        std::string err = "Username collision for project: " + proj.string();
+        return {"", "", 0, 0, false, err};
     }
     std::string username = std::move(*username_opt);
 
     if (user_exists(username)) {
         auto info = get_user_info(username);
-        return info.value_or(UserInfo{username, proj.string(), 0, 0, true});
+        auto result = info.value_or(UserInfo{username, proj.string(), 0, 0, true, ""});
+        return result;
     }
 
     fs::path home_dir = proj;
 
     if (!execute_useradd(username, home_dir)) {
-        utils::get_logger()->error("Failed to create user: {}", username);
-        return {username, home_dir.string(), 0, 0, false};
+        std::string err = "useradd failed for '" + username + "': see logs for details";
+        utils::get_logger()->error("{}", err);
+        return {username, home_dir.string(), 0, 0, false, err};
     }
 
     auto info = get_user_info(username);
     utils::get_logger()->info("Created ai-user: {} (uid={})", username, info->uid);
-    return info.value_or(UserInfo{username, home_dir.string(), 0, 0, true});
+    return info.value_or(UserInfo{username, home_dir.string(), 0, 0, true, ""});
 }
 
 bool UserManager::remove_ai_user(const std::string& username, bool force) {
@@ -214,7 +217,7 @@ std::optional<UserInfo> UserManager::get_user_info(const std::string& username) 
     if (!pw) {
         return std::nullopt;
     }
-    return UserInfo{username, pw->pw_dir, pw->pw_uid, pw->pw_gid, true};
+    return UserInfo{username, pw->pw_dir, pw->pw_uid, pw->pw_gid, true, {}};
 }
 
 bool UserManager::user_exists(const std::string& username) const {
@@ -230,7 +233,7 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
         std::string name(pw->pw_name);
         if (name.length() > prefix_str.length()
             && name.substr(0, prefix_str.length()) == prefix_str) {
-            users.push_back({name, pw->pw_dir, pw->pw_uid, pw->pw_gid, true});
+            users.push_back({name, pw->pw_dir, pw->pw_uid, pw->pw_gid, true, ""});
         }
     }
     endpwent();

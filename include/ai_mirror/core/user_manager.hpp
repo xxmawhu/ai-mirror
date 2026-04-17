@@ -15,6 +15,7 @@ struct UserInfo {
     uid_t uid;
     gid_t gid;
     bool exists;
+    std::string error;
 };
 
 // AI user management with deterministic username generation.

@@ -61,7 +61,7 @@ AuthMonitor::AuthMonitor(const std::string& auth_log_path)
     : auth_log_path_(auth_log_path) {}
 
 void AuthMonitor::start(Callback on_event) {
-    running_ = true;
+    running_.store(true);
     std::ifstream log_file(auth_log_path_);
     if (!log_file.is_open()) {
         utils::get_logger()->error("Cannot open auth log: {}", auth_log_path_);
@@ -70,7 +70,7 @@ void AuthMonitor::start(Callback on_event) {
 
     log_file.seekg(0, std::ios::end);
 
-    while (running_) {
+    while (running_.load()) {
         std::string line;
         while (std::getline(log_file, line)) {
             if (line.empty()) continue;
@@ -119,7 +119,7 @@ void AuthMonitor::start(Callback on_event) {
             }
         }
 
-        if (!running_) break;
+        if (!running_.load()) break;
 
         log_file.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -127,7 +127,7 @@ void AuthMonitor::start(Callback on_event) {
 }
 
 void AuthMonitor::stop() {
-    running_ = false;
+    running_.store(false);
 }
 
 // Maximum number of events to return from get_recent_events().  Prevents

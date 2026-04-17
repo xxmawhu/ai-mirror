@@ -43,6 +43,47 @@ cmake --build .
 
 构建启用了安全加固标志：PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE。
 
+### 安装（推荐）
+
+`install.sh` 是一键构建+部署脚本，自动完成依赖检查、编译、二进制安装、sudoers 配置、systemd 定时器等全部工作。
+
+```bash
+chmod +x install.sh
+
+# 完整安装（构建 + 部署到系统）
+sudo ./install.sh
+
+# 仅构建，不安装
+sudo ./install.sh --build
+
+# 卸载
+sudo ./install.sh --clean
+```
+
+**`install.sh` 执行流程**：
+
+| 阶段 | 操作 |
+|------|------|
+| 依赖检查 | 自动检测并安装缺失的系统包（cmake, g++, make, git, openssh-server, sudo） |
+| 构建 | CMake Release 编译，增量构建支持 |
+| 验证 | 检查二进制文件完整性 + `--help` 冒烟测试 |
+| 安装 | 部署 `ai-mirror-bin` + `am` wrapper 到 `/usr/local/bin/` |
+| 配置 | 创建 `/etc/ai-mirror/ai-mirror.toml`（权限 0640, 属组 ai-mirror） |
+| Sudoers | 创建 `/etc/ai-mirror/sudoers.d/ai-mirror`，无通配符白名单规则 |
+| 用户组 | 创建 `ai-mirror` 系统组 |
+| Systemd | 创建 `ai-mirror-health.timer`，每 5 分钟自动健康检查（非 systemd 环境跳过） |
+
+**可自定义路径**（环境变量）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `AI_MIRROR_PREFIX` | `/usr/local` | 二进制安装前缀 |
+| `AI_MIRROR_SYSTEMD_DIR` | `/etc/systemd/system` | systemd unit 文件目录 |
+| `AI_MIRROR_CONFIG_DIR` | `/etc/ai-mirror` | 配置文件目录 |
+| `AI_MIRROR_DATA_DIR` | `/var/lib/ai-mirror` | 数据目录 |
+
+安装日志保存在 `./log/install.log`。
+
 ### 运行环境
 
 - Linux（systemd 或非 systemd 环境均可）

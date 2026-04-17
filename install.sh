@@ -74,12 +74,19 @@ phase_setup() {
 phase_system_deps() {
 	log "Checking system dependencies..."
 
-	local deps=(cmake g++ make git openssh-server sudo)
+	local -A pkg_cmd=(
+		[cmake]=cmake
+		[g++]=g++
+		[make]=make
+		[git]=git
+		[openssh - server]=sshd
+		[sudo]=sudo
+	)
 	local missing=()
 
-	for dep in "${deps[@]}"; do
-		if ! command -v "$dep" &>/dev/null; then
-			missing+=("$dep")
+	for pkg in "${!pkg_cmd[@]}"; do
+		if ! command -v "${pkg_cmd[$pkg]}" &>/dev/null; then
+			missing+=("$pkg")
 		fi
 	done
 

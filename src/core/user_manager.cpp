@@ -161,6 +161,13 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
 
     auto username_opt = generate_username(proj);
     if (!username_opt) {
+        auto derived = derive_username(proj);
+        if (derived && user_exists(*derived)) {
+            auto info = get_user_info(*derived);
+            utils::get_logger()->info("User already exists for project: {} ({})",
+                *derived, proj.string());
+            return info.value_or(UserInfo{*derived, proj.string(), 0, 0, true});
+        }
         return {"", "", 0, 0, false};
     }
     std::string username = std::move(*username_opt);

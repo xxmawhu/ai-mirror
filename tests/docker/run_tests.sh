@@ -127,8 +127,10 @@ run_test "2.1: Create ai-user (custom HOME)" \
 	"/usr/local/bin/am create /data/home/datauser/projects/project2" \
 	"success"
 
+custom_user=$(getent passwd | grep '^idatauser_' | cut -d: -f1 | head -1)
+
 run_test "2.2: Verify ai-user home is project path" \
-	"getent passwd idatauser_project2 | cut -d: -f6" \
+	"getent passwd $custom_user | cut -d: -f6" \
 	"contains" "/data/home/datauser/projects/project2"
 
 run_test "2.3: Remove ai-user (custom HOME)" \
@@ -188,7 +190,7 @@ echo "========================================"
 mkdir -p /home/testuser/projects/multi1
 mkdir -p /home/testuser/projects/multi2
 mkdir -p /home/testuser/projects/multi3
-chown -R testuser:testuser /home/testuser/projects
+chown -R testuser:testuser /home/testuser/projects || true
 setup_testuser_env
 
 run_test "5.1: Create project multi1" \
@@ -211,6 +213,162 @@ run_test "5.5: Remove all projects" \
 	"/usr/local/bin/am rm /home/testuser/projects/multi1 && \
      /usr/local/bin/am rm /home/testuser/projects/multi2 && \
      /usr/local/bin/am rm /home/testuser/projects/multi3" \
+	"success"
+
+echo ""
+echo "========================================"
+echo "Scenario 6: Config and Status Commands"
+echo "========================================"
+
+setup_testuser_env
+
+run_test "6.1: Config command" \
+	"/usr/local/bin/am config" \
+	"contains" "Config file"
+
+mkdir -p /home/testuser/projects/proj_config
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "6.2: Create project for status test" \
+	"/usr/local/bin/am create /home/testuser/projects/proj_config" \
+	"success"
+
+run_test "6.3: Status command shows project" \
+	"/usr/local/bin/am status" \
+	"contains" "Project:"
+
+run_test "6.4: Status shows SSH info" \
+	"/usr/local/bin/am status" \
+	"contains" "SSH:"
+
+run_test "6.5: Cleanup config test" \
+	"/usr/local/bin/am rm /home/testuser/projects/proj_config" \
+	"success"
+
+echo ""
+echo "========================================"
+echo "Scenario 7: ai-user File Ownership"
+echo "========================================"
+
+setup_testuser_env
+mkdir -p /home/testuser/projects/ownertest
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "7.1: Create ai-user for ownership test" \
+	"/usr/local/bin/am create /home/testuser/projects/ownertest" \
+	"success"
+
+owner_user=$(getent passwd | grep '^itestuser_.*ownertest' | cut -d: -f1 | head -1)
+
+run_test "7.2: .ssh dir owned by ai-user" \
+	"stat -c '%U' /home/testuser/projects/ownertest/.ssh" \
+	"contains" "$owner_user"
+
+run_test "7.3: authorized_keys owned by ai-user" \
+	"stat -c '%U' /home/testuser/projects/ownertest/.ssh/authorized_keys" \
+	"contains" "$owner_user"
+
+run_test "7.4: Project dir has write grant" \
+	"stat -c '%A' /home/testuser/projects/ownertest" \
+	"contains" "rwx"
+
+run_test "7.5: Cleanup ownership test" \
+	"/usr/local/bin/am rm /home/testuser/projects/ownertest" \
+	"success"
+
+echo ""
+echo "========================================"
+echo "Scenario 8: Recreate Same Project"
+echo "========================================"
+
+setup_testuser_env
+mkdir -p /home/testuser/projects/recreate
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "8.1: Create project" \
+	"/usr/local/bin/am create /home/testuser/projects/recreate" \
+	"success"
+
+recreate_user=$(getent passwd | grep '^itestuser_.*recreate' | cut -d: -f1 | head -1)
+
+run_test "8.2: Remove project" \
+	"/usr/local/bin/am rm /home/testuser/projects/recreate" \
+	"success"
+
+run_test "8.3: Verify user removed" \
+	"id $recreate_user 2>&1; true" \
+	"contains" "no such user"
+
+setup_ssh_for_testuser
+
+run_test "8.4: Recreate same project" \
+	"/usr/local/bin/am create /home/testuser/projects/recreate" \
+	"success"
+
+run_test "8.5: Verify recreated user exists" \
+	"getent passwd | grep '^itestuser_.*recreate'" \
+	"contains" "itestuser_"
+
+run_test "8.6: Cleanup recreate test" \
+	"/usr/local/bin/am rm /home/testuser/projects/recreate" \
+	"success"
+
+echo ""
+echo "========================================"
+echo "Scenario 9: Path Edge Cases"
+echo "========================================"
+
+setup_testuser_env
+
+mkdir -p "/home/testuser/projects/my-project"
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "9.1: Create with hyphenated name" \
+	"/usr/local/bin/am create /home/testuser/projects/my-project" \
+	"success"
+
+run_test "9.2: List shows hyphenated project" \
+	"/usr/local/bin/am list" \
+	"contains" "itestuser_"
+
+run_test "9.3: Remove hyphenated project" \
+	"/usr/local/bin/am rm /home/testuser/projects/my-project" \
+	"success"
+
+mkdir -p "/home/testuser/projects/deep/nested/project"
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "9.4: Create deeply nested project" \
+	"/usr/local/bin/am create /home/testuser/projects/deep/nested/project" \
+	"success"
+
+run_test "9.5: Remove deeply nested project" \
+	"/usr/local/bin/am rm /home/testuser/projects/deep/nested/project" \
+	"success"
+
+echo ""
+echo "========================================"
+echo "Scenario 10: Duplicate Create Prevention"
+echo "========================================"
+
+setup_testuser_env
+mkdir -p /home/testuser/projects/dup_test
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "10.1: Create project" \
+	"/usr/local/bin/am create /home/testuser/projects/dup_test" \
+	"success"
+
+run_test "10.2: Create same project again (should succeed, return existing)" \
+	"/usr/local/bin/am create /home/testuser/projects/dup_test" \
+	"success"
+
+run_test "10.3: Verify only one ai-user exists for project" \
+	"getent passwd | grep -c 'itestuser_.*dup_test'" \
+	"contains" "1"
+
+run_test "10.4: Cleanup dup test" \
+	"/usr/local/bin/am rm /home/testuser/projects/dup_test" \
 	"success"
 
 echo ""

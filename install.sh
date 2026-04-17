@@ -32,31 +32,17 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ---- Helpers ----
-log() {
-	local msg="${GREEN}[install]${NC} $*"
-	echo -e "$msg"
-	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
-}
-warn() {
-	local msg="${YELLOW}[warn]${NC} $*"
-	echo -e "$msg"
-	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
-}
-error() {
-	local msg="${RED}[error]${NC} $*"
-	echo -e "$msg" >&2
-	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
-}
-info() {
-	local msg="${CYAN}[info]${NC} $*"
-	echo -e "$msg"
-	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
+_log() {
+	echo -e "$1"
+	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$1" >>"$INSTALL_LOG"
 }
 
-separator() {
-	echo "============================================================"
-	${LOG_DIR_READY:+echo "============================================================" >> "$INSTALL_LOG"}
-}
+log() { _log "${GREEN}[install]${NC} $*"; }
+warn() { _log "${YELLOW}[warn]${NC} $*"; }
+error() { _log "${RED}[error]${NC} $*" >&2; }
+info() { _log "${CYAN}[info]${NC} $*"; }
+
+separator() { _log "============================================================"; }
 
 check_root() {
 	if [[ $EUID -ne 0 ]]; then

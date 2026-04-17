@@ -166,10 +166,10 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
 
     if (user_exists(username)) {
         auto info = get_user_info(username);
-        return info.value_or(UserInfo{username, "/home/" + username, 0, 0, true});
+        return info.value_or(UserInfo{username, proj.string(), 0, 0, true});
     }
 
-    fs::path home_dir = "/home/" + username;
+    fs::path home_dir = proj;
 
     if (!execute_useradd(username, home_dir)) {
         utils::get_logger()->error("Failed to create user: {}", username);

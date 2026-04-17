@@ -27,12 +27,15 @@ fs::path PathResolver::resolve(const fs::path& p) {
     return fs::canonical(expanded, ec);
 }
 
-fs::path PathResolver::to_ai_user_path(const fs::path& main_path, const std::string& ai_user, const std::string& main_user) {
-    std::string main_home = utils::get_home_dir(main_user);
-    std::string ai_home = utils::get_home_dir(ai_user);
+fs::path PathResolver::to_ai_user_path(const fs::path& main_path, const std::string& ai_user, const std::string& main_user, const fs::path& ai_user_home) {
+    std::string main_home = utils::get_effective_home();
+    if (main_home.empty()) {
+        main_home = utils::get_home_dir(main_user);
+    }
+    std::string ai_home = ai_user_home.empty() ? utils::get_home_dir(ai_user) : ai_user_home.string();
 
     auto main_str = main_path.string();
-    if (main_str.substr(0, main_home.length()) == main_home) {
+    if (!main_home.empty() && main_str.length() >= main_home.length() && main_str.substr(0, main_home.length()) == main_home) {
         std::string relative = main_str.substr(main_home.length());
         return fs::path(ai_home) / relative;
     }

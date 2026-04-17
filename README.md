@@ -76,7 +76,6 @@ sudo ./install.sh --clean
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `AI_MIRROR_PREFIX` | `/usr/local` | 二进制安装前缀 |
-| `AI_MIRROR_SYSTEMD_DIR` | `/etc/systemd/system` | systemd unit 文件目录 |
 | `AI_MIRROR_CONFIG_DIR` | `/etc/ai-mirror` | 配置文件目录 |
 | `AI_MIRROR_DATA_DIR` | `/var/lib/ai-mirror` | 数据目录 |
 
@@ -84,7 +83,7 @@ sudo ./install.sh --clean
 
 ### 运行环境
 
-- Linux（systemd 或非 systemd 环境均可）
+- Linux（任何发行版）
 - Docker 集成测试: Ubuntu 22.04 / 24.04
 
 ## 使用
@@ -232,7 +231,7 @@ am status
 am health
 ```
 
-检查所有 bind mount 是否正常。退出码 0 = 全部健康，1 = 存在异常。可集成到 cron 或 systemd timer。
+检查所有 bind mount 是否正常。退出码 0 = 全部健康，1 = 存在异常。可集成到 cron 定时任务。
 
 ---
 

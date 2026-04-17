@@ -18,7 +18,6 @@ LOG_DIR="${SCRIPT_DIR}/log"
 INSTALL_LOG="${LOG_DIR}/install.log"
 
 PREFIX="${AI_MIRROR_PREFIX:-/usr/local}"
-SYSTEMD_DIR="${AI_MIRROR_SYSTEMD_DIR:-/etc/systemd/system}"
 CONFIG_DIR="${AI_MIRROR_CONFIG_DIR:-/etc/ai-mirror}"
 DATA_DIR="${AI_MIRROR_DATA_DIR:-/var/lib/ai-mirror}"
 BIN_NAME="ai-mirror"
@@ -64,7 +63,6 @@ phase_setup() {
 
 	log "Install started at $(date)"
 	log "PREFIX=${PREFIX}"
-	log "SYSTEMD_DIR=${SYSTEMD_DIR}"
 	log "CONFIG_DIR=${CONFIG_DIR}"
 	log "DATA_DIR=${DATA_DIR}"
 }
@@ -289,86 +287,6 @@ SUDOERS
 	log "Install phase complete"
 }
 
-# ---- Phase: Systemd ----
-has_systemd() {
-	if [ -d /run/systemd/system ] 2>/dev/null; then
-		return 0
-	fi
-	return 1
-}
-
-phase_systemd() {
-	if ! has_systemd; then
-		warn "systemd not running (PID 1 != systemd). Skipping systemd setup."
-		warn "In container/WSL environments, health check runs via cron or manual invocation."
-		return 0
-	fi
-
-	log "Setting up systemd health-check service..."
-
-	local was_running=false
-	if systemctl is-active --quiet ai-mirror-health.service 2>/dev/null; then
-		was_running=true
-		log "  Service is currently running, will restart after update"
-	fi
-
-	if $was_running; then
-		systemctl stop ai-mirror-health.service 2>&1 | tee -a "$INSTALL_LOG" || true
-		log "  Stopped existing service"
-	fi
-
-	cat >"${SYSTEMD_DIR}/ai-mirror-health.service" <<EOF
-[Unit]
-Description=ai-mirror Periodic Health Check
-Documentation=man:ai-mirror(1)
-After=local-fs.target
-
-[Service]
-Type=oneshot
-	ExecStart=${PREFIX}/bin/${REAL_BIN_NAME} health
-StandardOutput=journal
-StandardError=journal
-EOF
-
-	chmod 0644 "${SYSTEMD_DIR}/ai-mirror-health.service"
-	log "  ${SYSTEMD_DIR}/ai-mirror-health.service"
-
-	cat >"${SYSTEMD_DIR}/ai-mirror-health.timer" <<EOF
-[Unit]
-Description=Run ai-mirror health check every 5 minutes
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=5min
-AccuracySec=30s
-
-[Install]
-WantedBy=timers.target
-EOF
-
-	chmod 0644 "${SYSTEMD_DIR}/ai-mirror-health.timer"
-	log "  ${SYSTEMD_DIR}/ai-mirror-health.timer"
-
-	systemctl daemon-reload 2>&1 | tee -a "$INSTALL_LOG"
-	log "  systemd daemon-reloaded"
-
-	systemctl enable ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG"
-	log "  ai-mirror-health.timer enabled"
-
-	if $was_running; then
-		systemctl start ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG"
-		log "  Timer restarted"
-	else
-		echo ""
-		info "Health timer is enabled but NOT started yet."
-		info "Start with: sudo systemctl start ai-mirror-health.timer"
-	fi
-
-	echo ""
-	info "Check timer:  sudo systemctl list-timers ai-mirror-health.timer"
-	info "Manual check: ${PREFIX}/bin/${WRAPPER_NAME} health"
-}
-
 # ---- Phase: Summary ----
 phase_summary() {
 	separator
@@ -378,9 +296,6 @@ phase_summary() {
 	log "Installed:"
 	log "  ${PREFIX}/bin/${WRAPPER_NAME}       (wrapper, auto-invokes sudo)"
 	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  (actual binary)"
-	log ""
-	log "Configuration:"
-	log "  ${CONFIG_DIR}/ai-mirror.toml"
 	log ""
 	log "Data directory:"
 	log "  ${DATA_DIR}/"
@@ -406,32 +321,6 @@ phase_summary() {
 # ---- Phase: Clean ----
 phase_clean() {
 	log "Removing installed files..."
-
-	if has_systemd; then
-		if systemctl is-active --quiet ai-mirror-health.timer 2>/dev/null; then
-			log "  Stopping timer..."
-			systemctl stop ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG" || true
-		fi
-		if systemctl is-active --quiet ai-mirror-health.service 2>/dev/null; then
-			log "  Stopping service..."
-			systemctl stop ai-mirror-health.service 2>&1 | tee -a "$INSTALL_LOG" || true
-		fi
-		if systemctl is-enabled --quiet ai-mirror-health.timer 2>/dev/null; then
-			log "  Disabling timer..."
-			systemctl disable ai-mirror-health.timer 2>&1 | tee -a "$INSTALL_LOG" || true
-		fi
-	fi
-
-	for f in ai-mirror-health.service ai-mirror-health.timer; do
-		if [[ -f "${SYSTEMD_DIR}/${f}" ]]; then
-			rm -f "${SYSTEMD_DIR}/${f}"
-			log "  Removed ${SYSTEMD_DIR}/${f}"
-		fi
-	done
-
-	if has_systemd; then
-		systemctl daemon-reload 2>&1 | tee -a "$INSTALL_LOG" || true
-	fi
 
 	if [[ -f "${PREFIX}/bin/${REAL_BIN_NAME}" ]]; then
 		rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"

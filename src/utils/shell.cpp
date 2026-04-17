@@ -227,13 +227,13 @@ std::string get_effective_username() {
 }
 
 std::string get_effective_home() {
+    if (const char* env_home = std::getenv("HOME")) {
+        if (env_home[0] == '/' && env_home[1] != '\0') return env_home;
+    }
     std::string username = get_effective_username();
     if (!username.empty()) {
         std::string home = get_home_dir(username);
         if (!home.empty()) return home;
-    }
-    if (const char* env_home = std::getenv("HOME")) {
-        if (env_home[0] != '\0') return env_home;
     }
     return get_home_dir(get_current_username());
 }
@@ -278,7 +278,10 @@ bool is_path_allowed(const fs::path& p, const std::string& main_user) {
         if (part == "..") return false;
     }
 
-    std::string main_home = get_home_dir(main_user);
+    std::string main_home = get_effective_home();
+    if (main_home.empty()) {
+        main_home = get_home_dir(main_user);
+    }
     if (main_home.empty()) return false;
 
     std::error_code ec;

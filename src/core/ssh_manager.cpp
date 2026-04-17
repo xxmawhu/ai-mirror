@@ -272,6 +272,18 @@ bool SSHManager::generate_key_pair(const fs::path& key_path, const std::string& 
         return false;
     }
 
+    uid_t login_uid = utils::get_login_uid();
+    if (login_uid != 0 && login_uid != static_cast<uid_t>(-1)) {
+        if (chown(key_path.c_str(), login_uid, static_cast<gid_t>(-1)) != 0) {
+            utils::get_logger()->warn("Failed to chown SSH private key to loginuid {}: {}", login_uid, strerror(errno));
+        }
+        fs::path pub_path = key_path;
+        pub_path += ".pub";
+        if (chown(pub_path.c_str(), login_uid, static_cast<gid_t>(-1)) != 0) {
+            utils::get_logger()->warn("Failed to chown SSH public key to loginuid {}: {}", login_uid, strerror(errno));
+        }
+    }
+
     utils::get_logger()->info("Generated SSH key pair: {}", key_path.c_str());
     return true;
 }
@@ -320,7 +332,7 @@ bool SSHManager::authorize_key(const std::string& username, const fs::path& publ
     fs::path auth_keys = fs::path(home) / ".ssh" / "authorized_keys";
 
     std::string key_content;
-    if (!safe_read_public_key_file(public_key_path, key_content, getuid())) {
+    if (!safe_read_public_key_file(public_key_path, key_content, utils::get_login_uid())) {
         return false;
     }
 

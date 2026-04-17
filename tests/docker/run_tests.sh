@@ -26,33 +26,33 @@ run_test() {
 
 	output=$(eval "$cmd" 2>&1) && exit_code=0 || exit_code=$?
 
-	echo "Exit code: $exit_code"
-	echo "Output (last 5 lines):"
-	echo "$output" | tail -5
+	echo "Exit code: $exit_code" >&2
+	echo "Output (last 5 lines):" >&2
+	echo "$output" | tail -5 >&2
 
 	if [[ "$expected" == "success" ]]; then
 		if [[ $exit_code -eq 0 ]]; then
 			echo "[PASS] $name"
-			((pass_count++))
+			pass_count=$((pass_count + 1))
 		else
 			echo "[FAIL] $name - expected success, got exit code $exit_code"
-			((fail_count++))
+			fail_count=$((fail_count + 1))
 		fi
 	elif [[ "$expected" == "fail" ]]; then
 		if [[ $exit_code -ne 0 ]]; then
 			echo "[PASS] $name (correctly failed)"
-			((pass_count++))
+			pass_count=$((pass_count + 1))
 		else
 			echo "[FAIL] $name - expected failure, got success"
-			((fail_count++))
+			fail_count=$((fail_count + 1))
 		fi
 	elif [[ "$expected" == "contains" ]]; then
 		if [[ "$output" == *"$pattern"* ]]; then
 			echo "[PASS] $name - contains '$pattern'"
-			((pass_count++))
+			pass_count=$((pass_count + 1))
 		else
 			echo "[FAIL] $name - expected to contain '$pattern'"
-			((fail_count++))
+			fail_count=$((fail_count + 1))
 		fi
 	fi
 
@@ -128,7 +128,7 @@ run_test "2.1: Create ai-user (custom HOME)" \
 	"success"
 
 run_test "2.2: Verify ai-user home is project path" \
-	"getent passwd imaxx_project2 | cut -d: -f6" \
+	"getent passwd idatauser_project2 | cut -d: -f6" \
 	"contains" "/data/home/datauser/projects/project2"
 
 run_test "2.3: Remove ai-user (custom HOME)" \

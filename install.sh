@@ -32,13 +32,30 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ---- Helpers ----
-log() { echo -e "${GREEN}[install]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}; }
-warn() { echo -e "${YELLOW}[warn]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}; }
-error() { echo -e "${RED}[error]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"} >&2; }
-info() { echo -e "${CYAN}[info]${NC} $*" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}; }
+log() {
+	local msg="${GREEN}[install]${NC} $*"
+	echo -e "$msg"
+	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
+}
+warn() {
+	local msg="${YELLOW}[warn]${NC} $*"
+	echo -e "$msg"
+	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
+}
+error() {
+	local msg="${RED}[error]${NC} $*"
+	echo -e "$msg" >&2
+	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
+}
+info() {
+	local msg="${CYAN}[info]${NC} $*"
+	echo -e "$msg"
+	${LOG_DIR_READY:+echo -e "$msg" >> "$INSTALL_LOG"}
+}
 
 separator() {
-	echo "============================================================" ${LOG_DIR_READY:+| tee -a "$INSTALL_LOG"}
+	echo "============================================================"
+	${LOG_DIR_READY:+echo "============================================================" >> "$INSTALL_LOG"}
 }
 
 check_root() {

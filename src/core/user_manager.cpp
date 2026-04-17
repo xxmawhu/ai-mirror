@@ -66,7 +66,25 @@ std::optional<std::string> UserManager::generate_username(const fs::path& projec
 }
 
 std::optional<std::string> UserManager::derive_username(const fs::path& project_path) const {
-    return generate_username(project_path);
+    std::string stem = project_path.filename().string();
+    std::replace(stem.begin(), stem.end(), '.', '_');
+    std::replace(stem.begin(), stem.end(), '-', '_');
+
+    std::string base = prefix_ + utils::get_effective_username() + "_" + stem;
+    std::transform(base.begin(), base.end(), base.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    std::string hash_suffix = get_deterministic_hash_suffix(project_path.string());
+
+    const size_t max_stem_len = 20;
+    std::string truncated = base.substr(0, max_stem_len);
+    std::string username = truncated + "_" + hash_suffix;
+
+    if (username.size() > 32) {
+        username = username.substr(0, 32);
+    }
+
+    return username;
 }
 
 bool UserManager::execute_useradd(const std::string& username, const fs::path& home_dir) {

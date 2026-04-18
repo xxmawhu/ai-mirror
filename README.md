@@ -360,8 +360,18 @@ PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE、NX
 | SEC-147 | MEDIUM (4.3) | auth_monitor.hpp | `running_` 非 atomic 存在数据竞争 | **Fixed**: 改为 `std::atomic<bool>` |
 | SEC-148 | LOW (3.1) | graft.cpp | `is_mounted→execute_mount` 非原子序列 | **Fixed**: EBUSY 捕获视为成功 |
 | SEC-149 | LOW (2.4) | commands.cpp | `cd` 命令允许路径穿越 | **Fixed**: 输入 `..` 检查 + `validate_path_allowed` |
+| SEC-150 | HIGH (7.2) | ssh_manager.cpp | `setup_default_keys` 静默部分失败 | **Fixed**: 返回 `KeySetupResult` 结构体 |
+| SEC-151 | MEDIUM (5.5) | config.cpp | 配置解析错误被吞掉 | **Fixed**: `Config.load_error` 字段 |
+| SEC-152 | MEDIUM (5.0) | user_manager.cpp | `create_ai_user` 无错误详情 | **Fixed**: `UserInfo.error` 字段 |
+| SEC-153 | LOW (3.5) | 多文件 | API 返回值模式不一致 | **Fixed**: 制定规范文档 |
+| SEC-154 | LOW (3.0) | main.cpp | `catch(...)` 吞掉异常 | **Fixed**: `current_exception` + rethrow |
+| SEC-155 | LOW (3.2) | config.cpp | 单字段错误导致全部丢失 | **Fixed**: 独立 try-catch + `loaded=true` |
+| SEC-156 | LOW (2.5) | 多文件 | 11处裸 fd 无 RAII | **Fixed**: `unique_fd` RAII 包装 |
+| SEC-157 | LOW (2.8) | config.cpp | config save 非原子写入 | **Fixed**: temp file + `fs::rename` |
 
-测试通过率: 74/74 (100%)
+测试通过率: 92/92 (100%)
+
+> 详细 API 返回值规范参见 [docs/api-return-values.md](docs/api-return-values.md)
 
 ## 适合谁？
 

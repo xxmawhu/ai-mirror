@@ -70,9 +70,14 @@ void AuthMonitor::start(Callback on_event) {
 
     log_file.seekg(0, std::ios::end);
 
+    constexpr int max_consecutive_errors = 10;
+    int consecutive_errors = 0;
+
     while (running_.load()) {
         std::string line;
+        int lines_read = 0;
         while (std::getline(log_file, line)) {
+            lines_read++;
             if (line.empty()) continue;
 
             AuthEvent event;
@@ -96,10 +101,6 @@ void AuthMonitor::start(Callback on_event) {
                     event.action = keyword;
 
                     auto user_pos = rest.find("for ", pos);
-                    // Validate username before storing: auth log entries could be spoofed or
-                    // contain malformed data from a compromised log source.  Reject
-                    // usernames with shell metacharacters to prevent injection if
-                    // the username is later used in shell commands.
                     if (user_pos != std::string::npos) {
                         std::istringstream user_stream(rest.substr(user_pos + 4));
                         std::string user;
@@ -120,6 +121,16 @@ void AuthMonitor::start(Callback on_event) {
         }
 
         if (!running_.load()) break;
+
+        if (lines_read == 0 && !log_file.eof() && log_file.fail()) {
+            consecutive_errors++;
+            if (consecutive_errors >= max_consecutive_errors) {
+                utils::get_logger()->error("AuthMonitor: {} consecutive read errors, stopping", max_consecutive_errors);
+                break;
+            }
+        } else {
+            consecutive_errors = 0;
+        }
 
         log_file.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));

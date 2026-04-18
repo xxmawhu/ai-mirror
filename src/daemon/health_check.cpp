@@ -52,8 +52,12 @@ HealthStatus HealthCheck::check_mount(const std::string& mount_point) {
 
 int HealthCheck::run_periodic(int interval_seconds) {
     instance_.store(this);
-    std::signal(SIGTERM, signal_handler);
-    std::signal(SIGINT, signal_handler);
+    struct sigaction sa{};
+    sa.sa_handler = signal_handler;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
 
     utils::get_logger()->info("Health check running every {} seconds", interval_seconds);
 

@@ -1,10 +1,12 @@
 #include "ai_mirror/utils/logger.hpp"
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <mutex>
 
 namespace ai_mirror::utils {
 
 static std::shared_ptr<spdlog::logger> g_logger;
+static std::once_flag g_logger_once;
 
 void init_logger(const std::string& level, const std::string& log_file) {
     std::vector<spdlog::sink_ptr> sinks;
@@ -33,9 +35,11 @@ void init_logger(const std::string& level, const std::string& log_file) {
 }
 
 std::shared_ptr<spdlog::logger> get_logger() {
-    if (!g_logger) {
-        init_logger();
-    }
+    std::call_once(g_logger_once, [] {
+        if (!g_logger) {
+            init_logger();
+        }
+    });
     return g_logger;
 }
 

@@ -60,11 +60,12 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    fs::path proj = core::PathResolver::resolve(project_path);
-    if (proj.empty()) {
+    auto proj_opt = core::PathResolver::resolve(project_path);
+    if (!proj_opt) {
         std::cerr << "Invalid project path: " << project_path << std::endl;
         return 1;
     }
+    fs::path proj = *proj_opt;
 
     std::string main_user = utils::get_effective_username();
     if (!utils::is_path_allowed(proj, main_user)) {
@@ -98,7 +99,12 @@ int cmd_create(const std::string& project_path, bool verbose) {
     }
 
     for (const auto& mount_path : ctx.config.mount.paths) {
-        fs::path source = core::PathResolver::resolve(mount_path.string());
+        auto source_opt = core::PathResolver::resolve(mount_path.string());
+        if (!source_opt) {
+            utils::get_logger()->warn("Invalid mount path, skipping: {}", mount_path.string());
+            continue;
+        }
+        fs::path source = *source_opt;
         if (!fs::exists(source)) {
             utils::get_logger()->warn("Mount source does not exist, skipping: {}", source.string());
             continue;
@@ -110,7 +116,7 @@ int cmd_create(const std::string& project_path, bool verbose) {
         }
 
         fs::path target = core::PathResolver::to_ai_user_path(source, user_info.username, main_user, user_info.home_dir);
-        if (!ctx.graft->bind_mount(source, target, true)) {
+        if (!ctx.graft->bind_mount(source, target, true, user_info.uid, user_info.gid)) {
             mount_failures++;
             utils::get_logger()->error("Mount failed: {} -> {}", source.string(), target.string());
         }
@@ -176,7 +182,13 @@ static bool safe_chown_single(const fs::path& p, uid_t uid, gid_t gid) {
 // outside the intended subtree because every component is opened relative
 // to its parent directory fd with O_NOFOLLOW (symlinks fail with ELOOP).
 // Symlinks at the leaf are handled with lchown (change the link itself).
-static bool chown_recursive_fd(int dirfd, uid_t uid, gid_t gid) {
+static bool chown_recursive_fd(int dirfd, uid_t uid, gid_t gid, int depth = 0) {
+    constexpr int max_depth = 1000;
+    if (depth >= max_depth) {
+        utils::get_logger()->error("chown_recursive_fd: max depth {} exceeded", max_depth);
+        return false;
+    }
+
     DIR* d = fdopendir(dirfd);
     if (!d) {
         utils::get_logger()->error("safe_chown_path: fdopendir failed: {}", strerror(errno));
@@ -216,7 +228,7 @@ static bool chown_recursive_fd(int dirfd, uid_t uid, gid_t gid) {
         }
 
         if (S_ISDIR(st.st_mode)) {
-            if (!chown_recursive_fd(fd, uid, gid)) {
+            if (!chown_recursive_fd(fd, uid, gid, depth + 1)) {
                 closedir(d);
                 return false;
             }
@@ -376,11 +388,12 @@ int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose)
         return 1;
     }
 
-    fs::path dir_path = core::PathResolver::resolve(path);
-    if (dir_path.empty()) {
+    auto dir_path_opt = core::PathResolver::resolve(path);
+    if (!dir_path_opt) {
         std::cerr << "Invalid path: " << path << std::endl;
         return 1;
     }
+    fs::path dir_path = *dir_path_opt;
 
     if (!utils::is_path_allowed(dir_path, main_user)) {
         std::cerr << "Path not allowed: " << dir_path.string() << std::endl;
@@ -425,11 +438,12 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
         return 1;
     }
 
-    fs::path file_path = core::PathResolver::resolve(path);
-    if (file_path.empty()) {
+    auto file_path_opt = core::PathResolver::resolve(path);
+    if (!file_path_opt) {
         std::cerr << "Invalid path: " << path << std::endl;
         return 1;
     }
+    fs::path file_path = *file_path_opt;
 
     if (!utils::is_path_allowed(file_path, main_user)) {
         std::cerr << "Path not allowed: " << file_path.string() << std::endl;
@@ -478,17 +492,19 @@ int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
 
     std::string main_user = utils::get_effective_username();
 
-    fs::path src_path = core::PathResolver::resolve(src);
-    if (src_path.empty() || !fs::exists(src_path)) {
+    auto src_path_opt = core::PathResolver::resolve(src);
+    if (!src_path_opt || !fs::exists(*src_path_opt)) {
         std::cerr << "Source does not exist: " << src << std::endl;
         return 1;
     }
+    fs::path src_path = *src_path_opt;
 
-    fs::path dst_path = core::PathResolver::resolve(dst);
-    if (dst_path.empty()) {
+    auto dst_path_opt = core::PathResolver::resolve(dst);
+    if (!dst_path_opt) {
         std::cerr << "Invalid destination path: " << dst << std::endl;
         return 1;
     }
+    fs::path dst_path = *dst_path_opt;
 
     if (!utils::is_path_allowed(dst_path, main_user)) {
         std::cerr << "Destination path not allowed: " << dst_path.string() << std::endl;
@@ -554,17 +570,19 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
 
     std::string main_user = utils::get_effective_username();
 
-    fs::path src_path = core::PathResolver::resolve(src);
-    if (src_path.empty() || !fs::exists(src_path)) {
+    auto src_path_opt = core::PathResolver::resolve(src);
+    if (!src_path_opt || !fs::exists(*src_path_opt)) {
         std::cerr << "Source does not exist: " << src << std::endl;
         return 1;
     }
+    fs::path src_path = *src_path_opt;
 
-    fs::path dst_path = core::PathResolver::resolve(dst);
-    if (dst_path.empty()) {
+    auto dst_path_opt = core::PathResolver::resolve(dst);
+    if (!dst_path_opt) {
         std::cerr << "Invalid destination path: " << dst << std::endl;
         return 1;
     }
+    fs::path dst_path = *dst_path_opt;
 
     if (!utils::is_path_allowed(dst_path, main_user)) {
         std::cerr << "Destination path not allowed: " << dst_path.string() << std::endl;
@@ -677,12 +695,12 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
 
     std::string main_user = utils::get_effective_username();
 
-    if (path.find("..") != std::string::npos) {
-        std::cerr << "Path traversal detected: input contains '..' components" << std::endl;
+    auto target_opt = core::PathResolver::resolve(path);
+    if (!target_opt) {
+        std::cerr << "Cannot resolve path: " << path << std::endl;
         return 1;
     }
-
-    fs::path target = core::PathResolver::resolve(path);
+    fs::path target = *target_opt;
     if (!fs::exists(target)) {
         std::cerr << "Path does not exist: " << path << std::endl;
         return 1;
@@ -820,11 +838,12 @@ int cmd_rm(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    fs::path proj = core::PathResolver::resolve(project_path);
-    if (proj.empty()) {
+    auto proj_opt = core::PathResolver::resolve(project_path);
+    if (!proj_opt) {
         std::cerr << "Invalid project path: " << project_path << std::endl;
         return 1;
     }
+    fs::path proj = *proj_opt;
 
     auto derived = ctx.user_mgr->derive_username(proj.string());
     if (!derived) {

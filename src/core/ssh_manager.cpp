@@ -364,7 +364,10 @@ bool SSHManager::authorize_key(const std::string& username, const fs::path& publ
     fs::rename(tmp_path, auth_keys, ec);
     if (ec) {
         utils::get_logger()->error("Atomic rename failed for {}: {}", username, ec.message());
-        fs::remove(tmp_path);
+        std::error_code remove_ec;
+        if (!fs::remove(tmp_path, remove_ec) && remove_ec) {
+            utils::get_logger()->warn("Failed to remove temp file {}: {}", tmp_path.string(), remove_ec.message());
+        }
         return false;
     }
 
@@ -415,7 +418,10 @@ bool SSHManager::authorize_public_key_string(const std::string& username, const 
     fs::rename(tmp_path2, auth_keys, ec2);
     if (ec2) {
         utils::get_logger()->error("Atomic rename failed for {}: {}", username, ec2.message());
-        fs::remove(tmp_path2);
+        std::error_code remove_ec2;
+        if (!fs::remove(tmp_path2, remove_ec2) && remove_ec2) {
+            utils::get_logger()->warn("Failed to remove temp file {}: {}", tmp_path2.string(), remove_ec2.message());
+        }
         return false;
     }
 

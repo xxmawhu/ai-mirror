@@ -17,7 +17,23 @@ using security::safe_create_directories;
 
 Graft::Graft(const std::string& user_prefix) : prefix_(user_prefix) {}
 
-bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool read_only) {
+const std::vector<MountEntry>& Graft::get_mount_cache() const {
+    auto now = std::chrono::steady_clock::now();
+    if (cache_valid_ && (now - cache_time_) < cache_ttl_) {
+        return mount_cache_;
+    }
+    mount_cache_ = parse_mount_table();
+    cache_time_ = now;
+    cache_valid_ = true;
+    return mount_cache_;
+}
+
+void Graft::invalidate_cache() {
+    cache_valid_ = false;
+    mount_cache_.clear();
+}
+
+bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid) {
     std::error_code ec;
     if (!fs::exists(target, ec)) {
         if (fs::is_regular_file(source)) {
@@ -33,11 +49,24 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
                 utils::get_logger()->error("execute_mount: create target file failed: {} ({})", target.string(), strerror(errno));
                 return false;
             }
+            if (owner_uid != 0 || owner_gid != 0) {
+                if (fchown(ufd.get(), owner_uid, owner_gid) != 0) {
+                    utils::get_logger()->warn("execute_mount: fchown file failed: {} ({})", target.string(), strerror(errno));
+                }
+            }
             ufd.reset();
         } else {
             if (!safe_create_directories(target)) {
                 utils::get_logger()->error("execute_mount: failed to create target dir {}", target.string());
                 return false;
+            }
+            if (owner_uid != 0 || owner_gid != 0) {
+                utils::unique_fd dir_fd(open(target.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+                if (dir_fd) {
+                    if (fchown(dir_fd.get(), owner_uid, owner_gid) != 0) {
+                        utils::get_logger()->warn("execute_mount: fchown dir failed: {} ({})", target.string(), strerror(errno));
+                    }
+                }
             }
         }
     }
@@ -76,6 +105,7 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
     }
 
     utils::get_logger()->info("Bind mounted {} -> {} (ro={})", source.string(), target.string(), read_only);
+    invalidate_cache();
     return true;
 }
 
@@ -95,6 +125,7 @@ bool Graft::execute_umount(const fs::path& target, bool lazy) {
     }
 
     utils::get_logger()->info("Unmounted {} (lazy={})", target.string(), lazy);
+    invalidate_cache();
     return true;
 }
 
@@ -144,7 +175,7 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
     return entries;
 }
 
-bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read_only) {
+bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid) {
     if (!security::validate_mount_source(source)) {
         utils::get_logger()->error("Mount source rejected (system path): {}", source.string());
         return false;
@@ -172,7 +203,7 @@ bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read
         return false;
     }
 
-    return execute_mount(pre_exec_source, target, read_only);
+    return execute_mount(pre_exec_source, target, read_only, owner_uid, owner_gid);
 }
 
 bool Graft::unmount(const fs::path& target, bool lazy) {
@@ -221,9 +252,8 @@ std::vector<MountEntry> Graft::list_mounts(const std::string& username) const {
 }
 
 bool Graft::is_mounted(const fs::path& target) const {
-    auto mounts = parse_mount_table();
     auto canon_target = security::safe_canonical(target);
-    for (const auto& m : mounts) {
+    for (const auto& m : get_mount_cache()) {
         if (security::safe_canonical(m.target) == canon_target) {
             return true;
         }

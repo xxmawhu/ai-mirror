@@ -7,24 +7,31 @@
 
 namespace ai_mirror::core {
 
-fs::path PathResolver::resolve(const fs::path& p) {
-    if (p.empty()) return p;
+std::optional<fs::path> PathResolver::resolve(const fs::path& p) {
+    if (p.empty()) return std::nullopt;
 
     fs::path expanded = p;
 
-    // Use get_effective_username() instead of get_current_username() because
-    // ai-mirror runs via sudo where geteuid() returns root. get_effective_username()
-    // resolves the actual calling user via SUDO_USER/loginuid, ensuring ~/ expands
-    // to the calling user's home directory, not root's.
     if (p.string().substr(0, 2) == "~/") {
         expanded = fs::path(utils::get_home_dir(utils::get_effective_username())) / p.string().substr(2);
     } else if (p.string() == "~") {
         expanded = utils::get_home_dir(utils::get_effective_username());
     }
 
+    if (expanded.empty()) return std::nullopt;
 
     std::error_code ec;
-    return fs::canonical(expanded, ec);
+    auto canonical = fs::canonical(expanded, ec);
+    if (!ec) return canonical;
+
+    auto weak = fs::weakly_canonical(expanded, ec);
+    if (ec) return std::nullopt;
+
+    for (const auto& part : weak) {
+        if (part == "..") return std::nullopt;
+    }
+
+    return weak;
 }
 
 fs::path PathResolver::to_ai_user_path(const fs::path& main_path, const std::string& ai_user, const std::string& main_user, const fs::path& ai_user_home) {
@@ -110,8 +117,10 @@ std::string PathResolver::detect_ai_user_from_path(const fs::path& p, const std:
 }
 
 std::optional<fs::path> PathResolver::find_project_root(const fs::path& p) {
-    fs::path current = resolve(p);
+    auto resolved = resolve(p);
+    if (!resolved) return std::nullopt;
 
+    fs::path current = *resolved;
     while (!current.empty() && current != "/") {
         if (fs::exists(current / ".git") || fs::exists(current / ".ai-mirror.toml")) {
             return current;
@@ -123,11 +132,12 @@ std::optional<fs::path> PathResolver::find_project_root(const fs::path& p) {
 }
 
 bool PathResolver::is_under_project(const fs::path& path, const fs::path& project_root) {
-    auto resolved_path = resolve(path);
-    auto resolved_root = resolve(project_root);
+    auto resolved_path_opt = resolve(path);
+    auto resolved_root_opt = resolve(project_root);
+    if (!resolved_path_opt || !resolved_root_opt) return false;
 
-    auto path_str = resolved_path.string();
-    auto root_str = resolved_root.string();
+    auto path_str = resolved_path_opt->string();
+    auto root_str = resolved_root_opt->string();
 
     if (path_str.length() < root_str.length()) return false;
     return path_str.substr(0, root_str.length()) == root_str;

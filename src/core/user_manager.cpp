@@ -152,9 +152,36 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
         utils::get_logger()->error("{}", err);
         return {"", "", 0, 0, false, err};
     }
-    std::string ps = fs::absolute(proj).string();
-    if (ps.length() < main_home.length() || ps.substr(0, main_home.length()) != main_home) {
-        std::string err = "Project path must be under caller home (" + main_home + "): " + ps;
+
+    std::error_code ec;
+    fs::path abs_proj = fs::canonical(proj, ec);
+    if (ec) {
+        abs_proj = fs::weakly_canonical(fs::absolute(proj), ec);
+        if (ec) {
+            std::string err = "Cannot resolve project path: " + proj.string();
+            utils::get_logger()->error("{}", err);
+            return {"", "", 0, 0, false, err};
+        }
+    }
+
+    std::string main_home_canon;
+    fs::path mh = fs::canonical(main_home, ec);
+    if (!ec) {
+        main_home_canon = mh.string();
+    } else {
+        main_home_canon = fs::weakly_canonical(main_home).string();
+    }
+    if (main_home_canon.empty()) {
+        std::string err = "Cannot canonicalize home directory: " + main_home;
+        utils::get_logger()->error("{}", err);
+        return {"", "", 0, 0, false, err};
+    }
+
+    std::string ps = abs_proj.string();
+    if (ps.length() < main_home_canon.length()
+        || ps.substr(0, main_home_canon.length()) != main_home_canon
+        || (ps.length() > main_home_canon.length() && ps[main_home_canon.length()] != '/')) {
+        std::string err = "Project path must be under caller home (" + main_home_canon + "): " + ps;
         utils::get_logger()->error("{}", err);
         return {"", "", 0, 0, false, err};
     }

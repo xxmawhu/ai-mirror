@@ -4,10 +4,9 @@
 # Builds from source and installs ai-mirror CLI.
 #
 # Usage:
-#   chmod +x install.sh
-#   sudo ./install.sh            # full install (build + deploy)
-#   sudo ./install.sh --build    # build only, do not install
-#   sudo ./install.sh --clean    # remove installed files
+#   bash install.sh            # full install (build + deploy, sudo used only when needed)
+#   bash install.sh --build    # build only, no sudo needed
+#   bash install.sh --clean    # remove installed files (sudo needed)
 #
 set -euo pipefail
 
@@ -44,10 +43,13 @@ info() { _log "${CYAN}[info]${NC} $*"; }
 
 separator() { _log "============================================================"; }
 
-check_root() {
-	if [[ $EUID -ne 0 ]]; then
-		error "This script must be run as root (sudo)."
+require_sudo() {
+	if ! command -v sudo &>/dev/null; then
+		error "sudo command not found. Please install sudo or run as root."
 		exit 1
+	fi
+	if ! sudo -n true 2>/dev/null; then
+		log "This step requires sudo privileges. You may be prompted for password."
 	fi
 }
 
@@ -91,9 +93,10 @@ phase_system_deps() {
 	done
 
 	if [[ ${#missing[@]} -gt 0 ]]; then
+		require_sudo
 		log "Installing missing packages: ${missing[*]}"
-		apt-get update -qq
-		apt-get install -y -qq "${missing[@]}" 2>&1 | tee -a "$INSTALL_LOG"
+		sudo apt-get update -qq
+		sudo apt-get install -y -qq "${missing[@]}" 2>&1 | tee -a "$INSTALL_LOG"
 	fi
 
 	local gxx_version
@@ -176,12 +179,13 @@ phase_verify() {
 
 # ---- Phase: Install ----
 phase_install() {
+	require_sudo
 	log "Installing binary to ${PREFIX}/bin/..."
 
-	install -d "${PREFIX}/bin"
-	install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${REAL_BIN_NAME}"
+	sudo install -d "${PREFIX}/bin"
+	sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${REAL_BIN_NAME}"
 
-	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  ($(stat -c%s "${PREFIX}/bin/${REAL_BIN_NAME}") bytes)"
+	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${REAL_BIN_NAME}") bytes)"
 
 	log "Installing 'am' wrapper to ${PREFIX}/bin/..."
 	local wrapper_src="${SCRIPT_DIR}/docker/am-wrapper.sh"
@@ -189,11 +193,11 @@ phase_install() {
 		wrapper_src="${SCRIPT_DIR}/am-wrapper.sh"
 	fi
 	if [[ -f "$wrapper_src" ]]; then
-		install -m 0755 "$wrapper_src" "${PREFIX}/bin/${WRAPPER_NAME}"
-		sed -i "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|" "${PREFIX}/bin/${WRAPPER_NAME}"
+		sudo install -m 0755 "$wrapper_src" "${PREFIX}/bin/${WRAPPER_NAME}"
+		sudo sed -i "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|" "${PREFIX}/bin/${WRAPPER_NAME}"
 		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper)"
 	else
-		cat >"${PREFIX}/bin/${WRAPPER_NAME}" <<WRAPPER
+		sudo tee "${PREFIX}/bin/${WRAPPER_NAME}" >/dev/null <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
 AM_BIN="${PREFIX}/bin/${REAL_BIN_NAME}"
@@ -242,20 +246,20 @@ if [ "\$(id -u)" -eq 0 ]; then
 fi
 exec sudo --preserve-env=HOME "\$AM_BIN" "\$@"
 WRAPPER
-		chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}"
+		sudo chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}"
 		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper, inline)"
 	fi
 
 	log "Setting up data directory ${DATA_DIR}/..."
-	install -d "${DATA_DIR}"
-	chmod 0755 "${DATA_DIR}"
+	sudo install -d "${DATA_DIR}"
+	sudo chmod 0755 "${DATA_DIR}"
 
 	log "Setting up config directory ${CONFIG_DIR}/..."
-	install -d "${CONFIG_DIR}"
+	sudo install -d "${CONFIG_DIR}"
 
-	install -d "${CONFIG_DIR}/sudoers.d"
+	sudo install -d "${CONFIG_DIR}/sudoers.d"
 	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
-	cat >"$sudoers_file" <<SUDOERS
+	sudo tee "$sudoers_file" >/dev/null <<'SUDOERS'
 # ai-mirror sudo rules
 # Allows members of the ai-mirror group to run ai-mirror commands as root
 #
@@ -286,11 +290,11 @@ WRAPPER
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} config
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} status
 SUDOERS
-	chmod 0440 "$sudoers_file"
-	chown root:root "$sudoers_file"
+	sudo chmod 0440 "$sudoers_file"
+	sudo chown root:root "$sudoers_file"
 
-	if ! getent group ai-mirror &>/dev/null; then
-		groupadd --system ai-mirror 2>/dev/null || true
+	if ! sudo getent group ai-mirror &>/dev/null; then
+		sudo groupadd --system ai-mirror 2>/dev/null || true
 		log "  Created system group: ai-mirror"
 	fi
 
@@ -322,7 +326,7 @@ phase_summary() {
 	log "  6. Remove project:        am rm /path/to/project"
 	log ""
 	log "Uninstall:"
-	log "  sudo ${SCRIPT_DIR}/install.sh --clean"
+	log "  bash ${SCRIPT_DIR}/install.sh --clean"
 	log ""
 	log "Full log: ${INSTALL_LOG}"
 	separator
@@ -330,30 +334,31 @@ phase_summary() {
 
 # ---- Phase: Clean ----
 phase_clean() {
+	require_sudo
 	log "Removing installed files..."
 
-	if [[ -f "${PREFIX}/bin/${REAL_BIN_NAME}" ]]; then
-		rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"
+	if sudo test -f "${PREFIX}/bin/${REAL_BIN_NAME}"; then
+		sudo rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"
 		log "  Removed ${PREFIX}/bin/${REAL_BIN_NAME}"
 	fi
 
-	if [[ -f "${PREFIX}/bin/${WRAPPER_NAME}" ]]; then
-		rm -f "${PREFIX}/bin/${WRAPPER_NAME}"
+	if sudo test -f "${PREFIX}/bin/${WRAPPER_NAME}"; then
+		sudo rm -f "${PREFIX}/bin/${WRAPPER_NAME}"
 		log "  Removed ${PREFIX}/bin/${WRAPPER_NAME}"
 	fi
 
-	if [[ -f "${CONFIG_DIR}/sudoers.d/ai-mirror" ]]; then
-		rm -f "${CONFIG_DIR}/sudoers.d/ai-mirror"
+	if sudo test -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then
+		sudo rm -f "${CONFIG_DIR}/sudoers.d/ai-mirror"
 		log "  Removed sudoers rule"
 	fi
 
-	if [[ -d "${CONFIG_DIR}" ]]; then
-		rm -rf "${CONFIG_DIR}"
+	if sudo test -d "${CONFIG_DIR}"; then
+		sudo rm -rf "${CONFIG_DIR}"
 		log "  Removed config dir ${CONFIG_DIR}/"
 	fi
 
-	if [[ -d "${DATA_DIR}" ]]; then
-		rmdir "${DATA_DIR}" 2>/dev/null && log "  Removed data dir ${DATA_DIR}/" || true
+	if sudo test -d "${DATA_DIR}"; then
+		sudo rmdir "${DATA_DIR}" 2>/dev/null && log "  Removed data dir ${DATA_DIR}/" || true
 	fi
 
 	log "Uninstall complete"
@@ -372,12 +377,10 @@ main() {
 		log "Build-only complete. Binary in ${BUILD_DIR}/bin/"
 		;;
 	--clean)
-		check_root
 		phase_setup
 		phase_clean
 		;;
 	install | --install)
-		check_root
 		phase_setup
 		phase_system_deps
 		phase_build
@@ -386,16 +389,16 @@ main() {
 		phase_summary
 		;;
 	--help | -h)
-		echo "Usage: $0 [--build|--clean|--help]"
+		echo "Usage: bash $0 [--build|--clean|--help]"
 		echo ""
-		echo "  (default)   Build and install"
-		echo "  --build     Build and verify only, do not install"
-		echo "  --clean     Remove all installed files"
+		echo "  (default)   Build and install (sudo used only when needed)"
+		echo "  --build     Build and verify only, no sudo needed"
+		echo "  --clean     Remove all installed files (sudo needed)"
 		echo "  --help      Show this help"
 		;;
 	*)
 		error "Unknown action: $action"
-		echo "Usage: $0 [--build|--clean|--help]"
+		echo "Usage: bash $0 [--build|--clean|--help]"
 		exit 1
 		;;
 	esac

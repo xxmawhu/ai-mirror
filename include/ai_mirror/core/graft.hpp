@@ -45,6 +45,10 @@ private:
 
     bool execute_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid);
     bool execute_umount(const fs::path& target, bool lazy);
+    // Mount query cache: all external mount queries (unmount_all, list_mounts,
+    // is_mounted, health_check) go through get_mount_cache() with 500ms TTL.
+    // parse_mount_table() is the sole data source, called only on cache miss.
+    // invalidate_cache() is called after every successful umount.
     std::vector<MountEntry> parse_mount_table() const;
     const std::vector<MountEntry>& get_mount_cache() const;
     void invalidate_cache();

@@ -16,12 +16,14 @@ struct HealthStatus {
 
 class HealthCheck {
 public:
+    explicit HealthCheck(const std::string& user_prefix = "i");
     std::vector<HealthStatus> check_all();
     HealthStatus check_mount(const std::string& mount_point);
     int run_periodic(int interval_seconds);
     void stop();
 
 private:
+    std::string prefix_;
     std::atomic<bool> running_{true};
     std::condition_variable cv_;
     std::mutex mtx_;

@@ -35,7 +35,7 @@ UserManager::UserManager(const std::string& prefix) : prefix_(prefix) {}
 // 5. Final truncation to Linux username limit (32 chars)
 // The hash suffix ensures uniqueness even when project names are truncated
 // (e.g. "/home/alice/my-very-long-project-name-001" vs "...-002").
-std::optional<std::string> UserManager::generate_username(const fs::path& project_path) const {
+std::optional<std::string> UserManager::compute_username(const fs::path& project_path, bool check_collision) const {
     std::string stem = project_path.filename().string();
     std::replace(stem.begin(), stem.end(), '.', '_');
     std::replace(stem.begin(), stem.end(), '-', '_');
@@ -54,7 +54,7 @@ std::optional<std::string> UserManager::generate_username(const fs::path& projec
         username = username.substr(0, 32);
     }
 
-    if (user_exists(username)) {
+    if (check_collision && user_exists(username)) {
         utils::get_logger()->error(
             "Username collision detected: '{}' already exists (derived from path '{}'). "
             "Cannot create user - project path too similar to existing project.",
@@ -65,26 +65,12 @@ std::optional<std::string> UserManager::generate_username(const fs::path& projec
     return username;
 }
 
+std::optional<std::string> UserManager::generate_username(const fs::path& project_path) const {
+    return compute_username(project_path, true);
+}
+
 std::optional<std::string> UserManager::derive_username(const fs::path& project_path) const {
-    std::string stem = project_path.filename().string();
-    std::replace(stem.begin(), stem.end(), '.', '_');
-    std::replace(stem.begin(), stem.end(), '-', '_');
-
-    std::string base = prefix_ + utils::get_effective_username() + "_" + stem;
-    std::transform(base.begin(), base.end(), base.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-
-    std::string hash_suffix = get_deterministic_hash_suffix(project_path.string());
-
-    const size_t max_stem_len = 20;
-    std::string truncated = base.substr(0, max_stem_len);
-    std::string username = truncated + "_" + hash_suffix;
-
-    if (username.size() > 32) {
-        username = username.substr(0, 32);
-    }
-
-    return username;
+    return compute_username(project_path, false);
 }
 
 bool UserManager::execute_useradd(const std::string& username, const fs::path& home_dir) {
@@ -190,10 +176,9 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     if (!username_opt) {
         auto derived = derive_username(proj);
         if (derived && user_exists(*derived)) {
-            auto info = get_user_info(*derived);
+            get_user_info(*derived);
             utils::get_logger()->info("User already exists for project: {} ({})",
                 *derived, proj.string());
-            auto result = info.value_or(UserInfo{*derived, proj.string(), 0, 0, true, ""});
         }
         std::string err = "Username collision for project: " + proj.string();
         return {"", "", 0, 0, false, err};
@@ -202,8 +187,11 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
 
     if (user_exists(username)) {
         auto info = get_user_info(username);
-        auto result = info.value_or(UserInfo{username, proj.string(), 0, 0, true, ""});
-        return result;
+        if (!info) {
+            utils::get_logger()->error("User '{}' exists but getpwnam failed", username);
+            return {username, proj.string(), 0, 0, false, "getpwnam lookup failed"};
+        }
+        return *info;
     }
 
     fs::path home_dir = proj;
@@ -215,8 +203,12 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     }
 
     auto info = get_user_info(username);
+    if (!info) {
+        utils::get_logger()->error("User '{}' created but getpwnam failed", username);
+        return {username, home_dir.string(), 0, 0, false, "getpwnam lookup failed after useradd"};
+    }
     utils::get_logger()->info("Created ai-user: {} (uid={})", username, info->uid);
-    return info.value_or(UserInfo{username, home_dir.string(), 0, 0, true, ""});
+    return *info;
 }
 
 bool UserManager::remove_ai_user(const std::string& username, bool force) {

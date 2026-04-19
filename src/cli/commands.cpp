@@ -127,7 +127,9 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    ctx.graft->grant_write_access(proj, user_info.username);
+    if (!ctx.graft->grant_write_access(proj, user_info.username)) {
+        utils::get_logger()->warn("Failed to grant write access to project: {}", proj.string());
+    }
 
     std::cout << user_info.username << std::endl;
     return 0;
@@ -762,7 +764,8 @@ int cmd_list(bool verbose) {
 }
 
 int cmd_health([[maybe_unused]] bool verbose) {
-    daemon::HealthCheck hc;
+    auto ctx = make_context(verbose);
+    daemon::HealthCheck hc(ctx.config.user.prefix);
     auto statuses = hc.check_all();
 
     if (statuses.empty()) {
@@ -904,7 +907,9 @@ int cmd_rm(const std::string& project_path, bool verbose) {
     if (verbose) {
         std::cout << "Step 4: Revoking write grants on project" << std::endl;
     }
-    ctx.graft->revoke_write_access(proj, username);
+    if (!ctx.graft->revoke_write_access(proj, username)) {
+        utils::get_logger()->warn("Failed to revoke write access for user '{}' on project '{}'", username, proj.string());
+    }
 
     std::cout << "Removed: " << username << std::endl;
     return 0;

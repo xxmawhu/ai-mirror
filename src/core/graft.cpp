@@ -223,7 +223,7 @@ bool Graft::unmount_all(const std::string& username) {
         return false;
     }
 
-    auto mounts = parse_mount_table();
+    auto mounts = get_mount_cache();
     bool all_ok = true;
 
     std::string user_home = utils::get_home_dir(username);
@@ -239,7 +239,7 @@ bool Graft::unmount_all(const std::string& username) {
 }
 
 std::vector<MountEntry> Graft::list_mounts(const std::string& username) const {
-    auto all = parse_mount_table();
+    auto all = get_mount_cache();
     std::string user_home = utils::get_home_dir(username);
 
     std::vector<MountEntry> user_mounts;
@@ -469,6 +469,8 @@ bool Graft::revoke_write_access(const fs::path& path, const std::string& usernam
         }
     }
 
+    bool ok = true;
+
     if (ufd) {
         struct stat st;
         if (fstat(ufd.get(), &st) == 0) {
@@ -479,6 +481,7 @@ bool Graft::revoke_write_access(const fs::path& path, const std::string& usernam
             new_mode &= ~(S_IRGRP | S_IWGRP | S_IXGRP);
             if (fchmod(ufd.get(), new_mode) != 0) {
                 utils::get_logger()->warn("revoke_write_access: fchmod failed for {}: {}", path.string(), strerror(errno));
+                ok = false;
             }
         }
         ufd.reset();
@@ -513,11 +516,11 @@ bool Graft::revoke_write_access(const fs::path& path, const std::string& usernam
     }
 
     utils::get_logger()->info("Revoked write access: {} from group {}", path.string(), username);
-    return true;
+    return ok;
 }
 
 std::vector<MountEntry> Graft::health_check() const {
-    auto mounts = parse_mount_table();
+    auto mounts = get_mount_cache();
     std::vector<MountEntry> issues;
 
     for (const auto& m : mounts) {

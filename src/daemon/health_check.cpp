@@ -12,6 +12,9 @@ namespace ai_mirror::daemon {
 std::atomic<HealthCheck*> HealthCheck::instance_{nullptr};
 std::atomic<bool> HealthCheck::signal_received_{false};
 
+HealthCheck::HealthCheck(const std::string& user_prefix)
+    : prefix_(user_prefix) {}
+
 void HealthCheck::signal_handler([[maybe_unused]] int sig) {
     signal_received_.store(true);
 }
@@ -22,7 +25,7 @@ void HealthCheck::stop() {
 }
 
 std::vector<HealthStatus> HealthCheck::check_all() {
-    core::Graft graft;
+    core::Graft graft(prefix_);
     auto issues = graft.health_check();
 
     std::vector<HealthStatus> statuses;
@@ -42,7 +45,7 @@ std::vector<HealthStatus> HealthCheck::check_all() {
 }
 
 HealthStatus HealthCheck::check_mount(const std::string& mount_point) {
-    core::Graft graft;
+    core::Graft graft(prefix_);
     HealthStatus s;
     s.mount_point = mount_point;
     s.healthy = graft.is_mounted(std::filesystem::path(mount_point));

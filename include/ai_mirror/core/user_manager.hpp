@@ -45,6 +45,7 @@ public:
 private:
     std::string prefix_;
     std::optional<std::string> generate_username(const fs::path& project_path) const;
+    std::optional<std::string> compute_username(const fs::path& project_path, bool check_collision) const;
     bool execute_useradd(const std::string& username, const fs::path& home_dir);
     bool execute_userdel(const std::string& username, bool remove_home);
 };

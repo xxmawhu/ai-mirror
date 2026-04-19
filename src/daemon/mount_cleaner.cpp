@@ -31,7 +31,12 @@ std::vector<fs::path> MountCleaner::find_stale_mounts() {
     std::vector<fs::path> stale;
     std::ifstream mounts("/proc/mounts");
     std::string line;
-    std::string match = "/home/" + prefix_;
+    std::string main_user = utils::get_effective_username();
+    std::string match = utils::get_home_dir(main_user);
+    if (match.empty()) {
+        utils::get_logger()->warn("Cannot determine home for main user {}", main_user);
+        return stale;
+    }
 
     while (std::getline(mounts, line)) {
         std::istringstream iss(line);
@@ -81,7 +86,11 @@ int MountCleaner::cleanup_for_user(const std::string& username) {
 
     std::ifstream mounts("/proc/mounts");
     std::string line;
-    std::string user_home = "/home/" + username;
+    std::string user_home = utils::get_home_dir(username);
+    if (user_home.empty()) {
+        utils::get_logger()->warn("Cannot determine home for user {}", username);
+        return 0;
+    }
 
     while (std::getline(mounts, line)) {
         std::istringstream iss(line);

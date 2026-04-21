@@ -87,6 +87,27 @@ int cmd_create(const std::string& project_path, bool verbose) {
         utils::get_logger()->warn("Failed to add {} to group {}: {}", main_user, user_info.username, grp_result.stderr_output);
     }
 
+    {
+        fs::path home = utils::get_home_dir(main_user);
+        fs::path p = fs::absolute(proj);
+        std::vector<fs::path> dirs_to_fix;
+        while (p.has_parent_path() && p != home && !p.empty()) {
+            p = p.parent_path();
+            if (p == home) break;
+            dirs_to_fix.push_back(p);
+        }
+        for (auto& d : dirs_to_fix) {
+            std::error_code ec;
+            auto perms = fs::status(d, ec).permissions();
+            if (!ec && (perms & fs::perms::others_exec) == fs::perms::none) {
+                fs::permissions(d, perms | fs::perms::others_exec, ec);
+                if (!ec) {
+                    utils::get_logger()->info("Added o+x to {}", d.string());
+                }
+            }
+        }
+    }
+
     int mount_failures = 0;
 
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);

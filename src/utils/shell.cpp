@@ -262,6 +262,14 @@ std::string shell_escape(const std::string& s) {
 }
 
 uid_t get_login_uid() {
+    const char* sudo_uid_env = std::getenv("SUDO_UID");
+    if (sudo_uid_env && sudo_uid_env[0] != '\0') {
+        try {
+            uid_t uid = std::stoul(sudo_uid_env);
+            if (uid != 0) return uid;
+        } catch (...) {}
+    }
+
     std::ifstream ifs("/proc/self/loginuid");
     if (ifs) {
         uid_t uid = 0;

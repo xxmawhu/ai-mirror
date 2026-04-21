@@ -38,7 +38,7 @@ static bool verify_state_hash(const nlohmann::json& j) {
     copy.erase("hash");
     std::string serialized = copy.dump();
     std::string h = sha256_hex(serialized);
-    return h.substr(0, 4) == "0000";
+    return h.substr(0, 5) == "00000";
 }
 
 static nlohmann::json make_state_json(const UserInfo& info, const std::string& main_user) {
@@ -55,7 +55,7 @@ static nlohmann::json make_state_json(const UserInfo& info, const std::string& m
         j["nonce"] = dist(rd);
         std::string serialized = j.dump();
         std::string h = sha256_hex(serialized);
-        if (h.substr(0, 4) == "0000") {
+        if (h.substr(0, 5) == "00000") {
             j["hash"] = h;
             return j;
         }

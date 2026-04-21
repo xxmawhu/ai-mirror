@@ -372,7 +372,7 @@ bool Graft::grant_write_access(const fs::path& path, const std::string& username
         return false;
     }
 
-    if (!security::validate_path_allowed(path)) {
+    if (!security::validate_mount_source(path)) {
         utils::get_logger()->error("Grant write path rejected (system directory): {}", path.string());
         return false;
     }

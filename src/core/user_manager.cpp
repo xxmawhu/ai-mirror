@@ -40,16 +40,15 @@ static std::string make_state_content(const UserInfo& info, const std::string& m
     j["home_dir"] = info.home_dir;
     j["main_user"] = main_user;
 
-    std::random_device rd;
-    std::uniform_int_distribution<unsigned int> dist(0, 0xFFFFFFFFu);
-    for (int attempt = 0; attempt < 1000000; ++attempt) {
-        j["nonce"] = dist(rd);
+    for (unsigned int nonce = 0; nonce < 5000000; ++nonce) {
+        j["nonce"] = nonce;
         std::string content = j.dump(2) + "\n";
         std::string h = md5_hex(content);
         if (h.substr(0, 5) == "00000") {
             return content;
         }
     }
+    utils::get_logger()->warn("PoW mining failed after 5M attempts");
     j["nonce"] = 0;
     return j.dump(2) + "\n";
 }

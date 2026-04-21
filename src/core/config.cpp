@@ -93,6 +93,19 @@ Config ConfigParser::load(const fs::path& config_path) {
     try {
         auto data = toml::parse(config_path.string());
 
+        if (data.as_table().contains("user")) {
+            try {
+                auto& user = data["user"];
+                if (user.as_table().contains("prefix")) {
+                    config.user.prefix = toml::get<std::string>(user["prefix"]);
+                }
+            } catch (const std::exception& e) {
+                std::string field_err = std::string("user.prefix: ") + e.what();
+                config.load_error += (config.load_error.empty() ? "" : "; ") + field_err;
+                utils::get_logger()->warn("Config field error: {}", field_err);
+            }
+        }
+
         if (data.as_table().contains("mount")) {
             try {
                 auto& mount = data["mount"];

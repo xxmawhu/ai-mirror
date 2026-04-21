@@ -1,0 +1,23 @@
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    passwd \
+    openssh-server openssh-client \
+    mount util-linux \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/bash testuser && \
+    echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+COPY build/bin/ai-mirror /usr/local/bin/ai-mirror-bin
+RUN ln -sf /usr/local/bin/ai-mirror-bin /usr/local/bin/am && \
+    chmod +x /usr/local/bin/ai-mirror-bin
+
+RUN mkdir -p /etc/ai-mirror /var/lib/ai-mirror /home/testuser/projects/testproj && \
+    chown -R testuser:testuser /home/testuser
+
+COPY tests/run_tests.sh /tmp/run_tests.sh
+RUN chmod +x /tmp/run_tests.sh
+
+CMD ["/tmp/run_tests.sh"]

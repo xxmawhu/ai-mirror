@@ -84,6 +84,11 @@ int parse_and_run(int argc, char** argv) {
     // status
     app.add_subcommand("status", "Show status of all projects");
 
+    // update
+    std::string update_path;
+    auto* update_cmd = app.add_subcommand("update", "Re-apply SSH and mount fixes for a project");
+    update_cmd->add_option("project_path", update_path, "Path to the project directory")->required();
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
@@ -120,6 +125,8 @@ int parse_and_run(int argc, char** argv) {
         return cmd_config(verbose);
     } else if (app.got_subcommand("status")) {
         return cmd_status(verbose);
+    } else if (update_cmd->parsed()) {
+        return cmd_update(update_path, verbose);
     }
 
     return 1;

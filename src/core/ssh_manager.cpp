@@ -7,6 +7,7 @@
 #include <fstream>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <pwd.h>
 #include <array>
 #include <sstream>
 #include <iomanip>
@@ -317,6 +318,17 @@ bool SSHManager::ensure_ssh_dir(const std::string& username) {
         utils::get_logger()->error(".ssh path is not a directory for {}: {}", username, ssh_dir.string());
         return false;
     }
+
+    struct passwd* pw = getpwnam(username.c_str());
+    if (pw) {
+        struct stat st;
+        if (::stat(ssh_dir.c_str(), &st) == 0) {
+            if (st.st_uid != pw->pw_uid || st.st_gid != pw->pw_gid) {
+                need_chown = true;
+            }
+        }
+    }
+
     if (need_chown) {
         auto chown_r = utils::exec_safe({"chown", username + ":" + username, ssh_dir.string()});
         if (chown_r.exit_code != 0) {

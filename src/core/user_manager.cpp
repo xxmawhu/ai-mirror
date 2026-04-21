@@ -370,4 +370,8 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
     return users;
 }
 
+std::optional<UserInfo> UserManager::read_state(const fs::path& project_dir) {
+    return read_state_file(project_dir);
+}
+
 }

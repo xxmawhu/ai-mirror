@@ -40,6 +40,8 @@ public:
     std::optional<std::string> derive_username(const fs::path& project_path) const;
     std::vector<UserInfo> list_ai_users() const;
 
+    static std::optional<UserInfo> read_state(const fs::path& project_dir);
+
     std::string get_prefix() const { return prefix_; }
 
 private:

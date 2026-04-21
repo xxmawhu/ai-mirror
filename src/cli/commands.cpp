@@ -979,4 +979,72 @@ int cmd_status([[maybe_unused]] bool verbose) {
     return 0;
 }
 
+int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
+    auto ctx = make_context(verbose);
+    std::string main_user = utils::get_effective_username();
+
+    auto target_opt = core::PathResolver::resolve(path);
+    if (!target_opt) {
+        std::cerr << "Cannot resolve path: " << path << std::endl;
+        return 1;
+    }
+    fs::path proj = *target_opt;
+    if (!fs::exists(proj)) {
+        std::cerr << "Path does not exist: " << path << std::endl;
+        return 1;
+    }
+
+    auto state = core::UserManager::read_state(proj);
+    if (!state) {
+        std::cerr << "No .am_status found in: " << proj.string() << std::endl;
+        return 1;
+    }
+
+    std::string username = state->username;
+    std::string home_dir = state->home_dir;
+    int fixes = 0;
+
+    ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
+    ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
+
+    fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
+    if (!fs::exists(auth_keys)) {
+        utils::get_logger()->info("Fixing SSH: setup_passwordless for {}", username);
+        if (ctx.ssh_mgr->setup_passwordless(main_user, username)) {
+            fixes++;
+        } else {
+            utils::get_logger()->warn("Failed to fix SSH for {}", username);
+        }
+    }
+
+    if (!ctx.config.ssh.ai_default_key.empty()) {
+        ctx.ssh_mgr->setup_default_key_from_file(username, ctx.config.ssh.ai_default_key);
+    }
+
+    for (const auto& mount_path : ctx.config.mount.paths) {
+        auto source_opt = core::PathResolver::resolve(mount_path.string());
+        if (!source_opt) continue;
+        fs::path source = *source_opt;
+        if (!fs::exists(source)) continue;
+        if (!utils::is_path_allowed(source, main_user)) continue;
+
+        fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
+        if (ctx.graft->is_mounted(target)) continue;
+
+        utils::get_logger()->info("Fixing mount: {} -> {}", source.string(), target.string());
+        if (ctx.graft->bind_mount(source, target, true, state->uid, state->gid)) {
+            fixes++;
+        } else {
+            utils::get_logger()->warn("Failed to remount {} -> {}", source.string(), target.string());
+        }
+    }
+
+    if (!ctx.graft->grant_write_access(proj, username)) {
+        utils::get_logger()->warn("Failed to grant write access to: {}", proj.string());
+    }
+
+    utils::get_logger()->info("Update complete: {} fix(es) applied for {}", fixes, username);
+    return 0;
+}
+
 }

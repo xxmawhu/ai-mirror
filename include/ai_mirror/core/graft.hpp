@@ -35,6 +35,7 @@ public:
 
     std::vector<MountEntry> health_check() const;
     int force_cleanup(const std::vector<fs::path>& dead_mounts);
+    void invalidate_cache();
 
 private:
     std::string prefix_;
@@ -48,10 +49,8 @@ private:
     // Mount query cache: all external mount queries (unmount_all, list_mounts,
     // is_mounted, health_check) go through get_mount_cache() with 500ms TTL.
     // parse_mount_table() is the sole data source, called only on cache miss.
-    // invalidate_cache() is called after every successful umount.
     std::vector<MountEntry> parse_mount_table() const;
     const std::vector<MountEntry>& get_mount_cache() const;
-    void invalidate_cache();
 };
 
 }

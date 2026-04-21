@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <fcntl.h>
 #include <unistd.h>
@@ -1037,6 +1038,31 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
 
     if (!ctx.config.ssh.ai_default_key.empty()) {
         ctx.ssh_mgr->setup_default_key_from_file(username, ctx.config.ssh.ai_default_key);
+    }
+
+    ctx.graft->invalidate_cache();
+    auto existing = ctx.graft->list_mounts(username);
+
+    std::set<std::string> configured_targets;
+    for (const auto& mount_path : ctx.config.mount.paths) {
+        auto source_opt = core::PathResolver::resolve(mount_path.string());
+        if (!source_opt) continue;
+        fs::path source = *source_opt;
+        if (!fs::exists(source)) continue;
+        fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
+        configured_targets.insert(target.string());
+    }
+
+    for (const auto& m : existing) {
+        if (!configured_targets.count(m.target.string())) {
+            utils::get_logger()->info("Cleaning stale/duplicate mount: {}", m.target.string());
+            auto umount_result = utils::exec_safe({"umount", m.target.string()});
+            if (umount_result.exit_code != 0) {
+                utils::get_logger()->warn("Failed to umount {}: {}", m.target.string(), umount_result.stderr_output);
+            } else {
+                fixes++;
+            }
+        }
     }
 
     for (const auto& mount_path : ctx.config.mount.paths) {

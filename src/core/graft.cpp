@@ -5,6 +5,7 @@
 #include "ai_mirror/utils/unique_fd.hpp"
 #include <algorithm>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <sys/mount.h>
 #include <grp.h>
@@ -148,10 +149,14 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
     }
     endpwent();
 
+    std::set<std::string> seen_targets;
+
     while (std::getline(mounts, line)) {
         std::istringstream iss(line);
         std::string device, mount_point, fs_type, options;
         iss >> device >> mount_point >> fs_type >> options;
+
+        if (seen_targets.count(mount_point)) continue;
 
         bool is_ai_user_mount = false;
         for (const auto& home : ai_homes) {
@@ -171,6 +176,7 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
             entry.read_only = options.find("ro") != std::string::npos;
             entry.active = true;
             entries.push_back(entry);
+            seen_targets.insert(mount_point);
         }
     }
 

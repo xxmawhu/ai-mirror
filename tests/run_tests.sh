@@ -38,8 +38,9 @@ key_type = "ed25519"
 ai_default_key = "/root/.ssh/id_ed25519"
 
 [mount]
-paths = []
+paths = ["~/.bashrc"]
 EOF
+	echo "test bashrc content" >/root/.bashrc
 	ssh-keygen -t ed25519 -f /root/.ssh/ai-mirror -N "" -q 2>/dev/null || true
 	ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q -C "test" 2>/dev/null || true
 	chmod 700 /root/.ssh
@@ -77,8 +78,49 @@ test_create() {
 	echo "$OUTPUT" | tail -1
 }
 
+test_bind_mount() {
+	log "Test 2: bind mount (ro)"
+
+	MOUNT_TARGET="$AI_HOME/.bashrc"
+
+	if ! findmnt "$MOUNT_TARGET" >/dev/null 2>&1; then
+		fail ".bashrc not mounted"
+		echo "$OUTPUT" | tail -1
+		return
+	fi
+
+	ok ".bashrc bind mounted"
+
+	grep -q "test bashrc content" "$MOUNT_TARGET" && ok "Mount content readable" || fail "Mount content wrong"
+
+	echo "overwrite" >"$MOUNT_TARGET" 2>/dev/null && fail "Mount is NOT read-only" || ok "Mount is read-only"
+
+	findmnt -n -o OPTIONS "$MOUNT_TARGET" | grep -q "ro" && ok "Mount options contain ro" || warn "Mount options missing ro"
+
+	echo "$MOUNT_TARGET"
+}
+
+test_umount_recovery() {
+	log "Test 3: umount recovery via am update"
+
+	MOUNT_TARGET="$AI_HOME/.bashrc"
+
+	findmnt "$MOUNT_TARGET" >/dev/null 2>&1 && ok "Mount exists before umount" || fail "Mount missing before umount"
+
+	umount "$MOUNT_TARGET" 2>/dev/null || {
+		warn "Cannot umount in Docker"
+		return
+	}
+
+	! findmnt "$MOUNT_TARGET" >/dev/null 2>&1 && ok "Mount removed after umount" || fail "Mount still exists"
+
+	/usr/local/bin/am update /root/projects/testproj 2>&1 | tail -3
+
+	findmnt "$MOUNT_TARGET" >/dev/null 2>&1 && ok "am update remounted .bashrc" || fail "am update did NOT remount .bashrc"
+}
+
 test_status() {
-	log "Test 2: am status"
+	log "Test 4: am status"
 
 	STATUS=$(/usr/local/bin/am status 2>&1)
 	echo "$STATUS"
@@ -90,7 +132,7 @@ test_status() {
 }
 
 test_update_ssh() {
-	log "Test 3: am update (SSH repair)"
+	log "Test 5: am update (SSH repair)"
 
 	AI_UID=$(id -u "$AI_USER")
 
@@ -104,7 +146,7 @@ test_update_ssh() {
 }
 
 test_ssh_login() {
-	log "Test 4: SSH passwordless login"
+	log "Test 6: SSH passwordless login"
 
 	mkdir -p /run/sshd
 	/usr/sbin/sshd 2>/dev/null || true
@@ -118,7 +160,7 @@ test_ssh_login() {
 }
 
 test_destroy() {
-	log "Test 5: am destroy"
+	log "Test 7: am force-destroy"
 
 	/usr/local/bin/am force-destroy "$AI_HOME" 2>&1 | tail -3
 
@@ -145,6 +187,8 @@ main() {
 	AI_USER=$(echo "$OUTPUT" | tail -1)
 
 	if [ -n "$AI_USER" ] && id "$AI_USER" >/dev/null 2>&1; then
+		MOUNT_TARGET=$(test_bind_mount)
+		test_umount_recovery
 		test_status
 		test_update_ssh
 		test_ssh_login

@@ -135,30 +135,31 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
     std::ifstream mounts("/proc/mounts");
     std::string line;
 
-    std::string main_user = utils::get_effective_username();
-    std::string main_home = utils::get_effective_home();
-    if (main_home.empty()) {
-        main_home = utils::get_home_dir(main_user);
+    std::vector<std::string> ai_homes;
+    setpwent();
+    while (auto* pw = getpwent()) {
+        std::string name(pw->pw_name);
+        if (name.length() > prefix_.length()
+            && name.substr(0, prefix_.length()) == prefix_
+            && utils::validate_username(name)
+            && std::string(pw->pw_dir).find('/') == 0) {
+            ai_homes.push_back(pw->pw_dir);
+        }
     }
+    endpwent();
 
     while (std::getline(mounts, line)) {
         std::istringstream iss(line);
         std::string device, mount_point, fs_type, options;
         iss >> device >> mount_point >> fs_type >> options;
 
-        std::string expected_prefix = prefix_ + main_user + "_";
         bool is_ai_user_mount = false;
-        if (!main_home.empty() && mount_point.find(main_home) == 0) {
-            for (size_t i = main_home.length(); i < mount_point.length(); ++i) {
-                if (mount_point[i] == '/') {
-                    std::string segment = mount_point.substr(0, i);
-                    std::string name = fs::path(segment).filename().string();
-                    if (name.length() > expected_prefix.length()
-                        && name.substr(0, expected_prefix.length()) == expected_prefix
-                        && utils::validate_username(name)) {
-                        is_ai_user_mount = true;
-                        break;
-                    }
+        for (const auto& home : ai_homes) {
+            if (mount_point.find(home) == 0) {
+                std::string rest = mount_point.substr(home.size());
+                if (rest.empty() || rest[0] == '/') {
+                    is_ai_user_mount = true;
+                    break;
                 }
             }
         }

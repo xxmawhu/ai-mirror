@@ -8,6 +8,7 @@
 #include <sstream>
 #include <sys/mount.h>
 #include <grp.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 
@@ -285,6 +286,9 @@ bool Graft::set_directory_group(const fs::path& path, const std::string& groupna
         return false;
     }
 
+    struct passwd* pw = getpwnam(groupname.c_str());
+    uid_t owner_uid = pw ? pw->pw_uid : static_cast<uid_t>(-1);
+
     utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
     if (!ufd) {
         if (errno == ELOOP) {
@@ -295,7 +299,7 @@ bool Graft::set_directory_group(const fs::path& path, const std::string& groupna
             ufd.reset(::open(path.c_str(), O_RDONLY | O_NOFOLLOW));
             if (!ufd) {
                 if (errno == ELOOP) {
-                    if (lchown(path.c_str(), -1, gr->gr_gid) != 0) {
+                    if (lchown(path.c_str(), owner_uid, gr->gr_gid) != 0) {
                         utils::get_logger()->error("set_directory_group: lchown failed for {}: {}", path.string(), strerror(errno));
                         return false;
                     }
@@ -310,7 +314,7 @@ bool Graft::set_directory_group(const fs::path& path, const std::string& groupna
         }
     }
 
-    int ret = fchown(ufd.get(), -1, gr->gr_gid);
+    int ret = fchown(ufd.get(), owner_uid, gr->gr_gid);
     ufd.reset();
     if (ret != 0) {
         utils::get_logger()->error("set_directory_group: fchown failed for {}: {}", path.string(), strerror(errno));

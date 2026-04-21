@@ -719,7 +719,7 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
         return 1;
     }
 
-    if (!security::validate_path_allowed(target)) {
+    if (!security::validate_mount_source(target)) {
         std::cerr << "Path not in allowed directory: " << target_str << std::endl;
         return 1;
     }

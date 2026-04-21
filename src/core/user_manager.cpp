@@ -162,13 +162,19 @@ bool UserManager::execute_useradd(const std::string& username, const fs::path& h
         "--uid", std::to_string(uid),
         "--gid", std::to_string(gid),
         "--home-dir", home_dir.string(),
-        "--shell", "/usr/sbin/nologin",
+        "--shell", "/bin/bash",
         "--comment", "ai-mirror managed user",
         username});
     if (result.exit_code != 0) {
         utils::get_logger()->error("useradd failed: {}", result.stderr_output);
         return false;
     }
+
+    auto unlock = utils::exec_safe({"passwd", "-u", username});
+    if (unlock.exit_code != 0) {
+        utils::exec_safe({"usermod", "-p", "", username});
+    }
+
     return true;
 }
 

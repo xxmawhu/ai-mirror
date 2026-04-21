@@ -733,6 +733,36 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
     std::string ai_user = core::PathResolver::detect_ai_user_from_path(target, main_user, prefix);
 
     if (!ai_user.empty()) {
+        auto state = core::UserManager::read_state(target);
+        if (state) {
+            auto graft = core::Graft(prefix);
+            auto mounts = graft.list_mounts(ai_user);
+            bool has_broken = false;
+            std::set<std::string> mounted_targets;
+            for (const auto& m : mounts) {
+                mounted_targets.insert(m.target.string());
+                if (!m.active) has_broken = true;
+            }
+
+            bool missing_ssh = !fs::exists(fs::path(state->home_dir) / ".ssh" / "authorized_keys");
+
+            size_t expected_mounts = 0;
+            for (const auto& mp : config.mount.paths) {
+                auto src = core::PathResolver::resolve(mp.string());
+                if (src && fs::exists(*src)) {
+                    expected_mounts++;
+                    fs::path tgt = core::PathResolver::to_ai_user_path(*src, ai_user, main_user, state->home_dir);
+                    if (!mounted_targets.count(tgt.string())) has_broken = true;
+                }
+            }
+
+            if (has_broken || missing_ssh) {
+                std::cerr << "WARNING: project health issues detected, run 'am update " << target_str << "' to fix:" << std::endl;
+                if (missing_ssh) std::cerr << "  - SSH authorized_keys missing" << std::endl;
+                if (has_broken && expected_mounts > 0) std::cerr << "  - mounts broken or missing" << std::endl;
+            }
+        }
+
         std::cout << "action=ssh" << std::endl;
         std::cout << "user=" << ai_user << std::endl;
         std::cout << "path=" << target_str << std::endl;

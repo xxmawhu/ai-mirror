@@ -19,7 +19,7 @@
 
 namespace ai_mirror::core {
 
-static const std::string STATE_FILE = ".ai-mirror.json";
+static const std::string STATE_FILE = ".am_status";
 
 static std::string sha256_hex(const std::string& input) {
     unsigned char hash[EVP_MAX_MD_SIZE];

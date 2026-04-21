@@ -82,6 +82,9 @@ target_link_libraries(ai-mirror PRIVATE nlohmann_json::nlohmann_json)
 
 target_link_libraries(ai-mirror PRIVATE pthread)
 
+find_package(OpenSSL REQUIRED)
+target_link_libraries(ai-mirror PRIVATE OpenSSL::Crypto)
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     enable_testing()
     set(TEST_SOURCES "")

@@ -448,24 +448,67 @@ bool SSHManager::authorize_public_key_string(const std::string& username, const 
     return true;
 }
 
-bool SSHManager::setup_default_key_from_file(const std::string& ai_user, const fs::path& public_key_path) {
-    if (public_key_path.empty()) {
+bool SSHManager::setup_default_key_from_file(const std::string& ai_user, const fs::path& key_path) {
+    if (key_path.empty()) {
         utils::get_logger()->info("No ai_default_key configured, skipping default key setup");
         return true;
     }
 
+    fs::path pub_key_path = key_path;
     std::error_code ec;
-    if (!fs::exists(public_key_path, ec)) {
-        utils::get_logger()->warn("Default public key file not found: {}", public_key_path.string());
+
+    if (key_path.extension() == ".pub") {
+        // Already a public key path
+    } else {
+        // Private key path - derive public key path
+        pub_key_path = fs::path(key_path.string() + ".pub");
+
+        if (!fs::exists(pub_key_path, ec) || ec) {
+            // Public key doesn't exist, try to generate it from private key
+            if (!fs::exists(key_path, ec) || ec) {
+                utils::get_logger()->warn("Default key file not found: {}", key_path.string());
+                return false;
+            }
+            auto result = utils::exec_safe({"ssh-keygen", "-y", "-f", key_path.string()});
+            if (result.exit_code != 0) {
+                utils::get_logger()->warn("Failed to derive public key from {}: {}", key_path.string(), result.stderr_output);
+                return false;
+            }
+            // Write public key file
+            utils::unique_fd ufd(::open(pub_key_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644));
+            if (!ufd) {
+                utils::get_logger()->warn("Failed to create public key file: {}", pub_key_path.string());
+                return false;
+            }
+            FILE* f = ::fdopen(ufd.release(), "w");
+            if (!f) {
+                fs::remove(pub_key_path, ec);
+                return false;
+            }
+            fputs(result.stdout_output.c_str(), f);
+            if (result.stdout_output.back() != '\n') fputc('\n', f);
+            fclose(f);
+
+            uid_t login_uid = utils::get_login_uid();
+            if (login_uid == 0) login_uid = getuid();
+            if (chown(pub_key_path.c_str(), login_uid, static_cast<gid_t>(-1)) != 0) {
+                utils::get_logger()->warn("Failed to chown public key: {}", pub_key_path.string());
+            }
+            utils::get_logger()->info("Generated public key from private key: {}", pub_key_path.string());
+        }
+    }
+
+    if (!fs::exists(pub_key_path, ec) || ec) {
+        utils::get_logger()->warn("Default public key file not found: {}", pub_key_path.string());
         return false;
     }
 
-    if (!authorize_key(ai_user, public_key_path)) {
+    if (!authorize_key(ai_user, pub_key_path)) {
         utils::get_logger()->warn("Failed to authorize default key from file for {}", ai_user);
         return false;
     }
 
-    utils::get_logger()->info("Authorized default key from {} for {}", public_key_path.string(), ai_user);
+    utils::get_logger()->info("Authorized default key from {} for {}", pub_key_path.string(), ai_user);
     return true;
 }
 

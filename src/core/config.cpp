@@ -218,7 +218,7 @@ Config ConfigParser::create_default_config(const fs::path& config_path) {
     };
     config.ssh.key_type = "ed25519";
     config.ssh.key_path = fs::path("~/.ssh/ai-mirror");
-    config.ssh.ai_default_key = fs::path("~/.ssh/id_ed25519.pub");
+    config.ssh.ai_default_key = fs::path("~/.ssh/id_ed25519");
 
     return config;
 }

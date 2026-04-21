@@ -2,39 +2,127 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
+#include "ai_mirror/utils/unique_fd.hpp"
 #include <algorithm>
 #include <random>
 #include <sstream>
-#include <functional>
 #include <fstream>
-#include <array>
 #include <iomanip>
 #include <pwd.h>
 #include <grp.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <nlohmann/json.hpp>
+
+#include <openssl/evp.h>
 
 namespace ai_mirror::core {
 
-static std::string get_deterministic_hash_suffix(const std::string& input) {
-    size_t h = std::hash<std::string>{}(input);
+static const std::string STATE_FILE = ".ai-mirror.json";
+
+static std::string sha256_hex(const std::string& input) {
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    EVP_Digest(input.c_str(), input.size(), hash, &hash_len, EVP_sha256(), nullptr);
     std::ostringstream oss;
-    oss << std::hex << (h & 0xFFFFFFFF);
-    std::string suffix = oss.str();
-    while (suffix.size() < 8) suffix = "0" + suffix;
-    return suffix;
+    for (unsigned int i = 0; i < hash_len; ++i) {
+        oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
+    }
+    return oss.str();
+}
+
+static bool verify_state_hash(const nlohmann::json& j) {
+    if (!j.contains("nonce") || !j["nonce"].is_string()) return false;
+    nlohmann::json copy = j;
+    copy.erase("hash");
+    std::string serialized = copy.dump();
+    std::string h = sha256_hex(serialized);
+    return h.substr(0, 4) == "0000";
+}
+
+static nlohmann::json make_state_json(const UserInfo& info, const std::string& main_user) {
+    nlohmann::json j;
+    j["username"] = info.username;
+    j["uid"] = info.uid;
+    j["gid"] = info.gid;
+    j["home_dir"] = info.home_dir;
+    j["main_user"] = main_user;
+
+    std::random_device rd;
+    std::uniform_int_distribution<unsigned int> dist(0, 0xFFFFFFFFu);
+    for (int attempt = 0; attempt < 1000000; ++attempt) {
+        j["nonce"] = dist(rd);
+        std::string serialized = j.dump();
+        std::string h = sha256_hex(serialized);
+        if (h.substr(0, 4) == "0000") {
+            j["hash"] = h;
+            return j;
+        }
+    }
+    j["nonce"] = 0;
+    std::string serialized = j.dump();
+    j["hash"] = sha256_hex(serialized);
+    return j;
+}
+
+static bool write_state_file(const fs::path& home_dir, const UserInfo& info, const std::string& main_user) {
+    fs::path state_path = home_dir / STATE_FILE;
+
+    nlohmann::json j = make_state_json(info, main_user);
+
+    utils::unique_fd ufd(::open(state_path.c_str(),
+        O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644));
+    if (!ufd) {
+        utils::get_logger()->error("Failed to write state file: {}", state_path.string());
+        return false;
+    }
+    std::string content = j.dump(2) + "\n";
+    if (::write(ufd.get(), content.c_str(), content.size()) != static_cast<ssize_t>(content.size())) {
+        utils::get_logger()->error("Failed to write state file: {}", state_path.string());
+        return false;
+    }
+    return true;
+}
+
+static std::optional<UserInfo> read_state_file(const fs::path& home_dir) {
+    fs::path state_path = home_dir / STATE_FILE;
+    std::ifstream ifs(state_path);
+    if (!ifs.is_open()) return std::nullopt;
+    try {
+        nlohmann::json j = nlohmann::json::parse(ifs);
+        if (!verify_state_hash(j)) {
+            utils::get_logger()->error("State file hash verification failed: {}", state_path.string());
+            return std::nullopt;
+        }
+        UserInfo info;
+        info.username = j.value("username", "");
+        info.uid = j.value("uid", 0);
+        info.gid = j.value("gid", 0);
+        info.home_dir = j.value("home_dir", "");
+        info.exists = true;
+        info.error = "";
+        return info;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+static unsigned int compute_next_seq(uid_t base_uid) {
+    unsigned int max_seq = 0;
+    setpwent();
+    while (auto* pw = getpwent()) {
+        if (pw->pw_uid > base_uid * 10000u && pw->pw_uid < (base_uid + 1u) * 10000u) {
+            unsigned int seq = pw->pw_uid - base_uid * 10000u;
+            if (seq > max_seq) max_seq = seq;
+        }
+    }
+    endpwent();
+    return max_seq + 1;
 }
 
 UserManager::UserManager(const std::string& prefix) : prefix_(prefix) {}
 
-// Generates a unique ai-user username from project_path.  Strategy:
-// 1. Extract filename stem, sanitize dots/hyphens to underscores
-// 2. Combine prefix + main_user + "_" + stem, lowercase
-// 3. Truncate stem to 20 chars to leave room for hash suffix
-// 4. Append 4-char hex hash of full path (hash & 0xFFFF) as collision breaker
-// 5. Final truncation to Linux username limit (32 chars)
-// The hash suffix ensures uniqueness even when project names are truncated
-// (e.g. "/home/alice/my-very-long-project-name-001" vs "...-002").
 std::optional<std::string> UserManager::compute_username(const fs::path& project_path, bool check_collision) const {
     std::string stem = project_path.filename().string();
     std::replace(stem.begin(), stem.end(), '.', '_');
@@ -44,20 +132,11 @@ std::optional<std::string> UserManager::compute_username(const fs::path& project
     std::transform(base.begin(), base.end(), base.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
-    std::string hash_suffix = get_deterministic_hash_suffix(project_path.string());
-
-    const size_t max_stem_len = 20;
-    std::string truncated = base.substr(0, max_stem_len);
-    std::string username = truncated + "_" + hash_suffix;
-
-    if (username.size() > 32) {
-        username = username.substr(0, 32);
-    }
+    std::string username = base.substr(0, 32);
 
     if (check_collision && user_exists(username)) {
         utils::get_logger()->error(
-            "Username collision detected: '{}' already exists (derived from path '{}'). "
-            "Cannot create user - project path too similar to existing project.",
+            "Username collision: '{}' already exists for path '{}'",
             username, project_path.string());
         return std::nullopt;
     }
@@ -73,14 +152,22 @@ std::optional<std::string> UserManager::derive_username(const fs::path& project_
     return compute_username(project_path, false);
 }
 
-bool UserManager::execute_useradd(const std::string& username, const fs::path& home_dir) {
+bool UserManager::execute_useradd(const std::string& username, const fs::path& home_dir, uid_t uid, gid_t gid) {
     if (!utils::validate_username(username)) {
         utils::get_logger()->error("Invalid username: {}", username);
         return false;
     }
 
+    auto grp_result = utils::exec_safe({"groupadd", "--gid", std::to_string(gid), username});
+    if (grp_result.exit_code != 0) {
+        if (grp_result.stderr_output.find("already exists") == std::string::npos) {
+            utils::get_logger()->warn("groupadd warning: {}", grp_result.stderr_output);
+        }
+    }
+
     auto result = utils::exec_safe({"useradd",
-        "--create-home",
+        "--uid", std::to_string(uid),
+        "--gid", std::to_string(gid),
         "--home-dir", home_dir.string(),
         "--shell", "/usr/sbin/nologin",
         "--comment", "ai-mirror managed user",
@@ -173,6 +260,19 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
         return {"", "", 0, 0, false, err};
     }
 
+    auto state = read_state_file(abs_proj);
+    if (state) {
+        if (user_exists(state->username)) {
+            auto sys_info = get_user_info(state->username);
+            if (sys_info && sys_info->uid == state->uid && sys_info->gid == state->gid) {
+                utils::get_logger()->info("User already exists (state file matches): {} (uid={})",
+                    state->username, state->uid);
+                return *state;
+            }
+            utils::get_logger()->warn("State file exists but system uid/gid mismatch, will recreate");
+        }
+    }
+
     auto username_opt = generate_username(proj);
     if (!username_opt) {
         auto derived = derive_username(proj);
@@ -196,18 +296,27 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     }
 
     fs::path home_dir = proj;
+    uid_t base_uid = utils::get_login_uid();
+    if (base_uid == 0) base_uid = getuid();
+    unsigned int seq = compute_next_seq(base_uid);
+    uid_t new_uid = base_uid * 10000u + seq;
+    gid_t new_gid = new_uid;
 
-    if (!execute_useradd(username, home_dir)) {
+    if (!execute_useradd(username, home_dir, new_uid, new_gid)) {
         std::string err = "useradd failed for '" + username + "': see logs for details";
         utils::get_logger()->error("{}", err);
-        return {username, home_dir.string(), 0, 0, false, err};
+        return {username, home_dir.string(), new_uid, new_gid, false, err};
     }
 
     auto info = get_user_info(username);
     if (!info) {
-        utils::get_logger()->error("User '{}' created but getpwnam failed", username);
-        return {username, home_dir.string(), 0, 0, false, "getpwnam lookup failed after useradd"};
+        UserInfo created{username, home_dir.string(), new_uid, new_gid, true, ""};
+        write_state_file(home_dir, created, main_user);
+        utils::get_logger()->info("Created ai-user: {} (uid={})", username, new_uid);
+        return created;
     }
+
+    write_state_file(home_dir, *info, main_user);
     utils::get_logger()->info("Created ai-user: {} (uid={})", username, info->uid);
     return *info;
 }

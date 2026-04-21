@@ -301,11 +301,23 @@ bool SSHManager::ensure_ssh_dir(const std::string& username) {
     fs::path ssh_dir = fs::path(home) / ".ssh";
 
     std::error_code ec;
-    if (!fs::exists(ssh_dir, ec)) {
+    bool need_chown = false;
+    if (!fs::exists(ssh_dir, ec) || ec) {
         if (!security::safe_create_directories(ssh_dir)) {
             utils::get_logger()->error("Failed to create .ssh dir for {}: {}", username, ssh_dir.string());
             return false;
         }
+        need_chown = true;
+    }
+    if (!fs::exists(ssh_dir, ec) || ec) {
+        utils::get_logger()->error("Failed to verify .ssh dir exists for {}: {}", username, ssh_dir.string());
+        return false;
+    }
+    if (!fs::is_directory(ssh_dir, ec) || ec) {
+        utils::get_logger()->error(".ssh path is not a directory for {}: {}", username, ssh_dir.string());
+        return false;
+    }
+    if (need_chown) {
         auto chown_r = utils::exec_safe({"chown", username + ":" + username, ssh_dir.string()});
         if (chown_r.exit_code != 0) {
             utils::get_logger()->error("chown .ssh failed for {}: {}", username, chown_r.stderr_output);

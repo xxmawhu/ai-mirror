@@ -197,7 +197,7 @@ phase_install() {
 		sudo sed -i "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|" "${PREFIX}/bin/${WRAPPER_NAME}"
 		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper)"
 	else
-		sudo tee "${PREFIX}/bin/${WRAPPER_NAME}" >/dev/null <<'WRAPPER'
+		sudo tee "${PREFIX}/bin/${WRAPPER_NAME}" >/dev/null <<WRAPPER
 #!/usr/bin/env bash
 set -euo pipefail
 AM_BIN="${PREFIX}/bin/${REAL_BIN_NAME}"
@@ -209,7 +209,7 @@ fi
 # Security: validate parsed output before use.  The wrapper parses output from
 # the C++ binary (run via sudo) and passes it to ssh/cd.  A compromised or
 # buggy binary could emit injected values.  These guards ensure:
-# - path must start with $HOME or /home/ (prevent arbitrary directory access)
+# - path must start with \$HOME or /home/ (prevent arbitrary directory access)
 # - user must start with ai- (prevent SSH to arbitrary users)
 if [ "\${1:-}" = "cd" ]; then
     shift
@@ -259,7 +259,7 @@ WRAPPER
 
 	sudo install -d "${CONFIG_DIR}/sudoers.d"
 	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
-	sudo tee "$sudoers_file" >/dev/null <<'SUDOERS'
+	sudo tee "$sudoers_file" >/dev/null <<SUDOERS
 # ai-mirror sudo rules
 # Allows members of the ai-mirror group to run ai-mirror commands as root
 #

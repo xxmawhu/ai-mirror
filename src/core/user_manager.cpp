@@ -21,10 +21,10 @@ namespace ai_mirror::core {
 
 static const std::string STATE_FILE = ".am_status";
 
-static std::string sha256_hex(const std::string& input) {
-    unsigned char hash[EVP_MAX_MD_SIZE];
+static std::string md5_hex(const std::string& input) {
+    unsigned char hash[16];
     unsigned int hash_len = 0;
-    EVP_Digest(input.c_str(), input.size(), hash, &hash_len, EVP_sha256(), nullptr);
+    EVP_Digest(input.c_str(), input.size(), hash, &hash_len, EVP_md5(), nullptr);
     std::ostringstream oss;
     for (unsigned int i = 0; i < hash_len; ++i) {
         oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
@@ -32,16 +32,7 @@ static std::string sha256_hex(const std::string& input) {
     return oss.str();
 }
 
-static bool verify_state_hash(const nlohmann::json& j) {
-    if (!j.contains("nonce") || !j["nonce"].is_string()) return false;
-    nlohmann::json copy = j;
-    copy.erase("hash");
-    std::string serialized = copy.dump();
-    std::string h = sha256_hex(serialized);
-    return h.substr(0, 5) == "00000";
-}
-
-static nlohmann::json make_state_json(const UserInfo& info, const std::string& main_user) {
+static std::string make_state_content(const UserInfo& info, const std::string& main_user) {
     nlohmann::json j;
     j["username"] = info.username;
     j["uid"] = info.uid;
@@ -53,23 +44,25 @@ static nlohmann::json make_state_json(const UserInfo& info, const std::string& m
     std::uniform_int_distribution<unsigned int> dist(0, 0xFFFFFFFFu);
     for (int attempt = 0; attempt < 1000000; ++attempt) {
         j["nonce"] = dist(rd);
-        std::string serialized = j.dump();
-        std::string h = sha256_hex(serialized);
+        std::string content = j.dump(2) + "\n";
+        std::string h = md5_hex(content);
         if (h.substr(0, 5) == "00000") {
-            j["hash"] = h;
-            return j;
+            return content;
         }
     }
     j["nonce"] = 0;
-    std::string serialized = j.dump();
-    j["hash"] = sha256_hex(serialized);
-    return j;
+    return j.dump(2) + "\n";
+}
+
+static bool verify_state_content(const std::string& content) {
+    std::string h = md5_hex(content);
+    return h.substr(0, 5) == "00000";
 }
 
 static bool write_state_file(const fs::path& home_dir, const UserInfo& info, const std::string& main_user) {
     fs::path state_path = home_dir / STATE_FILE;
 
-    nlohmann::json j = make_state_json(info, main_user);
+    std::string content = make_state_content(info, main_user);
 
     utils::unique_fd ufd(::open(state_path.c_str(),
         O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644));
@@ -77,7 +70,6 @@ static bool write_state_file(const fs::path& home_dir, const UserInfo& info, con
         utils::get_logger()->error("Failed to write state file: {}", state_path.string());
         return false;
     }
-    std::string content = j.dump(2) + "\n";
     if (::write(ufd.get(), content.c_str(), content.size()) != static_cast<ssize_t>(content.size())) {
         utils::get_logger()->error("Failed to write state file: {}", state_path.string());
         return false;
@@ -90,11 +82,13 @@ static std::optional<UserInfo> read_state_file(const fs::path& home_dir) {
     std::ifstream ifs(state_path);
     if (!ifs.is_open()) return std::nullopt;
     try {
-        nlohmann::json j = nlohmann::json::parse(ifs);
-        if (!verify_state_hash(j)) {
-            utils::get_logger()->error("State file hash verification failed: {}", state_path.string());
+        std::string content((std::istreambuf_iterator<char>(ifs)),
+                             std::istreambuf_iterator<char>());
+        if (!verify_state_content(content)) {
+            utils::get_logger()->error("State file md5 verification failed: {}", state_path.string());
             return std::nullopt;
         }
+        nlohmann::json j = nlohmann::json::parse(content);
         UserInfo info;
         info.username = j.value("username", "");
         info.uid = j.value("uid", 0);

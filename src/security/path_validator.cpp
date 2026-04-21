@@ -1,4 +1,5 @@
 #include "ai_mirror/security/path_validator.hpp"
+#include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <algorithm>
 #include <fcntl.h>
@@ -46,6 +47,12 @@ bool validate_path_allowed(const fs::path& p) {
 
 bool validate_mount_source(const fs::path& source) {
     if (source.empty()) return false;
+
+    std::string main_user = utils::get_effective_username();
+    if (utils::is_path_allowed(source, main_user)) {
+        return true;
+    }
+
     return validate_path_allowed(source);
 }
 

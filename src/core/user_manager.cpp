@@ -122,13 +122,14 @@ bool UserManager::execute_userdel(const std::string& username, bool remove_home)
 UserInfo UserManager::create_ai_user(const std::string& project_path) {
     fs::path proj(project_path);
 
-    if (!security::validate_path_allowed(proj)) {
-        std::string err = "Project path rejected (system directory): " + proj.string();
+    std::string main_user = utils::get_effective_username();
+
+    if (!utils::is_path_allowed(proj, main_user)) {
+        std::string err = "Project path not allowed for user '" + main_user + "': " + proj.string();
         utils::get_logger()->error("{}", err);
         return {"", "", 0, 0, false, err};
     }
 
-    std::string main_user = utils::get_effective_username();
     std::string main_home = utils::get_effective_home();
     if (main_home.empty()) {
         main_home = utils::get_home_dir(main_user);

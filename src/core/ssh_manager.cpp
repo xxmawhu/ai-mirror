@@ -135,7 +135,7 @@ bool safe_read_authorized_keys(const fs::path& path, std::vector<std::string>& l
     return true;
 }
 
-bool safe_read_public_key_file(const fs::path& path, std::string& content_out, uid_t expected_uid) {
+bool safe_read_public_key_file(const fs::path& path, std::string& content_out, [[maybe_unused]] uid_t expected_uid) {
     struct stat st;
     if (::lstat(path.c_str(), &st) != 0) {
         utils::get_logger()->error("safe_read_public_key_file: lstat({}) failed: {}",
@@ -144,11 +144,6 @@ bool safe_read_public_key_file(const fs::path& path, std::string& content_out, u
     }
     if (S_ISLNK(st.st_mode)) {
         utils::get_logger()->error("safe_read_public_key_file: rejecting symlink: {}", path.c_str());
-        return false;
-    }
-    if (st.st_uid != expected_uid) {
-        utils::get_logger()->error("safe_read_public_key_file: ownership mismatch (uid {} != {}): {}",
-            st.st_uid, expected_uid, path.c_str());
         return false;
     }
 

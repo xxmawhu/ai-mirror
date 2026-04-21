@@ -81,6 +81,11 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
+    auto grp_result = utils::exec_safe({"usermod", "-aG", user_info.username, main_user});
+    if (grp_result.exit_code != 0) {
+        utils::get_logger()->warn("Failed to add {} to group {}: {}", main_user, user_info.username, grp_result.stderr_output);
+    }
+
     int mount_failures = 0;
 
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
@@ -964,13 +969,19 @@ int cmd_status([[maybe_unused]] bool verbose) {
             }
         }
 
-        std::string ssh_key_path = utils::get_home_dir(main_user) + "/.ssh/ai-mirror";
-        bool ssh_ok = fs::exists(fs::path(ssh_key_path)) &&
-                      fs::exists(fs::path(ssh_key_path + ".pub"));
+        fs::path key_path = ctx.config.ssh.key_path;
+        if (key_path.string().size() >= 2 && key_path.string()[0] == '~' && key_path.string()[1] == '/') {
+            key_path = fs::path(utils::get_effective_home()) / key_path.string().substr(2);
+        }
+        bool ssh_ok = fs::exists(key_path) && fs::exists(fs::path(key_path.string() + ".pub"));
         std::cout << "  SSH:   " << (ssh_ok ? "ok" : "missing") << std::endl;
+        if (!ssh_ok) all_healthy = false;
 
         fs::path auth_keys = fs::path(u.home_dir) / ".ssh" / "authorized_keys";
         std::cout << "  Auth:  " << (fs::exists(auth_keys) ? "ok" : "missing") << std::endl;
+        if (!fs::exists(auth_keys)) all_healthy = false;
+
+        if (mounts.empty()) all_healthy = false;
 
         std::cout << "  Status: " << (all_healthy ? "healthy" : "unhealthy") << std::endl;
         std::cout << std::endl;
@@ -1003,6 +1014,13 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
     std::string username = state->username;
     std::string home_dir = state->home_dir;
     int fixes = 0;
+
+    auto grp_result = utils::exec_safe({"usermod", "-aG", username, main_user});
+    if (grp_result.exit_code == 0) {
+        fixes++;
+    } else {
+        utils::get_logger()->warn("Failed to add {} to group {}: {}", main_user, username, grp_result.stderr_output);
+    }
 
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);

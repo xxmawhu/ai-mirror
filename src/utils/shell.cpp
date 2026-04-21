@@ -51,6 +51,7 @@ static std::string resolve_command(const std::string& cmd) {
         {"userdel", "/usr/sbin/userdel"},
         {"groupadd", "/usr/sbin/groupadd"},
         {"groupdel", "/usr/sbin/groupdel"},
+        {"usermod", "/usr/sbin/usermod"},
         {"gpasswd", "/usr/bin/gpasswd"},
         {"ssh-keygen", "/usr/bin/ssh-keygen"},
         {"mkdir", "/usr/bin/mkdir"},
@@ -142,7 +143,7 @@ ShellResult exec_safe(const std::string& file, const std::vector<std::string>& a
 
     static const std::set<std::string> ALLOWED_COMMANDS = {
         "mount", "umount", "chmod", "chown", "chgrp",
-        "useradd", "userdel", "groupadd", "groupdel",
+        "useradd", "userdel", "groupadd", "groupdel", "usermod",
         "gpasswd", "ssh-keygen", "mkdir", "cp", "mv",
         "getent", "findmnt", "which", "ssh", "pkill"
     };

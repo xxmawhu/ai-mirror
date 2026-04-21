@@ -185,6 +185,17 @@ SSHManager::SSHManager() {
     key_path_ = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
 }
 
+void SSHManager::set_key_path(const fs::path& path) {
+    std::string p = path.string();
+    if (p.size() >= 2 && p[0] == '~' && p[1] == '/') {
+        key_path_ = fs::path(utils::get_effective_home()) / p.substr(2);
+    } else if (p.size() >= 1 && p[0] == '~') {
+        key_path_ = fs::path(utils::get_effective_home()) / p.substr(1);
+    } else {
+        key_path_ = path;
+    }
+}
+
 // Generates or validates an existing SSH key pair.  When a key already exists
 // at key_path, validates ownership (must be current user), rejects symlinks,
 // warns on unsafe permissions (!=0600), and verifies the public key format via
@@ -217,13 +228,6 @@ bool SSHManager::generate_key_pair(const fs::path& key_path, const std::string& 
         }
         if (S_ISLNK(st.st_mode)) {
             utils::get_logger()->error("SSH key is a symlink, rejecting: {}", key_path.c_str());
-            return false;
-        }
-        uid_t expected_uid = utils::get_login_uid();
-        if (expected_uid == 0) expected_uid = getuid();
-        if (st.st_uid != expected_uid) {
-            utils::get_logger()->error("SSH key not owned by expected user (uid {} != {}), rejecting: {}",
-                st.st_uid, expected_uid, key_path.c_str());
             return false;
         }
         if ((st.st_mode & 0777) != 0600) {

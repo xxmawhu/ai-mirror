@@ -52,7 +52,7 @@ public:
     bool test_connection(const std::string& username) const;
 
     void set_key_type(const std::string& type) { key_type_ = type; }
-    void set_key_path(const fs::path& path) { key_path_ = path; }
+    void set_key_path(const fs::path& path);
 
 private:
     std::string key_type_ = "ed25519";

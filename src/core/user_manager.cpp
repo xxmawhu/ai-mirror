@@ -271,9 +271,13 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     if (!username_opt) {
         auto derived = derive_username(proj);
         if (derived && user_exists(*derived)) {
-            get_user_info(*derived);
-            utils::get_logger()->info("User already exists for project: {} ({})",
-                *derived, proj.string());
+            auto existing = get_user_info(*derived);
+            if (existing) {
+                write_state_file(abs_proj, *existing, main_user);
+                utils::get_logger()->info("Recovered existing user: {} (uid={}), wrote state file",
+                    existing->username, existing->uid);
+                return *existing;
+            }
         }
         std::string err = "Username collision for project: " + proj.string();
         return {"", "", 0, 0, false, err};
@@ -286,6 +290,9 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
             utils::get_logger()->error("User '{}' exists but getpwnam failed", username);
             return {username, proj.string(), 0, 0, false, "getpwnam lookup failed"};
         }
+        write_state_file(abs_proj, *info, main_user);
+        utils::get_logger()->info("User already exists: {} (uid={}), wrote state file",
+            info->username, info->uid);
         return *info;
     }
 

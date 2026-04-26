@@ -69,13 +69,16 @@ std::string PathResolver::detect_ai_user_from_path(const fs::path& p, const std:
     std::string expected_prefix = prefix + main_user + "_";
     std::error_code ec;
 
+    // Check if a username matches AI user format and exists in system (via getpwnam)
+    // This works for any home directory location (including BeeGFS, NFS, etc.)
     auto check_component = [&](const fs::path& component) -> std::string {
         std::string name = component.string();
         if (name.length() <= expected_prefix.length()) return "";
         if (name.substr(0, expected_prefix.length()) != expected_prefix) return "";
         if (!utils::validate_username(name)) return "";
-        fs::path candidate_home = "/home/" + name;
-        if (fs::is_directory(candidate_home, ec) && !ec) {
+        // Check user exists via passwd lookup (not hardcoded /home/ path)
+        struct passwd* pw = getpwnam(name.c_str());
+        if (pw != nullptr) {
             return name;
         }
         return "";

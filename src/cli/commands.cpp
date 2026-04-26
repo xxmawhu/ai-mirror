@@ -115,13 +115,19 @@ int cmd_create(const std::string& project_path, bool verbose) {
                 }
             }
         }
-        // Warn if main_user's home has g+w on subdirectories (privacy risk)
+        // Fix g+w on main_user's home subdirectories (privacy risk)
         std::error_code iter_ec;
         for (const auto& entry : fs::directory_iterator(home, iter_ec)) {
             if (!entry.is_directory()) continue;
-            auto ep = entry.status().permissions();
-            if ((ep & fs::perms::group_write) != fs::perms::none) {
-                utils::get_logger()->warn("main_user home subdirectory has g+w: {} (consider tightening permissions)", entry.path().string());
+            std::error_code ec;
+            auto ep = entry.status(ec).permissions();
+            if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
+                fs::permissions(entry.path(), ep & ~fs::perms::group_write, ec);
+                if (!ec) {
+                    utils::get_logger()->info("Removed g+w from {} (privacy protection)", entry.path().string());
+                } else {
+                    utils::get_logger()->warn("Failed to remove g+w from {}: {}", entry.path().string(), ec.message());
+                }
             }
         }
     }
@@ -769,39 +775,59 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
         return 1;
     }
 
-    std::string ai_user = core::PathResolver::detect_ai_user_from_path(target, main_user, prefix);
+    // Primary method: find .am_status by walking up from target directory
+    // This works for any filesystem (BeeGFS, NFS, local) regardless of home_dir location
+    fs::path search_path = target;
+    std::optional<core::UserInfo> state;
+    std::error_code ec;
+    
+    while (!search_path.empty() && search_path != "/" && search_path != "/home") {
+        state = core::UserManager::read_state(search_path);
+        if (state) break;
+        search_path = search_path.parent_path();
+    }
 
-    if (!ai_user.empty()) {
-        auto state = core::UserManager::read_state(target);
-        if (state) {
-            auto graft = core::Graft(prefix);
-            auto mounts = graft.list_mounts(ai_user);
-            bool has_broken = false;
-            std::set<std::string> mounted_targets;
-            for (const auto& m : mounts) {
-                mounted_targets.insert(m.target.string());
-                if (!m.active) has_broken = true;
-            }
+    if (state) {
+        std::string ai_user = state->username;
+        
+        // Health check
+        auto graft = core::Graft(prefix);
+        auto mounts = graft.list_mounts(ai_user);
+        bool has_broken = false;
+        std::set<std::string> mounted_targets;
+        for (const auto& m : mounts) {
+            mounted_targets.insert(m.target.string());
+            if (!m.active) has_broken = true;
+        }
 
-            bool missing_ssh = !fs::exists(fs::path(state->home_dir) / ".ssh" / "authorized_keys");
+        bool missing_ssh = !fs::exists(fs::path(state->home_dir) / ".ssh" / "authorized_keys", ec);
 
-            size_t expected_mounts = 0;
-            for (const auto& mp : config.mount.paths) {
-                auto src = core::PathResolver::resolve(mp.string());
-                if (src && fs::exists(*src)) {
-                    expected_mounts++;
-                    fs::path tgt = core::PathResolver::to_ai_user_path(*src, ai_user, main_user, state->home_dir);
-                    if (!mounted_targets.count(tgt.string())) has_broken = true;
-                }
-            }
-
-            if (has_broken || missing_ssh) {
-                std::cerr << "WARNING: project health issues detected, run 'am update " << target_str << "' to fix:" << std::endl;
-                if (missing_ssh) std::cerr << "  - SSH authorized_keys missing" << std::endl;
-                if (has_broken && expected_mounts > 0) std::cerr << "  - mounts broken or missing" << std::endl;
+        size_t expected_mounts = 0;
+        for (const auto& mp : config.mount.paths) {
+            auto src = core::PathResolver::resolve(mp.string());
+            if (src && fs::exists(*src)) {
+                expected_mounts++;
+                fs::path tgt = core::PathResolver::to_ai_user_path(*src, ai_user, main_user, state->home_dir);
+                if (!mounted_targets.count(tgt.string())) has_broken = true;
             }
         }
 
+        if (has_broken || missing_ssh) {
+            std::cerr << "WARNING: project health issues detected, run 'am update " << target_str << "' to fix:" << std::endl;
+            if (missing_ssh) std::cerr << "  - SSH authorized_keys missing" << std::endl;
+            if (has_broken && expected_mounts > 0) std::cerr << "  - mounts broken or missing" << std::endl;
+        }
+
+        std::cout << "action=ssh" << std::endl;
+        std::cout << "user=" << ai_user << std::endl;
+        std::cout << "path=" << target_str << std::endl;
+        return 0;
+    }
+
+    // Fallback: detect AI user from path component name (legacy method)
+    std::string ai_user = core::PathResolver::detect_ai_user_from_path(target, main_user, prefix);
+
+    if (!ai_user.empty()) {
         std::cout << "action=ssh" << std::endl;
         std::cout << "user=" << ai_user << std::endl;
         std::cout << "path=" << target_str << std::endl;
@@ -1114,13 +1140,20 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
                 }
             }
         }
-        // Warn if main_user's home has g+w on subdirectories (privacy risk)
+        // Fix g+w on main_user's home subdirectories (privacy risk)
         std::error_code iter_ec;
         for (const auto& entry : fs::directory_iterator(mhome, iter_ec)) {
             if (!entry.is_directory()) continue;
-            auto ep = entry.status().permissions();
-            if ((ep & fs::perms::group_write) != fs::perms::none) {
-                utils::get_logger()->warn("main_user home subdirectory has g+w: {} (consider tightening permissions)", entry.path().string());
+            std::error_code ec;
+            auto ep = entry.status(ec).permissions();
+            if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
+                fs::permissions(entry.path(), ep & ~fs::perms::group_write, ec);
+                if (!ec) {
+                    utils::get_logger()->info("Removed g+w from {} (privacy protection)", entry.path().string());
+                    fixes++;
+                } else {
+                    utils::get_logger()->warn("Failed to remove g+w from {}: {}", entry.path().string(), ec.message());
+                }
             }
         }
     }

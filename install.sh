@@ -21,7 +21,6 @@ CONFIG_DIR="${AI_MIRROR_CONFIG_DIR:-/etc/ai-mirror}"
 DATA_DIR="${AI_MIRROR_DATA_DIR:-/var/lib/ai-mirror}"
 BIN_NAME="ai-mirror"
 REAL_BIN_NAME="ai-mirror-bin"
-WRAPPER_NAME="am"
 
 # ---- Colors ----
 RED='\033[0;31m'
@@ -187,97 +186,37 @@ phase_install() {
 
 	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${REAL_BIN_NAME}") bytes)"
 
-	# Install bash profile function (primary method for bash users)
-	log "Installing bash profile function to /etc/profile.d/..."
+	# Install bash profile function (only if content changed)
+	log "Checking bash profile function..."
 	local profile_src="${SCRIPT_DIR}/profile/am.sh"
 	if [[ -f "$profile_src" ]]; then
 		sudo install -d /etc/profile.d
-		sudo install -m 0644 "$profile_src" /etc/profile.d/am.sh
-		# Update the binary path in the profile function
-		sudo sed -i "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|g" /etc/profile.d/am.sh
-		log "  /etc/profile.d/am.sh (bash function)"
+
+		# Build the expected content (with binary path substituted)
+		local expected_content
+		expected_content=$(sed "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|g" "$profile_src")
+
+		# Compare with installed version
+		local needs_update=false
+		if sudo test ! -f /etc/profile.d/am.sh; then
+			needs_update=true
+		else
+			local installed_content
+			installed_content=$(sudo cat /etc/profile.d/am.sh)
+			if [[ "$expected_content" != "$installed_content" ]]; then
+				needs_update=true
+			fi
+		fi
+
+		if $needs_update; then
+			echo "$expected_content" | sudo tee /etc/profile.d/am.sh >/dev/null
+			sudo chmod 0644 /etc/profile.d/am.sh
+			log "  /etc/profile.d/am.sh (updated)"
+		else
+			log "  /etc/profile.d/am.sh (unchanged, skipped)"
+		fi
 	else
 		warn "  profile/am.sh not found, skipping profile function install"
-	fi
-
-	# Install wrapper script (fallback for non-bash shells, subshells, scripts)
-	log "Installing 'am' wrapper to ${PREFIX}/bin/..."
-	local wrapper_src="${SCRIPT_DIR}/docker/am-wrapper.sh"
-	if [[ ! -f "$wrapper_src" ]]; then
-		wrapper_src="${SCRIPT_DIR}/am-wrapper.sh"
-	fi
-	if [[ -f "$wrapper_src" ]]; then
-		sudo install -m 0755 "$wrapper_src" "${PREFIX}/bin/${WRAPPER_NAME}"
-		sudo sed -i "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|" "${PREFIX}/bin/${WRAPPER_NAME}"
-		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper)"
-	else
-		sudo tee "${PREFIX}/bin/${WRAPPER_NAME}" >/dev/null <<WRAPPER
-#!/usr/bin/env bash
-# am wrapper - fallback for non-bash shells, subshells, and scripts
-# For interactive bash shells, use the profile function: source /etc/profile.d/am.sh
-set -euo pipefail
-AM_BIN="${PREFIX}/bin/${REAL_BIN_NAME}"
-if [ ! -x "\$AM_BIN" ]; then
-    echo "error: \$AM_BIN not found" >&2
-    exit 1
-fi
-
-# Note: 'am cd' from wrapper script cannot change caller's shell directory
-# because wrapper runs as subprocess. For interactive cd, use:
-#   source /etc/profile.d/am.sh  # load the am() function
-#   am cd <path>                  # changes directory in current shell
-
-# Security: validate parsed output before use.  The wrapper parses output from
-# the C++ binary (run via sudo) and passes it to ssh/cd.  A compromised or
-# buggy binary could emit injected values.  These guards ensure:
-# - path must start with \$HOME or /home/ (prevent arbitrary directory access)
-# - user must match AI user format (prevent SSH to arbitrary users)
-if [ "\${1:-}" = "cd" ]; then
-    shift
-    output=\$(sudo --preserve-env=HOME "\$AM_BIN" cd "\$@")
-    action=\$(echo "\$output" | grep '^action=' | cut -d= -f2)
-    if [ "\$action" = "ssh" ]; then
-        user=\$(echo "\$output" | grep '^user=' | cut -d= -f2)
-        path=\$(echo "\$output" | grep '^path=' | cut -d= -f2)
-        if ! echo "\$path" | grep -qE "^(\$HOME/|/home/)"; then
-            echo "error: invalid path from am cd: '\$path'" >&2
-            exit 1
-        fi
-        # Validate AI user format: {prefix}{main_user}_{hash}
-        # Default prefix is 'i', so user starts with 'i' followed by main_user
-        main_user=\${SUDO_USER:-\$(whoami)}
-        if ! echo "\$user" | grep -qE "^i\${main_user}"; then
-            echo "error: invalid AI user from am cd: '\$user' (expected i\${main_user}_<hash>)" >&2
-            exit 1
-        fi
-        exec ssh "\${user}@localhost" -t "cd '\${path}'"
-    elif [ "\$action" = "cd" ]; then
-        path=\$(echo "\$output" | grep '^path=' | cut -d= -f2)
-        if ! echo "\$path" | grep -qE "^(\$HOME/|/home/)"; then
-            echo "error: invalid path from am cd: '\$path'" >&2
-            exit 1
-        fi
-        # Wrapper cannot change caller's directory - output instruction instead
-        echo "NOTE: 'am cd' from wrapper script cannot change your shell directory."
-        echo "      For interactive cd, source the profile function first:"
-        echo "        source /etc/profile.d/am.sh"
-        echo "        am cd '\${path}'"
-        echo ""
-        echo "To change directory now, run: cd '\${path}'"
-    else
-        echo "error: unknown action from am cd" >&2
-        exit 1
-    fi
-    exit 0
-fi
-
-if [ "\$(id -u)" -eq 0 ]; then
-    exec "\$AM_BIN" "\$@"
-fi
-exec sudo --preserve-env=HOME "\$AM_BIN" "\$@"
-WRAPPER
-		sudo chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}"
-		log "  ${PREFIX}/bin/${WRAPPER_NAME} (wrapper, inline)"
 	fi
 
 	log "Setting up data directory ${DATA_DIR}/..."
@@ -339,7 +278,6 @@ phase_summary() {
 	log ""
 	log "Installed:"
 	log "  /etc/profile.d/am.sh       (bash function, sourced on login)"
-	log "  ${PREFIX}/bin/${WRAPPER_NAME}       (wrapper, fallback for scripts)"
 	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  (actual binary)"
 	log ""
 	log "Data directory:"
@@ -357,9 +295,6 @@ phase_summary() {
 	log "  6. List users:            am list"
 	log "  7. Remove project:        am rm /path/to/project"
 	log ""
-	log "Note: 'am cd' from bash function changes directory in current shell."
-	log "      'am cd' from wrapper script cannot change caller's directory."
-	log ""
 	log "Uninstall:"
 	log "  bash ${SCRIPT_DIR}/install.sh --clean"
 	log ""
@@ -375,11 +310,6 @@ phase_clean() {
 	if sudo test -f "${PREFIX}/bin/${REAL_BIN_NAME}"; then
 		sudo rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"
 		log "  Removed ${PREFIX}/bin/${REAL_BIN_NAME}"
-	fi
-
-	if sudo test -f "${PREFIX}/bin/${WRAPPER_NAME}"; then
-		sudo rm -f "${PREFIX}/bin/${WRAPPER_NAME}"
-		log "  Removed ${PREFIX}/bin/${WRAPPER_NAME}"
 	fi
 
 	if sudo test -f /etc/profile.d/am.sh; then

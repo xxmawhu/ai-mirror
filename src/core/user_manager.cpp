@@ -93,6 +93,7 @@ static std::optional<UserInfo> read_state_file(const fs::path& home_dir) {
         info.uid = j.value("uid", 0);
         info.gid = j.value("gid", 0);
         info.home_dir = j.value("home_dir", "");
+        info.main_user = j.value("main_user", "");
         info.exists = true;
         info.error = "";
         return info;
@@ -213,7 +214,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     if (!utils::is_path_allowed(proj, main_user)) {
         std::string err = "Project path not allowed for user '" + main_user + "': " + proj.string();
         utils::get_logger()->error("{}", err);
-        return {"", "", 0, 0, false, err};
+        return {"", "", "", 0, 0, false, err};
     }
 
     std::string main_home = utils::get_effective_home();
@@ -223,7 +224,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     if (main_home.empty()) {
         std::string err = "Cannot determine home directory for user '" + main_user + "'";
         utils::get_logger()->error("{}", err);
-        return {"", "", 0, 0, false, err};
+        return {"", "", "", 0, 0, false, err};
     }
 
     std::error_code ec;
@@ -233,7 +234,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
         if (ec) {
             std::string err = "Cannot resolve project path: " + proj.string();
             utils::get_logger()->error("{}", err);
-            return {"", "", 0, 0, false, err};
+            return {"", "", "", 0, 0, false, err};
         }
     }
 
@@ -247,7 +248,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     if (main_home_canon.empty()) {
         std::string err = "Cannot canonicalize home directory: " + main_home;
         utils::get_logger()->error("{}", err);
-        return {"", "", 0, 0, false, err};
+        return {"", "", "", 0, 0, false, err};
     }
 
     std::string ps = abs_proj.string();
@@ -256,7 +257,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
         || (ps.length() > main_home_canon.length() && ps[main_home_canon.length()] != '/')) {
         std::string err = "Project path must be under caller home (" + main_home_canon + "): " + ps;
         utils::get_logger()->error("{}", err);
-        return {"", "", 0, 0, false, err};
+        return {"", "", "", 0, 0, false, err};
     }
 
     auto state = read_state_file(abs_proj);
@@ -285,7 +286,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
             }
         }
         std::string err = "Username collision for project: " + proj.string();
-        return {"", "", 0, 0, false, err};
+        return {"", "", "", 0, 0, false, err};
     }
     std::string username = std::move(*username_opt);
 
@@ -293,7 +294,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
         auto info = get_user_info(username);
         if (!info) {
             utils::get_logger()->error("User '{}' exists but getpwnam failed", username);
-            return {username, proj.string(), 0, 0, false, "getpwnam lookup failed"};
+            return {username, proj.string(), "", 0, 0, false, "getpwnam lookup failed"};
         }
         write_state_file(abs_proj, *info, main_user);
         utils::get_logger()->info("User already exists: {} (uid={}), wrote state file",
@@ -311,12 +312,12 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     if (!execute_useradd(username, home_dir, new_uid, new_gid)) {
         std::string err = "useradd failed for '" + username + "': see logs for details";
         utils::get_logger()->error("{}", err);
-        return {username, home_dir.string(), new_uid, new_gid, false, err};
+        return {username, home_dir.string(), "", new_uid, new_gid, false, err};
     }
 
     auto info = get_user_info(username);
     if (!info) {
-        UserInfo created{username, home_dir.string(), new_uid, new_gid, true, ""};
+        UserInfo created{username, home_dir.string(), "", new_uid, new_gid, true, ""};
         write_state_file(home_dir, created, main_user);
         utils::get_logger()->info("Created ai-user: {} (uid={})", username, new_uid);
         return created;
@@ -352,7 +353,7 @@ std::optional<UserInfo> UserManager::get_user_info(const std::string& username) 
     if (!pw) {
         return std::nullopt;
     }
-    return UserInfo{username, pw->pw_dir, pw->pw_uid, pw->pw_gid, true, {}};
+    return UserInfo{username, pw->pw_dir, "", pw->pw_uid, pw->pw_gid, true, {}};
 }
 
 bool UserManager::user_exists(const std::string& username) const {
@@ -368,7 +369,7 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
         std::string name(pw->pw_name);
         if (name.length() > prefix_str.length()
             && name.substr(0, prefix_str.length()) == prefix_str) {
-            users.push_back({name, pw->pw_dir, pw->pw_uid, pw->pw_gid, true, ""});
+            users.push_back({name, pw->pw_dir, "", pw->pw_uid, pw->pw_gid, true, ""});
         }
     }
     endpwent();

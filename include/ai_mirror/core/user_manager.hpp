@@ -12,6 +12,7 @@ namespace ai_mirror::core {
 struct UserInfo {
     std::string username;
     std::string home_dir;
+    std::string main_user;
     uid_t uid;
     gid_t gid;
     bool exists;

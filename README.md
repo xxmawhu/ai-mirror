@@ -68,6 +68,7 @@ sudo ./install.sh --clean
 | 构建 | CMake Release 编译，增量构建支持 |
 | 验证 | 检查二进制文件完整性 + `--help` 冒烟测试 |
 | 安装 | 部署 `ai-mirror-bin` + `am` wrapper 到 `/usr/local/bin/` |
+| Profile | 安装 `am()` bash 函数到 `/etc/profile.d/am.sh`（登录自动加载） |
 | Sudoers | 创建 `/etc/ai-mirror/sudoers.d/ai-mirror`，无通配符白名单规则 |
 | 用户组 | 创建 `ai-mirror` 系统组 |
 
@@ -93,6 +94,18 @@ sudo ./install.sh --clean
 - 当前用户必须属于 `ai-mirror` 组：`sudo usermod -aG ai-mirror $USER`
 - AI 用户不能执行任何命令（会被自动拦截）
 - 需要提权的命令通过 `am` wrapper 自动处理 sudo
+- **bash 用户**：安装后新登录自动加载 `am()` shell 函数；或手动 `source /etc/profile.d/am.sh`
+- **非 bash 用户**：使用 `/usr/local/bin/am` wrapper 脚本（`cd` 命令无法改变当前 shell 目录）
+
+### am() Shell 函数 vs Wrapper 脚本
+
+| 特性 | Shell 函数 (`/etc/profile.d/am.sh`) | Wrapper (`/usr/local/bin/am`) |
+|------|--------------------------------------|-------------------------------|
+| `am cd <普通目录>` | 改变当前 shell 目录 | 输出提示，无法改变目录 |
+| `am cd <ai项目>` | SSH 登录 AI 用户 | SSH 登录 AI 用户 |
+| 其他命令 | 正常通过 | 正常通过 |
+| 加载方式 | bash 登录自动 source | PATH 中自动可用 |
+| 适用场景 | 交互式 bash | 脚本、非 bash shell |
 
 ### sudoers 安全说明
 
@@ -177,9 +190,15 @@ am mv <src> <dst>
 am cd <path>
 ```
 
-根据目标路径所属用户，自动切换到对应的身份上下文。若目标在 ai-user 目录下，wrapper 会自动执行 `ssh ai-user@localhost`；否则输出 `cd` 命令供 shell 执行。
+根据目标路径所属用户，自动切换到对应的身份上下文：
+
+- **普通目录**（shell 函数模式）：在当前 shell 中执行 `cd`，改变工作目录
+- **ai-user 项目目录**：通过 SSH 登录到 AI 用户，并 `cd` 到目标路径
+- **普通目录**（wrapper 模式）：输出提示信息，无法改变当前 shell 目录
 
 > **跨共享盘支持**: ai-user 检测基于路径结构而非 UID，在 NFS/BeeGFS 等共享存储上也能正确识别。
+>
+> **注意**: `am cd` 改变当前 shell 目录的功能仅在 bash profile 函数模式下可用。使用 wrapper 脚本时，`cd` 只能在子进程执行。
 
 ---
 

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# am.sh - ai-mirror shell function for bash profile
+#
+# This file should be sourced by bash, typically installed to:
+#   - Global: /etc/profile.d/am.sh
+#   - User:   ~/.bashrc or ~/.bash_profile
+#
+# The 'am' function wraps ai-mirror-bin and provides:
+#   - 'cd' command that changes directory in the current shell
+#   - 'cd' to AI user project via SSH with automatic user detection
+#   - Pass-through for all other commands
+
+# Find the ai-mirror binary
+_AM_BIN="${AI_MIRROR_BIN:-/usr/local/bin/ai-mirror-bin}"
+
+# Cache the main user (detected from SUDO_USER or current user)
+_am_get_main_user() {
+	if [[ -n "${SUDO_USER:-}" ]]; then
+		echo "$SUDO_USER"
+	else
+		whoami
+	fi
+}
+
+# Validate path is under HOME or /home
+_am_validate_path() {
+	local path="$1"
+	local home="${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
+
+	if [[ "$path" == "$home"* ]] || [[ "$path" == /home/* ]]; then
+		return 0
+	fi
+	return 1
+}
+
+# Validate AI username format: {prefix}{main_user}_{hash}
+# Default prefix is 'i', so username starts with 'i' followed by main_user
+_am_validate_ai_user() {
+	local user="$1"
+	local main_user="$2"
+
+	# AI user format: {prefix}{main_user}_{hash}
+	# Must start with prefix (default 'i') followed by main_user and underscore
+	if [[ "$user" == i"${main_user}"_* ]]; then
+		return 0
+	fi
+	return 1
+}
+
+# Parse key=value output from ai-mirror-bin cd command
+_am_parse_output() {
+	local output="$1"
+	local key="$2"
+
+	# Use || true to prevent grep failure from causing script exit (set -e)
+	echo "$output" | grep "^${key}=" | cut -d= -f2- || true
+}
+
+# Main am function
+am() {
+	# Check binary exists
+	if [[ ! -x "$_AM_BIN" ]]; then
+		echo "error: $_AM_BIN not found or not executable" >&2
+		return 1
+	fi
+
+	# Special handling for 'cd' command
+	if [[ "${1:-}" == "cd" ]]; then
+		shift
+
+		# Get output from ai-mirror-bin cd
+		local output
+		local ret=0
+
+		if [[ "$(id -u)" -eq 0 ]]; then
+			output=$("$_AM_BIN" cd "$@") || ret=$?
+		else
+			output=$(sudo --preserve-env=HOME "$_AM_BIN" cd "$@") || ret=$?
+		fi
+
+		if [[ $ret -ne 0 ]]; then
+			echo "$output"
+			return $ret
+		fi
+
+		# Parse output
+		local action user path
+		action=$(_am_parse_output "$output" "action")
+		user=$(_am_parse_output "$output" "user")
+		path=$(_am_parse_output "$output" "path")
+
+		case "$action" in
+		ssh)
+			# Validate path and user before executing
+			if [[ -z "$path" ]]; then
+				echo "error: empty path from am cd" >&2
+				return 1
+			fi
+			if ! _am_validate_path "$path"; then
+				echo "error: invalid path from am cd: '$path' (must be under \$HOME or /home)" >&2
+				return 1
+			fi
+			if [[ -z "$user" ]]; then
+				echo "error: empty user from am cd" >&2
+				return 1
+			fi
+			local main_user
+			main_user=$(_am_get_main_user)
+			if ! _am_validate_ai_user "$user" "$main_user"; then
+				echo "error: invalid AI user from am cd: '$user' (expected format: i${main_user}_<hash>)" >&2
+				return 1
+			fi
+
+			# SSH to AI user (exit returns to this shell)
+			ssh "${user}@localhost" -t "cd '${path}'"
+			;;
+		cd)
+			# Validate path
+			if [[ -z "$path" ]]; then
+				echo "error: empty path from am cd" >&2
+				return 1
+			fi
+			if ! _am_validate_path "$path"; then
+				echo "error: invalid path from am cd: '$path' (must be under \$HOME or /home)" >&2
+				return 1
+			fi
+
+			# Change directory in current shell
+			cd "$path"
+			;;
+		*)
+			echo "error: unknown action from am cd: '$action'" >&2
+			return 1
+			;;
+		esac
+		return 0
+	fi
+
+	# All other commands: pass through to ai-mirror-bin
+	if [[ "$(id -u)" -eq 0 ]]; then
+		"$_AM_BIN" "$@"
+	else
+		sudo --preserve-env=HOME "$_AM_BIN" "$@"
+	fi
+}
+
+# Export the function so it's available in subshells
+export -f am
+export -f _am_get_main_user
+export -f _am_validate_path
+export -f _am_validate_ai_user
+export -f _am_parse_output

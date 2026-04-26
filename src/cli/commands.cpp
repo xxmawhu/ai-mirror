@@ -82,9 +82,10 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    auto grp_result = utils::exec_safe({"usermod", "-aG", user_info.username, main_user});
+    // Add AI user to main_user's group for group-based traverse
+    auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, user_info.username});
     if (grp_result.exit_code != 0) {
-        utils::get_logger()->warn("Failed to add {} to group {}: {}", main_user, user_info.username, grp_result.stderr_output);
+        utils::get_logger()->warn("Failed to add {} to {} group: {}", user_info.username, main_user, grp_result.stderr_output);
     }
 
     {
@@ -99,11 +100,28 @@ int cmd_create(const std::string& project_path, bool verbose) {
         for (auto& d : dirs_to_fix) {
             std::error_code ec;
             auto perms = fs::status(d, ec).permissions();
-            if (!ec && (perms & fs::perms::others_exec) == fs::perms::none) {
-                fs::permissions(d, perms | fs::perms::others_exec, ec);
-                if (!ec) {
-                    utils::get_logger()->info("Added o+x to {}", d.string());
+            if (ec) continue;
+            // Ensure group is main_user's group and add g+x (not o+x, protects privacy)
+            if ((perms & fs::perms::group_exec) == fs::perms::none) {
+                // Set group owner to main_user so AI user (in main_user's group) can traverse
+                auto chgrp = utils::exec_safe({"chgrp", main_user, d.string()});
+                if (chgrp.exit_code == 0) {
+                    fs::permissions(d, perms | fs::perms::group_exec, ec);
+                    if (!ec) {
+                        utils::get_logger()->info("Added g+x to {} (group traverse for {})", d.string(), main_user);
+                    }
+                } else {
+                    utils::get_logger()->warn("Failed to chgrp {} to {}: {}", d.string(), main_user, chgrp.stderr_output);
                 }
+            }
+        }
+        // Warn if main_user's home has g+w on subdirectories (privacy risk)
+        std::error_code iter_ec;
+        for (const auto& entry : fs::directory_iterator(home, iter_ec)) {
+            if (!entry.is_directory()) continue;
+            auto ep = entry.status().permissions();
+            if ((ep & fs::perms::group_write) != fs::perms::none) {
+                utils::get_logger()->warn("main_user home subdirectory has g+w: {} (consider tightening permissions)", entry.path().string());
             }
         }
     }
@@ -1044,8 +1062,7 @@ int cmd_status([[maybe_unused]] bool verbose) {
 
 int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
     auto ctx = make_context(verbose);
-    std::string main_user = utils::get_effective_username();
-
+    
     auto target_opt = core::PathResolver::resolve(path);
     if (!target_opt) {
         std::cerr << "Cannot resolve path: " << path << std::endl;
@@ -1063,15 +1080,85 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
         return 1;
     }
 
+    std::string main_user = state->main_user.empty() 
+        ? utils::get_effective_username() 
+        : state->main_user;
     std::string username = state->username;
     std::string home_dir = state->home_dir;
     int fixes = 0;
 
-    auto grp_result = utils::exec_safe({"usermod", "-aG", username, main_user});
+    {
+        fs::path mhome = utils::get_home_dir(main_user);
+        fs::path p = fs::absolute(proj);
+        std::vector<fs::path> dirs_to_fix;
+        while (p.has_parent_path() && p != mhome && !p.empty()) {
+            p = p.parent_path();
+            if (p == mhome) break;
+            dirs_to_fix.push_back(p);
+        }
+        for (auto& d : dirs_to_fix) {
+            std::error_code ec;
+            auto perms = fs::status(d, ec).permissions();
+            if (ec) continue;
+            // Use group-based traverse (g+x) instead of o+x to protect privacy
+            if ((perms & fs::perms::group_exec) == fs::perms::none) {
+                auto chgrp = utils::exec_safe({"chgrp", main_user, d.string()});
+                if (chgrp.exit_code == 0) {
+                    fs::permissions(d, perms | fs::perms::group_exec, ec);
+                    if (!ec) {
+                        utils::get_logger()->info("Added g+x to {} (group traverse for {})", d.string(), main_user);
+                        fixes++;
+                    }
+                } else {
+                    utils::get_logger()->warn("Failed to chgrp {} to {}: {}", d.string(), main_user, chgrp.stderr_output);
+                }
+            }
+        }
+        // Warn if main_user's home has g+w on subdirectories (privacy risk)
+        std::error_code iter_ec;
+        for (const auto& entry : fs::directory_iterator(mhome, iter_ec)) {
+            if (!entry.is_directory()) continue;
+            auto ep = entry.status().permissions();
+            if ((ep & fs::perms::group_write) != fs::perms::none) {
+                utils::get_logger()->warn("main_user home subdirectory has g+w: {} (consider tightening permissions)", entry.path().string());
+            }
+        }
+    }
+
+    {
+        std::error_code ec;
+        auto hp = fs::status(home_dir, ec);
+        if (!ec && (hp.permissions() & (fs::perms::set_gid)) != fs::perms::none) {
+            utils::get_logger()->info("Clearing setgid on {} (will be re-applied by grant_write_access if needed)", home_dir);
+        }
+    }
+
+    {
+        fs::path passwd_home = utils::get_home_dir(main_user);
+        std::string env_home = utils::get_effective_home();
+        if (!passwd_home.empty() && !env_home.empty() && passwd_home != env_home) {
+            fs::path old_ssh = passwd_home / ".ssh";
+            fs::path new_ssh = fs::path(env_home) / ".ssh";
+            std::error_code ec;
+            if (fs::exists(new_ssh) && !fs::exists(old_ssh, ec)) {
+                fs::create_symlink(new_ssh, old_ssh, ec);
+                if (!ec) {
+                    auto chown_r = utils::exec_safe({"chown", "-h", main_user + ":" + main_user, old_ssh.string()});
+                    if (chown_r.exit_code == 0) {
+                        utils::get_logger()->info("Created symlink {} -> {}", old_ssh.string(), new_ssh.string());
+                        fixes++;
+                    }
+                }
+            }
+        }
+    }
+
+    // Add AI user to main_user's group for group-based traverse (not the reverse)
+    auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, username});
     if (grp_result.exit_code == 0) {
         fixes++;
     } else {
-        utils::get_logger()->warn("Failed to add {} to group {}: {}", main_user, username, grp_result.stderr_output);
+        utils::get_logger()->warn("Failed to add {} to {} group: {}", username, main_user, grp_result.stderr_output);
     }
 
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
@@ -1136,6 +1223,18 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
 
     if (!ctx.graft->grant_write_access(proj, username)) {
         utils::get_logger()->warn("Failed to grant write access to: {}", proj.string());
+    }
+
+    // Clear setgid on AI home dir after grant_write_access (sshd StrictModes rejects setgid home)
+    {
+        std::error_code ec;
+        auto hp = fs::status(home_dir, ec);
+        if (!ec && (hp.permissions() & fs::perms::set_gid) != fs::perms::none) {
+            fs::permissions(home_dir, hp.permissions() & ~fs::perms::set_gid, ec);
+            if (!ec) {
+                utils::get_logger()->info("Cleared setgid on home_dir {}", home_dir);
+            }
+        }
     }
 
     utils::get_logger()->info("Update complete: {} fix(es) applied for {}", fixes, username);

@@ -14,11 +14,20 @@ tests/
 release.sh
 .dockerignore
 
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+
 # C/C++ build artifacts
 *.o
 *.so
 *.a
 build/
+build-release/
+build-test/
+build-test2/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
@@ -38,8 +47,9 @@ tags
 *.s
 *.i
 data/
-compressedLog
-out
+compressedLog/
+log/
+*.log
 
 # Environment
 .env

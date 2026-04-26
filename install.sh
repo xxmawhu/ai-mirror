@@ -187,6 +187,20 @@ phase_install() {
 
 	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${REAL_BIN_NAME}") bytes)"
 
+	# Install bash profile function (primary method for bash users)
+	log "Installing bash profile function to /etc/profile.d/..."
+	local profile_src="${SCRIPT_DIR}/profile/am.sh"
+	if [[ -f "$profile_src" ]]; then
+		sudo install -d /etc/profile.d
+		sudo install -m 0644 "$profile_src" /etc/profile.d/am.sh
+		# Update the binary path in the profile function
+		sudo sed -i "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|g" /etc/profile.d/am.sh
+		log "  /etc/profile.d/am.sh (bash function)"
+	else
+		warn "  profile/am.sh not found, skipping profile function install"
+	fi
+
+	# Install wrapper script (fallback for non-bash shells, subshells, scripts)
 	log "Installing 'am' wrapper to ${PREFIX}/bin/..."
 	local wrapper_src="${SCRIPT_DIR}/docker/am-wrapper.sh"
 	if [[ ! -f "$wrapper_src" ]]; then
@@ -199,6 +213,8 @@ phase_install() {
 	else
 		sudo tee "${PREFIX}/bin/${WRAPPER_NAME}" >/dev/null <<WRAPPER
 #!/usr/bin/env bash
+# am wrapper - fallback for non-bash shells, subshells, and scripts
+# For interactive bash shells, use the profile function: source /etc/profile.d/am.sh
 set -euo pipefail
 AM_BIN="${PREFIX}/bin/${REAL_BIN_NAME}"
 if [ ! -x "\$AM_BIN" ]; then
@@ -206,11 +222,16 @@ if [ ! -x "\$AM_BIN" ]; then
     exit 1
 fi
 
+# Note: 'am cd' from wrapper script cannot change caller's shell directory
+# because wrapper runs as subprocess. For interactive cd, use:
+#   source /etc/profile.d/am.sh  # load the am() function
+#   am cd <path>                  # changes directory in current shell
+
 # Security: validate parsed output before use.  The wrapper parses output from
 # the C++ binary (run via sudo) and passes it to ssh/cd.  A compromised or
 # buggy binary could emit injected values.  These guards ensure:
 # - path must start with \$HOME or /home/ (prevent arbitrary directory access)
-# - user must start with ai- (prevent SSH to arbitrary users)
+# - user must match AI user format (prevent SSH to arbitrary users)
 if [ "\${1:-}" = "cd" ]; then
     shift
     output=\$(sudo --preserve-env=HOME "\$AM_BIN" cd "\$@")
@@ -222,8 +243,11 @@ if [ "\${1:-}" = "cd" ]; then
             echo "error: invalid path from am cd: '\$path'" >&2
             exit 1
         fi
-        if ! echo "\$user" | grep -qE '^ai-'; then
-            echo "error: invalid user from am cd: '\$user' (must start with ai-)" >&2
+        # Validate AI user format: {prefix}{main_user}_{hash}
+        # Default prefix is 'i', so user starts with 'i' followed by main_user
+        main_user=\${SUDO_USER:-\$(whoami)}
+        if ! echo "\$user" | grep -qE "^i\${main_user}"; then
+            echo "error: invalid AI user from am cd: '\$user' (expected i\${main_user}_<hash>)" >&2
             exit 1
         fi
         exec ssh "\${user}@localhost" -t "cd '\${path}'"
@@ -233,7 +257,13 @@ if [ "\${1:-}" = "cd" ]; then
             echo "error: invalid path from am cd: '\$path'" >&2
             exit 1
         fi
-        echo "cd '\${path}'"
+        # Wrapper cannot change caller's directory - output instruction instead
+        echo "NOTE: 'am cd' from wrapper script cannot change your shell directory."
+        echo "      For interactive cd, source the profile function first:"
+        echo "        source /etc/profile.d/am.sh"
+        echo "        am cd '\${path}'"
+        echo ""
+        echo "To change directory now, run: cd '\${path}'"
     else
         echo "error: unknown action from am cd" >&2
         exit 1
@@ -308,7 +338,8 @@ phase_summary() {
 	separator
 	log ""
 	log "Installed:"
-	log "  ${PREFIX}/bin/${WRAPPER_NAME}       (wrapper, auto-invokes sudo)"
+	log "  /etc/profile.d/am.sh       (bash function, sourced on login)"
+	log "  ${PREFIX}/bin/${WRAPPER_NAME}       (wrapper, fallback for scripts)"
 	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  (actual binary)"
 	log ""
 	log "Data directory:"
@@ -319,11 +350,15 @@ phase_summary() {
 	log ""
 	log "Quick start:"
 	log "  1. Add user to group:     sudo usermod -aG ai-mirror \$USER"
-	log "  2. Create project user:   am create /path/to/project"
-	log "  3. Grant write access:    am mkdir /path/to/dir <ai-user>"
-	log "  4. Create file:           am touch /path/to/file <ai-user>"
-	log "  5. List users:            am list"
-	log "  6. Remove project:        am rm /path/to/project"
+	log "  2. (new login) source the profile function: source /etc/profile.d/am.sh"
+	log "  3. Create project user:   am create /path/to/project"
+	log "  4. Change directory:      am cd /path/to/project   (changes current shell)"
+	log "  5. Grant write access:    am mkdir /path/to/dir <ai-user>"
+	log "  6. List users:            am list"
+	log "  7. Remove project:        am rm /path/to/project"
+	log ""
+	log "Note: 'am cd' from bash function changes directory in current shell."
+	log "      'am cd' from wrapper script cannot change caller's directory."
 	log ""
 	log "Uninstall:"
 	log "  bash ${SCRIPT_DIR}/install.sh --clean"
@@ -345,6 +380,11 @@ phase_clean() {
 	if sudo test -f "${PREFIX}/bin/${WRAPPER_NAME}"; then
 		sudo rm -f "${PREFIX}/bin/${WRAPPER_NAME}"
 		log "  Removed ${PREFIX}/bin/${WRAPPER_NAME}"
+	fi
+
+	if sudo test -f /etc/profile.d/am.sh; then
+		sudo rm -f /etc/profile.d/am.sh
+		log "  Removed /etc/profile.d/am.sh"
 	fi
 
 	if sudo test -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then

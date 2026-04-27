@@ -88,6 +88,7 @@ am() {
 		action=$(_am_parse_output "$output" "action")
 		user=$(_am_parse_output "$output" "user")
 		path=$(_am_parse_output "$output" "path")
+		ssh_key=$(_am_parse_output "$output" "key")
 
 		# Print debug/info lines for troubleshooting (stderr to avoid interfering with parse)
 		echo "$output" | grep -E "^debug=|^WARNING:" >&2 || true
@@ -114,8 +115,16 @@ am() {
 				return 1
 			fi
 
-			# SSH to AI user (exit returns to this shell)
-			ssh "${user}@localhost" -t "cd '${path}'"
+			# SSH to AI user using dedicated key (exit returns to this shell)
+			if [[ -z "$ssh_key" ]]; then
+				echo "error: no SSH key path from am cd" >&2
+				return 1
+			fi
+			if [[ ! -f "$ssh_key" ]]; then
+				echo "error: SSH key missing: $ssh_key. Run 'am update' first." >&2
+				return 1
+			fi
+			ssh -i "$ssh_key" -o IdentitiesOnly=yes "${user}@localhost" -t "cd '${path}'"
 			;;
 		cd)
 			# Validate path

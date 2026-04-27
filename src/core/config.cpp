@@ -13,6 +13,20 @@ namespace ai_mirror::core {
 
 static constexpr size_t MAX_CONFIG_SIZE = 1048576;
 
+// Detect existing standard SSH key, return path if found, empty otherwise
+static fs::path detect_existing_ssh_key(const fs::path& ssh_dir) {
+    // Priority: ed25519 > rsa > ecdsa
+    std::vector<std::string> standard_keys = {"id_ed25519", "id_rsa", "id_ecdsa"};
+    std::error_code ec;
+    for (const auto& key : standard_keys) {
+        fs::path key_path = ssh_dir / key;
+        if (fs::exists(key_path, ec) && !ec) {
+            return key_path;
+        }
+    }
+    return {};
+}
+
 static bool validate_config_file_security(const fs::path& p) {
     struct stat st;
     if (lstat(p.c_str(), &st) != 0) {
@@ -131,7 +145,16 @@ Config ConfigParser::load(const fs::path& config_path) {
                 if (ssh.as_table().contains("key_path")) {
                     config.ssh.key_path = expand_path(toml::get<std::string>(ssh["key_path"]));
                 } else {
-                    config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
+                    // Auto-detect: prefer existing standard key, fallback to ai-mirror
+                    fs::path ssh_dir = fs::path(utils::get_effective_home()) / ".ssh";
+                    fs::path detected = detect_existing_ssh_key(ssh_dir);
+                    if (!detected.empty()) {
+                        config.ssh.key_path = detected;
+                        utils::get_logger()->info("Auto-detected SSH key: {}", detected.string());
+                    } else {
+                        config.ssh.key_path = ssh_dir / "ai-mirror";
+                        utils::get_logger()->info("No standard SSH key found, will use: {}", config.ssh.key_path.string());
+                    }
                 }
                 if (ssh.as_table().contains("ai_default_key")) {
                     config.ssh.ai_default_key = expand_path(toml::get<std::string>(ssh["ai_default_key"]));
@@ -207,7 +230,9 @@ Config ConfigParser::load_default() {
             utils::get_logger()->error("Config file security validation failed, using defaults");
             Config config;
             config.config_path = default_path;
-            config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
+            fs::path ssh_dir = fs::path(utils::get_effective_home()) / ".ssh";
+            fs::path detected = detect_existing_ssh_key(ssh_dir);
+            config.ssh.key_path = detected.empty() ? (ssh_dir / "ai-mirror") : detected;
             config.loaded = false;
             return config;
         }
@@ -216,7 +241,11 @@ Config ConfigParser::load_default() {
 
     Config config;
     config.config_path = default_path;
-    config.ssh.key_path = fs::path(utils::get_effective_home()) / ".ssh" / "ai-mirror";
+    {
+        fs::path ssh_dir = fs::path(utils::get_effective_home()) / ".ssh";
+        fs::path detected = detect_existing_ssh_key(ssh_dir);
+        config.ssh.key_path = detected.empty() ? (ssh_dir / "ai-mirror") : detected;
+    }
     config.loaded = false;
 
     return config;

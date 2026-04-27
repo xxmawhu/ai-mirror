@@ -158,16 +158,16 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
 
     // Check if authorized_keys exists AND contains current user's public key
     fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
+    fs::path key_pub = fs::path(ctx.config.ssh.key_path.string() + ".pub");
     bool need_ssh_fix = false;
     if (!fs::exists(auth_keys)) {
         need_ssh_fix = true;
         utils::get_logger()->info("authorized_keys missing for {}", username);
     } else {
-        // Check if authorized_keys contains current user's public key
-        fs::path main_pub = fs::path(utils::get_home_dir(main_user)) / ".ssh" / "id_ed25519.pub";
+        // Check if authorized_keys contains the key_path's public key
         bool key_found = false;
-        if (fs::exists(main_pub)) {
-            std::ifstream pub_file(main_pub);
+        if (fs::exists(key_pub)) {
+            std::ifstream pub_file(key_pub);
             std::string pub_key_line;
             if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
                 // Extract the base64 key body (second field) for exact matching
@@ -955,6 +955,7 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
         std::cout << "action=ssh" << std::endl;
         std::cout << "user=" << ai_user << std::endl;
         std::cout << "path=" << target_str << std::endl;
+        std::cout << "key=" << config.ssh.key_path.string() << std::endl;
 
         // Debug line for SSH troubleshooting
         {

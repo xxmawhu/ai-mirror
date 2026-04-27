@@ -53,6 +53,181 @@ static CommandContext make_context(bool verbose) {
     return ctx;
 }
 
+static int do_configure(CommandContext& ctx, const core::UserInfo& state,
+                        const fs::path& proj, const std::string& main_user) {
+    std::string username = state.username;
+    std::string home_dir = state.home_dir;
+    int fixes = 0;
+
+    {
+        fs::path mhome = utils::get_home_dir(main_user);
+        fs::path p = fs::absolute(proj);
+        std::vector<fs::path> dirs_to_fix;
+        while (p.has_parent_path() && p != mhome && !p.empty()) {
+            p = p.parent_path();
+            if (p == mhome) break;
+            dirs_to_fix.push_back(p);
+        }
+        for (auto& d : dirs_to_fix) {
+            std::error_code ec;
+            auto perms = fs::status(d, ec).permissions();
+            if (ec) continue;
+            if ((perms & fs::perms::group_exec) == fs::perms::none) {
+                auto chgrp = utils::exec_safe({"chgrp", main_user, d.string()});
+                if (chgrp.exit_code == 0) {
+                    fs::permissions(d, perms | fs::perms::group_exec, ec);
+                    if (!ec) {
+                        utils::get_logger()->info("Added g+x to {} (group traverse for {})", d.string(), main_user);
+                        fixes++;
+                    }
+                } else {
+                    utils::get_logger()->warn("Failed to chgrp {} to {}: {}", d.string(), main_user, chgrp.stderr_output);
+                }
+            }
+        }
+        std::error_code iter_ec;
+        for (const auto& entry : fs::directory_iterator(mhome, iter_ec)) {
+            if (!entry.is_directory()) continue;
+            std::error_code ec;
+            auto ep = entry.status(ec).permissions();
+            if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
+                fs::permissions(entry.path(), ep & ~fs::perms::group_write, ec);
+                if (!ec) {
+                    utils::get_logger()->info("Removed g+w from {} (privacy protection)", entry.path().string());
+                    fixes++;
+                } else {
+                    utils::get_logger()->warn("Failed to remove g+w from {}: {}", entry.path().string(), ec.message());
+                }
+            }
+        }
+    }
+
+    {
+        std::error_code ec;
+        auto hp = fs::status(home_dir, ec);
+        if (!ec && (hp.permissions() & (fs::perms::set_gid)) != fs::perms::none) {
+            utils::get_logger()->info("Clearing setgid on {} (will be re-applied by grant_write_access if needed)", home_dir);
+        }
+    }
+
+    {
+        fs::path passwd_home = utils::get_home_dir(main_user);
+        std::string env_home = utils::get_effective_home();
+        if (!passwd_home.empty() && !env_home.empty() && passwd_home != env_home) {
+            fs::path old_ssh = passwd_home / ".ssh";
+            fs::path new_ssh = fs::path(env_home) / ".ssh";
+            std::error_code ec;
+            if (fs::exists(new_ssh) && !fs::exists(old_ssh, ec)) {
+                fs::create_symlink(new_ssh, old_ssh, ec);
+                if (!ec) {
+                    auto chown_r = utils::exec_safe({"chown", "-h", main_user + ":" + main_user, old_ssh.string()});
+                    if (chown_r.exit_code == 0) {
+                        utils::get_logger()->info("Created symlink {} -> {}", old_ssh.string(), new_ssh.string());
+                        fixes++;
+                    }
+                }
+            }
+        }
+    }
+
+    auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, username});
+    if (grp_result.exit_code == 0) {
+        fixes++;
+    } else {
+        utils::get_logger()->warn("Failed to add {} to {} group: {}", username, main_user, grp_result.stderr_output);
+    }
+
+    ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
+    ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
+
+    fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
+    if (!fs::exists(auth_keys)) {
+        utils::get_logger()->info("Fixing SSH: setup_passwordless for {}", username);
+        if (ctx.ssh_mgr->setup_passwordless(main_user, username)) {
+            fixes++;
+        } else {
+            utils::get_logger()->warn("Failed to fix SSH for {}", username);
+        }
+    }
+
+    if (!ctx.config.ssh.ai_default_key.empty()) {
+        ctx.ssh_mgr->setup_default_key_from_file(username, ctx.config.ssh.ai_default_key);
+    }
+
+    ctx.graft->invalidate_cache();
+    auto existing = ctx.graft->list_mounts(username);
+
+    std::set<std::string> configured_targets;
+    for (const auto& mount_path : ctx.config.mount.paths) {
+        auto source_opt = core::PathResolver::resolve(mount_path.string());
+        if (!source_opt) continue;
+        fs::path source = *source_opt;
+        if (!fs::exists(source)) continue;
+        fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
+        configured_targets.insert(target.string());
+    }
+
+    for (const auto& m : existing) {
+        if (!configured_targets.count(m.target.string())) {
+            utils::get_logger()->info("Cleaning stale/duplicate mount: {}", m.target.string());
+            auto umount_result = utils::exec_safe({"umount", m.target.string()});
+            if (umount_result.exit_code != 0) {
+                utils::get_logger()->warn("Failed to umount {}: {}", m.target.string(), umount_result.stderr_output);
+            } else {
+                fixes++;
+            }
+        }
+    }
+
+    int dup_cleaned = ctx.graft->cleanup_duplicate_mounts(username);
+    if (dup_cleaned > 0) {
+        fixes += dup_cleaned;
+        utils::get_logger()->info("Cleaned {} duplicate mount(s) for {}", dup_cleaned, username);
+    }
+
+    int mount_failures = 0;
+    for (const auto& mount_path : ctx.config.mount.paths) {
+        auto source_opt = core::PathResolver::resolve(mount_path.string());
+        if (!source_opt) continue;
+        fs::path source = *source_opt;
+        if (!fs::exists(source)) continue;
+        if (!utils::is_path_allowed(source, main_user)) continue;
+
+        fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
+        if (ctx.graft->is_mounted(target)) continue;
+
+        utils::get_logger()->info("Fixing mount: {} -> {}", source.string(), target.string());
+        if (ctx.graft->bind_mount(source, target, true, state.uid, state.gid)) {
+            fixes++;
+        } else {
+            mount_failures++;
+            utils::get_logger()->warn("Failed to mount {} -> {}", source.string(), target.string());
+        }
+    }
+
+    if (mount_failures > 0) {
+        utils::get_logger()->warn("do_configure completed with {} mount failure(s)", mount_failures);
+    }
+
+    if (!ctx.graft->grant_write_access(proj, username)) {
+        utils::get_logger()->warn("Failed to grant write access to: {}", proj.string());
+    }
+
+    {
+        std::error_code ec;
+        auto hp = fs::status(home_dir, ec);
+        if (!ec && (hp.permissions() & fs::perms::set_gid) != fs::perms::none) {
+            fs::permissions(home_dir, hp.permissions() & ~fs::perms::set_gid, ec);
+            if (!ec) {
+                utils::get_logger()->info("Cleared setgid on home_dir {}", home_dir);
+            }
+        }
+    }
+
+    utils::get_logger()->info("Configure complete: {} fix(es) applied for {}", fixes, username);
+    return mount_failures > 0 ? 1 : 0;
+}
+
 int cmd_create(const std::string& project_path, bool verbose) {
     auto ctx = make_context(verbose);
 
@@ -82,121 +257,13 @@ int cmd_create(const std::string& project_path, bool verbose) {
         return 1;
     }
 
-    // Add AI user to main_user's group for group-based traverse
-    auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, user_info.username});
-    if (grp_result.exit_code != 0) {
-        utils::get_logger()->warn("Failed to add {} to {} group: {}", user_info.username, main_user, grp_result.stderr_output);
-    }
-
-    {
-        fs::path home = utils::get_home_dir(main_user);
-        fs::path p = fs::absolute(proj);
-        std::vector<fs::path> dirs_to_fix;
-        while (p.has_parent_path() && p != home && !p.empty()) {
-            p = p.parent_path();
-            if (p == home) break;
-            dirs_to_fix.push_back(p);
-        }
-        for (auto& d : dirs_to_fix) {
-            std::error_code ec;
-            auto perms = fs::status(d, ec).permissions();
-            if (ec) continue;
-            // Ensure group is main_user's group and add g+x (not o+x, protects privacy)
-            if ((perms & fs::perms::group_exec) == fs::perms::none) {
-                // Set group owner to main_user so AI user (in main_user's group) can traverse
-                auto chgrp = utils::exec_safe({"chgrp", main_user, d.string()});
-                if (chgrp.exit_code == 0) {
-                    fs::permissions(d, perms | fs::perms::group_exec, ec);
-                    if (!ec) {
-                        utils::get_logger()->info("Added g+x to {} (group traverse for {})", d.string(), main_user);
-                    }
-                } else {
-                    utils::get_logger()->warn("Failed to chgrp {} to {}: {}", d.string(), main_user, chgrp.stderr_output);
-                }
-            }
-        }
-        // Fix g+w on main_user's home subdirectories (privacy risk)
-        std::error_code iter_ec;
-        for (const auto& entry : fs::directory_iterator(home, iter_ec)) {
-            if (!entry.is_directory()) continue;
-            std::error_code ec;
-            auto ep = entry.status(ec).permissions();
-            if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
-                fs::permissions(entry.path(), ep & ~fs::perms::group_write, ec);
-                if (!ec) {
-                    utils::get_logger()->info("Removed g+w from {} (privacy protection)", entry.path().string());
-                } else {
-                    utils::get_logger()->warn("Failed to remove g+w from {}: {}", entry.path().string(), ec.message());
-                }
-            }
-        }
-    }
-
-    int mount_failures = 0;
-
-    ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
-    ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
-
-    if (!ctx.ssh_mgr->setup_passwordless(main_user, user_info.username)) {
-        std::cerr << "Error: SSH setup failed, aborting" << std::endl;
-        ctx.user_mgr->remove_ai_user(user_info.username, true);
-        return 1;
-    }
-
-    if (!ctx.config.ssh.ai_default_key.empty()) {
-        if (!ctx.ssh_mgr->setup_default_key_from_file(user_info.username, ctx.config.ssh.ai_default_key)) {
-            utils::get_logger()->warn("Failed to authorize default key for {}", user_info.username);
-        }
-    }
-
-    // Ensure mount cache is fresh before bind mount loop
-    ctx.graft->invalidate_cache();
-
-    // Pre-cleanup any duplicate mounts from previous failed/incomplete operations
-    ctx.graft->cleanup_duplicate_mounts(user_info.username);
-
-    for (const auto& mount_path : ctx.config.mount.paths) {
-        auto source_opt = core::PathResolver::resolve(mount_path.string());
-        if (!source_opt) {
-            utils::get_logger()->warn("Invalid mount path, skipping: {}", mount_path.string());
-            continue;
-        }
-        fs::path source = *source_opt;
-        if (!fs::exists(source)) {
-            utils::get_logger()->warn("Mount source does not exist, skipping: {}", source.string());
-            continue;
-        }
-
-        if (!utils::is_path_allowed(source, main_user)) {
-            utils::get_logger()->error("Mount source path not allowed, skipping: {}", source.string());
-            continue;
-        }
-
-        fs::path target = core::PathResolver::to_ai_user_path(source, user_info.username, main_user, user_info.home_dir);
-
-        // Skip if already mounted (defensive check, same pattern as cmd_update)
-        if (ctx.graft->is_mounted(target)) {
-            utils::get_logger()->info("Target already mounted, skipping: {}", target.string());
-            continue;
-        }
-
-        if (!ctx.graft->bind_mount(source, target, true, user_info.uid, user_info.gid)) {
-            mount_failures++;
-            utils::get_logger()->error("Mount failed: {} -> {}", source.string(), target.string());
-        }
-    }
-
-    if (mount_failures > 0) {
-        utils::get_logger()->warn("cmd_create completed with {} mount failure(s)", mount_failures);
-        return 1;
-    }
-
-    if (!ctx.graft->grant_write_access(proj, user_info.username)) {
-        utils::get_logger()->warn("Failed to grant write access to project: {}", proj.string());
+    int rc = do_configure(ctx, user_info, proj, main_user);
+    if (rc != 0) {
+        utils::get_logger()->warn("Create completed with configuration issues for {}", user_info.username);
     }
 
     std::cout << user_info.username << std::endl;
-    return 0;
+    return rc;
 }
 
 static bool safe_chown_file(const fs::path& p, const std::string& owner) {
@@ -1101,7 +1168,7 @@ int cmd_status([[maybe_unused]] bool verbose) {
 
 int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
     auto ctx = make_context(verbose);
-    
+
     auto target_opt = core::PathResolver::resolve(path);
     if (!target_opt) {
         std::cerr << "Cannot resolve path: " << path << std::endl;
@@ -1119,179 +1186,11 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
         return 1;
     }
 
-    std::string main_user = state->main_user.empty() 
-        ? utils::get_effective_username() 
+    std::string main_user = state->main_user.empty()
+        ? utils::get_effective_username()
         : state->main_user;
-    std::string username = state->username;
-    std::string home_dir = state->home_dir;
-    int fixes = 0;
 
-    {
-        fs::path mhome = utils::get_home_dir(main_user);
-        fs::path p = fs::absolute(proj);
-        std::vector<fs::path> dirs_to_fix;
-        while (p.has_parent_path() && p != mhome && !p.empty()) {
-            p = p.parent_path();
-            if (p == mhome) break;
-            dirs_to_fix.push_back(p);
-        }
-        for (auto& d : dirs_to_fix) {
-            std::error_code ec;
-            auto perms = fs::status(d, ec).permissions();
-            if (ec) continue;
-            // Use group-based traverse (g+x) instead of o+x to protect privacy
-            if ((perms & fs::perms::group_exec) == fs::perms::none) {
-                auto chgrp = utils::exec_safe({"chgrp", main_user, d.string()});
-                if (chgrp.exit_code == 0) {
-                    fs::permissions(d, perms | fs::perms::group_exec, ec);
-                    if (!ec) {
-                        utils::get_logger()->info("Added g+x to {} (group traverse for {})", d.string(), main_user);
-                        fixes++;
-                    }
-                } else {
-                    utils::get_logger()->warn("Failed to chgrp {} to {}: {}", d.string(), main_user, chgrp.stderr_output);
-                }
-            }
-        }
-        // Fix g+w on main_user's home subdirectories (privacy risk)
-        std::error_code iter_ec;
-        for (const auto& entry : fs::directory_iterator(mhome, iter_ec)) {
-            if (!entry.is_directory()) continue;
-            std::error_code ec;
-            auto ep = entry.status(ec).permissions();
-            if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
-                fs::permissions(entry.path(), ep & ~fs::perms::group_write, ec);
-                if (!ec) {
-                    utils::get_logger()->info("Removed g+w from {} (privacy protection)", entry.path().string());
-                    fixes++;
-                } else {
-                    utils::get_logger()->warn("Failed to remove g+w from {}: {}", entry.path().string(), ec.message());
-                }
-            }
-        }
-    }
-
-    {
-        std::error_code ec;
-        auto hp = fs::status(home_dir, ec);
-        if (!ec && (hp.permissions() & (fs::perms::set_gid)) != fs::perms::none) {
-            utils::get_logger()->info("Clearing setgid on {} (will be re-applied by grant_write_access if needed)", home_dir);
-        }
-    }
-
-    {
-        fs::path passwd_home = utils::get_home_dir(main_user);
-        std::string env_home = utils::get_effective_home();
-        if (!passwd_home.empty() && !env_home.empty() && passwd_home != env_home) {
-            fs::path old_ssh = passwd_home / ".ssh";
-            fs::path new_ssh = fs::path(env_home) / ".ssh";
-            std::error_code ec;
-            if (fs::exists(new_ssh) && !fs::exists(old_ssh, ec)) {
-                fs::create_symlink(new_ssh, old_ssh, ec);
-                if (!ec) {
-                    auto chown_r = utils::exec_safe({"chown", "-h", main_user + ":" + main_user, old_ssh.string()});
-                    if (chown_r.exit_code == 0) {
-                        utils::get_logger()->info("Created symlink {} -> {}", old_ssh.string(), new_ssh.string());
-                        fixes++;
-                    }
-                }
-            }
-        }
-    }
-
-    // Add AI user to main_user's group for group-based traverse (not the reverse)
-    auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, username});
-    if (grp_result.exit_code == 0) {
-        fixes++;
-    } else {
-        utils::get_logger()->warn("Failed to add {} to {} group: {}", username, main_user, grp_result.stderr_output);
-    }
-
-    ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
-    ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
-
-    fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
-    if (!fs::exists(auth_keys)) {
-        utils::get_logger()->info("Fixing SSH: setup_passwordless for {}", username);
-        if (ctx.ssh_mgr->setup_passwordless(main_user, username)) {
-            fixes++;
-        } else {
-            utils::get_logger()->warn("Failed to fix SSH for {}", username);
-        }
-    }
-
-    if (!ctx.config.ssh.ai_default_key.empty()) {
-        ctx.ssh_mgr->setup_default_key_from_file(username, ctx.config.ssh.ai_default_key);
-    }
-
-    ctx.graft->invalidate_cache();
-    auto existing = ctx.graft->list_mounts(username);
-
-    std::set<std::string> configured_targets;
-    for (const auto& mount_path : ctx.config.mount.paths) {
-        auto source_opt = core::PathResolver::resolve(mount_path.string());
-        if (!source_opt) continue;
-        fs::path source = *source_opt;
-        if (!fs::exists(source)) continue;
-        fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
-        configured_targets.insert(target.string());
-    }
-
-    for (const auto& m : existing) {
-        if (!configured_targets.count(m.target.string())) {
-            utils::get_logger()->info("Cleaning stale/duplicate mount: {}", m.target.string());
-            auto umount_result = utils::exec_safe({"umount", m.target.string()});
-            if (umount_result.exit_code != 0) {
-                utils::get_logger()->warn("Failed to umount {}: {}", m.target.string(), umount_result.stderr_output);
-            } else {
-                fixes++;
-            }
-        }
-    }
-
-    // Cleanup duplicate mounts (same target mounted multiple times)
-    int dup_cleaned = ctx.graft->cleanup_duplicate_mounts(username);
-    if (dup_cleaned > 0) {
-        fixes += dup_cleaned;
-        utils::get_logger()->info("Cleaned {} duplicate mount(s) for {}", dup_cleaned, username);
-    }
-
-    for (const auto& mount_path : ctx.config.mount.paths) {
-        auto source_opt = core::PathResolver::resolve(mount_path.string());
-        if (!source_opt) continue;
-        fs::path source = *source_opt;
-        if (!fs::exists(source)) continue;
-        if (!utils::is_path_allowed(source, main_user)) continue;
-
-        fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
-        if (ctx.graft->is_mounted(target)) continue;
-
-        utils::get_logger()->info("Fixing mount: {} -> {}", source.string(), target.string());
-        if (ctx.graft->bind_mount(source, target, true, state->uid, state->gid)) {
-            fixes++;
-        } else {
-            utils::get_logger()->warn("Failed to remount {} -> {}", source.string(), target.string());
-        }
-    }
-
-    if (!ctx.graft->grant_write_access(proj, username)) {
-        utils::get_logger()->warn("Failed to grant write access to: {}", proj.string());
-    }
-
-    // Clear setgid on AI home dir after grant_write_access (sshd StrictModes rejects setgid home)
-    {
-        std::error_code ec;
-        auto hp = fs::status(home_dir, ec);
-        if (!ec && (hp.permissions() & fs::perms::set_gid) != fs::perms::none) {
-            fs::permissions(home_dir, hp.permissions() & ~fs::perms::set_gid, ec);
-            if (!ec) {
-                utils::get_logger()->info("Cleared setgid on home_dir {}", home_dir);
-            }
-        }
-    }
-
-    utils::get_logger()->info("Update complete: {} fix(es) applied for {}", fixes, username);
-    return 0;
+    return do_configure(ctx, *state, proj, main_user);
 }
 
 }

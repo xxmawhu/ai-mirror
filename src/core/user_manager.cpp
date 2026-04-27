@@ -119,14 +119,21 @@ UserManager::UserManager(const std::string& prefix) : prefix_(prefix) {}
 
 std::optional<std::string> UserManager::compute_username(const fs::path& project_path, bool check_collision) const {
     std::string stem = project_path.filename().string();
-    std::replace(stem.begin(), stem.end(), '.', '_');
-    std::replace(stem.begin(), stem.end(), '-', '_');
 
     std::string base = prefix_ + utils::get_effective_username() + "_" + stem;
     std::transform(base.begin(), base.end(), base.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
     std::string username = base.substr(0, 32);
+
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error(
+            "Project name '{}' produces invalid username '{}': "
+            "must contain only [a-z0-9_-], no leading digit, max 32 chars. "
+            "Please rename the project directory.",
+            stem, username);
+        return std::nullopt;
+    }
 
     if (check_collision && user_exists(username)) {
         utils::get_logger()->error(
@@ -285,7 +292,8 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
                 return *existing;
             }
         }
-        std::string err = "Username collision for project: " + proj.string();
+        std::string err = "Cannot create valid username for project '" + proj.string()
+            + "': directory name must contain only [a-z0-9_-], no leading digit, max 32 chars";
         return {"", "", "", 0, 0, false, err};
     }
     std::string username = std::move(*username_opt);

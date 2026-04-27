@@ -253,7 +253,7 @@ int cmd_create(const std::string& project_path, bool verbose) {
 
     auto user_info = ctx.user_mgr->create_ai_user(proj.string());
     if (!user_info.exists) {
-        std::cerr << "Failed to create ai-user for " << proj.string() << std::endl;
+        std::cerr << "Failed to create ai-user: " << user_info.error << std::endl;
         return 1;
     }
 

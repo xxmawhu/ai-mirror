@@ -167,7 +167,7 @@ bool validate_username(const std::string& username) {
     if (username.empty() || username.size() > 32) return false;
     if (username[0] >= '0' && username[0] <= '9') return false;
     for (char c : username) {
-        if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '_') return false;
+        if (!(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '_' && c != '-') return false;
     }
     return true;
 }

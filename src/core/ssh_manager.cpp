@@ -519,8 +519,9 @@ bool SSHManager::setup_default_key_from_file(const std::string& ai_user, const f
     }
 
     if (!fs::exists(pub_key_path, ec) || ec) {
-        utils::get_logger()->warn("Default public key file not found: {}", pub_key_path.string());
-        return false;
+        // Gracefully skip if default key file doesn't exist (non-fatal)
+        utils::get_logger()->info("Default public key file not found, skipping: {}", pub_key_path.string());
+        return true;
     }
 
     if (!authorize_key(ai_user, pub_key_path)) {

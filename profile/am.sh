@@ -89,6 +89,9 @@ am() {
 		user=$(_am_parse_output "$output" "user")
 		path=$(_am_parse_output "$output" "path")
 
+		# Print debug/info lines for troubleshooting (stderr to avoid interfering with parse)
+		echo "$output" | grep -E "^debug=|^WARNING:" >&2 || true
+
 		case "$action" in
 		ssh)
 			# Validate path and user before executing

@@ -328,8 +328,9 @@ bool SSHManager::ensure_ssh_dir(const std::string& username) {
         }
     }
 
-    if (need_chown) {
-        auto chown_r = utils::exec_safe({"chown", username + ":" + username, ssh_dir.string()});
+    if (need_chown && pw) {
+        std::string uid_gid = std::to_string(pw->pw_uid) + ":" + std::to_string(pw->pw_gid);
+        auto chown_r = utils::exec_safe({"chown", uid_gid, ssh_dir.string()});
         if (chown_r.exit_code != 0) {
             utils::get_logger()->error("chown .ssh failed for {}: {}", username, chown_r.stderr_output);
         }
@@ -394,7 +395,11 @@ bool SSHManager::authorize_key(const std::string& username, const fs::path& publ
         return false;
     }
 
-    utils::exec_safe({"chown", username + ":" + username, auth_keys.string()});
+    struct passwd* pw = getpwnam(username.c_str());
+    if (pw) {
+        std::string uid_gid = std::to_string(pw->pw_uid) + ":" + std::to_string(pw->pw_gid);
+        utils::exec_safe({"chown", uid_gid, auth_keys.string()});
+    }
     auto chmod_r = utils::exec_safe({"chmod", "600", auth_keys.string()});
     if (chmod_r.exit_code != 0) {
         utils::get_logger()->error("chmod 600 authorized_keys failed for {}", username);
@@ -448,7 +453,11 @@ bool SSHManager::authorize_public_key_string(const std::string& username, const 
         return false;
     }
 
-    utils::exec_safe({"chown", username + ":" + username, auth_keys.string()});
+    struct passwd* pw2 = getpwnam(username.c_str());
+    if (pw2) {
+        std::string uid_gid2 = std::to_string(pw2->pw_uid) + ":" + std::to_string(pw2->pw_gid);
+        utils::exec_safe({"chown", uid_gid2, auth_keys.string()});
+    }
     auto chmod_r = utils::exec_safe({"chmod", "600", auth_keys.string()});
     if (chmod_r.exit_code != 0) {
         utils::get_logger()->error("chmod 600 failed for {}", username);

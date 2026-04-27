@@ -120,10 +120,17 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
             if (fs::exists(new_ssh) && !fs::exists(old_ssh, ec)) {
                 fs::create_symlink(new_ssh, old_ssh, ec);
                 if (!ec) {
-                    auto chown_r = utils::exec_safe({"chown", "-h", main_user + ":" + main_user, old_ssh.string()});
-                    if (chown_r.exit_code == 0) {
-                        utils::get_logger()->info("Created symlink {} -> {}", old_ssh.string(), new_ssh.string());
-                        fixes++;
+                    struct passwd* main_pw = getpwnam(main_user.c_str());
+                    if (!main_pw) {
+                        utils::get_logger()->warn("Cannot resolve uid for main user '{}'", main_user);
+                    } else {
+                        auto chown_r = utils::exec_safe({"chown", "-h",
+                            std::to_string(main_pw->pw_uid) + ":" + std::to_string(main_pw->pw_gid),
+                            old_ssh.string()});
+                        if (chown_r.exit_code == 0) {
+                            utils::get_logger()->info("Created symlink {} -> {}", old_ssh.string(), new_ssh.string());
+                            fixes++;
+                        }
                     }
                 }
             }

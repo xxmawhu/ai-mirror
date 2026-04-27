@@ -144,6 +144,15 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         utils::get_logger()->warn("Failed to add {} to {} group: {}", username, main_user, grp_result.stderr_output);
     }
 
+    // Add main_user to ai_user's group for file access
+    auto grp_result2 = utils::exec_safe({"usermod", "-aG", username, main_user});
+    if (grp_result2.exit_code == 0) {
+        fixes++;
+        std::cout << "newgrp=" << username << std::endl;
+    } else {
+        utils::get_logger()->warn("Failed to add {} to {} group: {}", main_user, username, grp_result2.stderr_output);
+    }
+
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 

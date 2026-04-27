@@ -141,9 +141,29 @@ am() {
 
 	# All other commands: pass through to ai-mirror-bin
 	if [[ "$(id -u)" -eq 0 ]]; then
-		"$_AM_BIN" "$@"
+		local cmd_output
+		cmd_output=$("$_AM_BIN" "$@" 2>&1)
+		local cmd_ret=$?
+		echo "$cmd_output"
+		# Hint for newgrp if group membership changed
+		local newgrp_hint
+		newgrp_hint=$(echo "$cmd_output" | grep "^newgrp=" | cut -d= -f2- || true)
+		if [[ -n "$newgrp_hint" ]]; then
+			echo "INFO: Run 'newgrp $newgrp_hint' to activate new group membership in current shell" >&2
+		fi
+		return $cmd_ret
 	else
-		sudo --preserve-env=HOME "$_AM_BIN" "$@"
+		local cmd_output
+		cmd_output=$(sudo --preserve-env=HOME "$_AM_BIN" "$@" 2>&1)
+		local cmd_ret=$?
+		echo "$cmd_output"
+		# Hint for newgrp if group membership changed
+		local newgrp_hint
+		newgrp_hint=$(echo "$cmd_output" | grep "^newgrp=" | cut -d= -f2- || true)
+		if [[ -n "$newgrp_hint" ]]; then
+			echo "INFO: Run 'newgrp $newgrp_hint' to activate new group membership in current shell" >&2
+		fi
+		return $cmd_ret
 	fi
 }
 

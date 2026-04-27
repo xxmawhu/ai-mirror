@@ -27,6 +27,7 @@ public:
     std::vector<MountEntry> list_mounts(const std::string& username) const;
     bool is_mounted(const fs::path& target) const;
     bool is_mounted_live(const fs::path& target) const;
+    int cleanup_duplicate_mounts(const std::string& username);
 
     bool grant_write_access(const fs::path& path, const std::string& username);
     bool revoke_write_access(const fs::path& path, const std::string& username);

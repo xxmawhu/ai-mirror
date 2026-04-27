@@ -5,6 +5,7 @@
 #include "ai_mirror/utils/unique_fd.hpp"
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <sys/mount.h>
@@ -289,6 +290,73 @@ bool Graft::is_mounted_live(const fs::path& target) const {
         }
     }
     return false;
+}
+
+int Graft::cleanup_duplicate_mounts(const std::string& username) {
+    if (!utils::validate_username(username)) {
+        utils::get_logger()->error("Invalid username for cleanup_duplicate_mounts: {}", username);
+        return 0;
+    }
+
+    std::string user_home = utils::get_home_dir(username);
+    if (user_home.empty()) {
+        utils::get_logger()->warn("Cannot determine home for user {}", username);
+        return 0;
+    }
+
+    std::ifstream mounts("/proc/mounts");
+    if (!mounts.is_open()) {
+        utils::get_logger()->error("Cannot open /proc/mounts for duplicate cleanup");
+        return 0;
+    }
+    std::string line;
+
+    // Collect all mount entries for this user, preserving order.
+    // Later entries in /proc/mounts are the "newer" stacked mounts.
+    std::vector<std::pair<std::string, std::string>> user_entries;
+    while (std::getline(mounts, line)) {
+        std::istringstream iss(line);
+        std::string device, mount_point, fs_type, options;
+        iss >> device >> mount_point >> fs_type >> options;
+
+        if (mount_point.find(user_home) == 0
+            && (mount_point.length() == user_home.length() || mount_point[user_home.length()] == '/')) {
+            user_entries.emplace_back(mount_point, line);
+        }
+    }
+
+    // Group by target path to find duplicates
+    std::map<std::string, std::vector<size_t>> target_groups;
+    for (size_t i = 0; i < user_entries.size(); ++i) {
+        target_groups[user_entries[i].first].push_back(i);
+    }
+
+    int cleaned = 0;
+    for (const auto& [target, indices] : target_groups) {
+        if (indices.size() <= 1) continue;
+
+        // Linux mounts stack when same target is mounted multiple times.
+        // Each umount -l pops one mount from the stack; calling N-1
+        // times leaves exactly one mount (the newest/last entry).
+        for (size_t j = 0; j < indices.size() - 1; ++j) {
+            utils::get_logger()->info("Removing duplicate mount #{} of {} for {}: {}",
+                j + 1, indices.size(), username, target);
+            auto result = utils::exec_safe({"umount", "-l", target});
+            if (result.exit_code == 0) {
+                cleaned++;
+                utils::get_logger()->info("Lazy unmounted duplicate: {}", target);
+            } else {
+                utils::get_logger()->warn("Failed to umount duplicate {}: {}", target, result.stderr_output);
+            }
+        }
+    }
+
+    if (cleaned > 0) {
+        invalidate_cache();
+        utils::get_logger()->info("Cleaned up {} duplicate mount(s) for {}", cleaned, username);
+    }
+
+    return cleaned;
 }
 
 bool Graft::ensure_group_exists(const std::string& groupname) {

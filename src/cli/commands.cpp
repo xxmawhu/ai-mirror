@@ -152,6 +152,9 @@ int cmd_create(const std::string& project_path, bool verbose) {
     // Ensure mount cache is fresh before bind mount loop
     ctx.graft->invalidate_cache();
 
+    // Pre-cleanup any duplicate mounts from previous failed/incomplete operations
+    ctx.graft->cleanup_duplicate_mounts(user_info.username);
+
     for (const auto& mount_path : ctx.config.mount.paths) {
         auto source_opt = core::PathResolver::resolve(mount_path.string());
         if (!source_opt) {
@@ -1244,6 +1247,13 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
                 fixes++;
             }
         }
+    }
+
+    // Cleanup duplicate mounts (same target mounted multiple times)
+    int dup_cleaned = ctx.graft->cleanup_duplicate_mounts(username);
+    if (dup_cleaned > 0) {
+        fixes += dup_cleaned;
+        utils::get_logger()->info("Cleaned {} duplicate mount(s) for {}", dup_cleaned, username);
     }
 
     for (const auto& mount_path : ctx.config.mount.paths) {

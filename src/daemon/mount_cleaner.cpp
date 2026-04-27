@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
+#include <pwd.h>
 
 namespace fs = std::filesystem;
 
@@ -61,13 +62,35 @@ std::vector<fs::path> MountCleaner::find_stale_mounts() {
 }
 
 int MountCleaner::force_cleanup(const std::vector<fs::path>& mounts) {
+    std::vector<std::string> ai_homes;
+    setpwent();
+    while (auto* pw = getpwent()) {
+        std::string name(pw->pw_name);
+        if (name.length() > prefix_.length()
+            && name.substr(0, prefix_.length()) == prefix_
+            && utils::validate_username(name)
+            && std::string(pw->pw_dir).find('/') == 0) {
+            ai_homes.push_back(pw->pw_dir);
+        }
+    }
+    endpwent();
+
     int cleaned = 0;
     for (const auto& m : mounts) {
         std::string ms = m.string();
-        if (ms.find("/home/") != 0) {
-            utils::get_logger()->warn("Skipping non-home mount in cleanup: {}", ms);
+
+        bool is_ai_user_mount = false;
+        for (const auto& home : ai_homes) {
+            if (ms.find(home) == 0 && (ms.length() == home.length() || ms[home.length()] == '/')) {
+                is_ai_user_mount = true;
+                break;
+            }
+        }
+        if (!is_ai_user_mount) {
+            utils::get_logger()->warn("Skipping non-ai-user mount in cleanup: {}", ms);
             continue;
         }
+
         auto result = utils::exec_safe({"umount", "-l", ms});
         if (result.exit_code == 0) {
             cleaned++;

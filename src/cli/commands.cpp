@@ -977,7 +977,8 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
             bool key_authorized = false;
             if (auth_keys_exists) {
                 std::ifstream ak(auth_keys);
-                fs::path main_pub = fs::path(utils::get_home_dir(main_user)) / ".ssh" / "id_ed25519.pub";
+                // Use configured key_path to derive public key, not hardcoded id_ed25519
+                fs::path main_pub = fs::path(config.ssh.key_path.string() + ".pub");
                 std::ifstream pk(main_pub);
                 if (pk.is_open()) {
                     std::string pub_key_line, auth_line;

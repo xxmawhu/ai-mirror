@@ -259,8 +259,9 @@ Config ConfigParser::create_default_config(const fs::path& config_path) {
         fs::path("~/.config"),
     };
     config.ssh.key_type = "ed25519";
-    config.ssh.key_path = fs::path("~/.ssh/ai-mirror");
-    config.ssh.ai_default_key = fs::path("~/.ssh/id_ed25519");
+    // key_path: Leave empty to enable runtime auto-detection (id_ed25519 > id_rsa > id_ecdsa > ai-mirror)
+    // ai_default_key: Public key path for authorizing additional key to ai user
+    config.ssh.ai_default_key = fs::path("~/.ssh/id_ed25519.pub");
 
     return config;
 }
@@ -295,9 +296,12 @@ bool ConfigParser::save(const Config& config, const fs::path& config_path) {
     }
     oss << "]\n\n"
         << "[ssh]\n"
-        << "key_type = \"" << toml_escape(config.ssh.key_type) << "\"\n"
-        << "key_path = \"" << toml_escape(config.ssh.key_path.string()) << "\"\n"
-        << "ai_default_key = \"" << toml_escape(config.ssh.ai_default_key.string()) << "\"\n";
+        << "key_type = \"" << toml_escape(config.ssh.key_type) << "\"\n";
+    // Only write key_path if explicitly set; omit to enable runtime auto-detection
+    if (!config.ssh.key_path.empty()) {
+        oss << "key_path = \"" << toml_escape(config.ssh.key_path.string()) << "\"\n";
+    }
+    oss << "ai_default_key = \"" << toml_escape(config.ssh.ai_default_key.string()) << "\"\n";
 
     std::string content = oss.str();
     ssize_t written = ::write(ufd.get(), content.c_str(), content.size());

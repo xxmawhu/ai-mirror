@@ -149,6 +149,9 @@ int cmd_create(const std::string& project_path, bool verbose) {
         }
     }
 
+    // Ensure mount cache is fresh before bind mount loop
+    ctx.graft->invalidate_cache();
+
     for (const auto& mount_path : ctx.config.mount.paths) {
         auto source_opt = core::PathResolver::resolve(mount_path.string());
         if (!source_opt) {
@@ -167,6 +170,13 @@ int cmd_create(const std::string& project_path, bool verbose) {
         }
 
         fs::path target = core::PathResolver::to_ai_user_path(source, user_info.username, main_user, user_info.home_dir);
+
+        // Skip if already mounted (defensive check, same pattern as cmd_update)
+        if (ctx.graft->is_mounted(target)) {
+            utils::get_logger()->info("Target already mounted, skipping: {}", target.string());
+            continue;
+        }
+
         if (!ctx.graft->bind_mount(source, target, true, user_info.uid, user_info.gid)) {
             mount_failures++;
             utils::get_logger()->error("Mount failed: {} -> {}", source.string(), target.string());

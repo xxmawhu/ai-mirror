@@ -200,6 +200,12 @@ bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read
         return true;
     }
 
+    // Double-check with live /proc/mounts to avoid cache staleness
+    if (is_mounted_live(target)) {
+        utils::get_logger()->warn("Target already mounted (live check): {}", target.string());
+        return true;
+    }
+
     if (!security::validate_path_exists(source)) {
         utils::get_logger()->error("Mount source path does not exist or is not regular/dir: {}", source.string());
         return false;
@@ -263,6 +269,22 @@ bool Graft::is_mounted(const fs::path& target) const {
     auto canon_target = security::safe_canonical(target);
     for (const auto& m : get_mount_cache()) {
         if (security::safe_canonical(m.target) == canon_target) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Live check: bypass cache and read /proc/mounts directly (for critical mount operations)
+bool Graft::is_mounted_live(const fs::path& target) const {
+    auto canon_target = security::safe_canonical(target);
+    std::ifstream mounts("/proc/mounts");
+    std::string line;
+    while (std::getline(mounts, line)) {
+        std::istringstream iss(line);
+        std::string device, mount_point, fs_type, options;
+        iss >> device >> mount_point >> fs_type >> options;
+        if (security::safe_canonical(fs::path(mount_point)) == canon_target) {
             return true;
         }
     }

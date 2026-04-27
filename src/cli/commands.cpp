@@ -147,8 +147,46 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 
+    // Check if authorized_keys exists AND contains current user's public key
     fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
+    bool need_ssh_fix = false;
     if (!fs::exists(auth_keys)) {
+        need_ssh_fix = true;
+        utils::get_logger()->info("authorized_keys missing for {}", username);
+    } else {
+        // Check if authorized_keys contains current user's public key
+        fs::path main_pub = fs::path(utils::get_home_dir(main_user)) / ".ssh" / "id_ed25519.pub";
+        bool key_found = false;
+        if (fs::exists(main_pub)) {
+            std::ifstream pub_file(main_pub);
+            std::string pub_key_line;
+            if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
+                // Extract the base64 key body (second field) for exact matching
+                auto first_space = pub_key_line.find(' ');
+                auto second_space = (first_space != std::string::npos)
+                    ? pub_key_line.find(' ', first_space + 1) : std::string::npos;
+                std::string key_body = (first_space != std::string::npos && second_space != std::string::npos)
+                    ? pub_key_line.substr(first_space + 1, second_space - first_space - 1)
+                    : std::string();
+                if (!key_body.empty()) {
+                    std::ifstream auth_file(auth_keys);
+                    std::string auth_line;
+                    while (std::getline(auth_file, auth_line)) {
+                        if (auth_line.find(key_body) != std::string::npos) {
+                            key_found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (!key_found) {
+            need_ssh_fix = true;
+            utils::get_logger()->info("authorized_keys exists but missing {}'s key, re-authorizing", main_user);
+        }
+    }
+
+    if (need_ssh_fix) {
         utils::get_logger()->info("Fixing SSH: setup_passwordless for {}", username);
         if (ctx.ssh_mgr->setup_passwordless(main_user, username)) {
             fixes++;
@@ -908,6 +946,51 @@ int cmd_cd(const std::string& path, [[maybe_unused]] bool verbose) {
         std::cout << "action=ssh" << std::endl;
         std::cout << "user=" << ai_user << std::endl;
         std::cout << "path=" << target_str << std::endl;
+
+        // Debug line for SSH troubleshooting
+        {
+            fs::path ssh_dir = fs::path(state->home_dir) / ".ssh";
+            fs::path auth_keys = ssh_dir / "authorized_keys";
+            bool ssh_dir_exists = fs::exists(ssh_dir, ec) && !ec;
+            bool auth_keys_exists = fs::exists(auth_keys, ec) && !ec;
+            std::string ssh_dir_perms = "missing";
+            std::string auth_keys_perms = "missing";
+            if (ssh_dir_exists) {
+                auto st = fs::status(ssh_dir, ec);
+                if (!ec) ssh_dir_perms = std::to_string(static_cast<unsigned>(st.permissions() & fs::perms::all));
+            }
+            if (auth_keys_exists) {
+                auto st = fs::status(auth_keys, ec);
+                if (!ec) auth_keys_perms = std::to_string(static_cast<unsigned>(st.permissions() & fs::perms::all));
+            }
+            // Check if main user's public key is in authorized_keys
+            bool key_authorized = false;
+            if (auth_keys_exists) {
+                std::ifstream ak(auth_keys);
+                fs::path main_pub = fs::path(utils::get_home_dir(main_user)) / ".ssh" / "id_ed25519.pub";
+                std::ifstream pk(main_pub);
+                if (pk.is_open()) {
+                    std::string pub_key_line, auth_line;
+                    std::getline(pk, pub_key_line);
+                    auto space = pub_key_line.find(' ');
+                    if (space != std::string::npos) {
+                        std::string key_type = pub_key_line.substr(0, space);
+                        while (std::getline(ak, auth_line)) {
+                            if (auth_line.find(key_type) != std::string::npos) {
+                                key_authorized = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            std::cout << "debug=home=" << state->home_dir
+                      << ",ssh_perms=" << ssh_dir_perms
+                      << ",auth_perms=" << auth_keys_perms
+                      << ",key_in_auth=" << (key_authorized ? "yes" : "no")
+                      << std::endl;
+        }
+
         return 0;
     }
 

@@ -43,13 +43,13 @@ tags
 *.log
 *.h5
 *.parquet
+*.csv
 *.png
 *.s
 *.i
 data/
 compressedLog/
 log/
-*.log
 
 # Environment
 .env
@@ -62,5 +62,3 @@ env/
 .sisyphus/
 history_log/
 miniconda.sh
-build-release/
-build-test/

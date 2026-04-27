@@ -192,6 +192,13 @@ bool UserManager::execute_userdel(const std::string& username, bool remove_home)
         return false;
     }
 
+    // Capture GID before userdel removes the user entry
+    gid_t user_gid = static_cast<gid_t>(-1);
+    struct passwd* pw = getpwnam(username.c_str());
+    if (pw) {
+        user_gid = pw->pw_gid;
+    }
+
     std::vector<std::string> args;
     args.reserve(4);
     args.push_back("userdel");
@@ -205,11 +212,23 @@ bool UserManager::execute_userdel(const std::string& username, bool remove_home)
         if (result.stderr_output.find("mail spool") != std::string::npos
             && result.stderr_output.find("not found") != std::string::npos) {
             utils::get_logger()->info("userdel: mail spool not found (expected for ai-users): {}", username);
-            return true;
+        } else {
+            utils::get_logger()->error("userdel failed: {}", result.stderr_output);
+            return false;
         }
-        utils::get_logger()->error("userdel failed: {}", result.stderr_output);
-        return false;
     }
+
+    // Delete the user's primary group (groupadd'd in execute_useradd)
+    if (user_gid != static_cast<gid_t>(-1)) {
+        auto grp_result = utils::exec_safe({"groupdel", username});
+        if (grp_result.exit_code != 0) {
+            // Not fatal: group may have been auto-removed by userdel, or already gone
+            utils::get_logger()->info("groupdel {}: {} (may already be removed)", username, grp_result.stderr_output);
+        } else {
+            utils::get_logger()->info("Removed group: {} (gid={})", username, user_gid);
+        }
+    }
+
     return true;
 }
 

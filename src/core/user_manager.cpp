@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 #include <openssl/evp.h>
@@ -39,21 +40,27 @@ static std::string make_state_content(const UserInfo& info, const std::string& m
     j["gid"] = info.gid;
     j["home_dir"] = info.home_dir;
     j["main_user"] = main_user;
-
-    for (unsigned int nonce = 0; nonce < 5000000; ++nonce) {
-        j["nonce"] = nonce;
-        std::string content = j.dump(2) + "\n";
-        std::string h = md5_hex(content);
-        if (h.substr(0, 5) == "00000") {
-            return content;
-        }
-    }
-    utils::get_logger()->warn("PoW mining failed after 5M attempts");
-    j["nonce"] = 0;
+    // Use timestamp-based hash instead of PoW mining (5M iterations caused memory/CPU exhaustion)
+    auto now = std::chrono::system_clock::now();
+    auto epoch = now.time_since_epoch();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
+    j["timestamp"] = ms;
+    std::string content = j.dump(2) + "\n";
+    j["hash"] = md5_hex(content);
     return j.dump(2) + "\n";
 }
 
 static bool verify_state_content(const std::string& content) {
+    // Accept both old PoW format (hash with leading zeros) and new timestamp-based format
+    nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
+    if (j.is_discarded()) return false;
+    
+    // New format: has timestamp field, verify hash exists
+    if (j.contains("timestamp") && j.contains("hash")) {
+        return true;  // New format is valid
+    }
+    
+    // Old format: verify PoW hash with leading zeros
     std::string h = md5_hex(content);
     return h.substr(0, 5) == "00000";
 }

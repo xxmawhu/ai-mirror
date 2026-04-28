@@ -342,21 +342,30 @@ bool is_group_member(const std::string& group_name) {
     }
     gid_t target_gid = gr->gr_gid;
 
-    // Check primary group from passwd entry
-    uid_t uid = geteuid();
-    struct passwd* pw = getpwuid(uid);
-    if (pw && pw->pw_gid == target_gid) {
+    // Use get_login_uid() to get the real user (via SUDO_UID or /proc/self/loginuid),
+    // falling back to geteuid() for non-sudo scenarios.
+    // This ensures we check the invoking user's groups, not root's groups.
+    uid_t real_uid = get_login_uid();
+    if (real_uid == 0) real_uid = geteuid();
+
+    struct passwd* pw = getpwuid(real_uid);
+    if (!pw) return false;
+
+    // Check primary group
+    if (pw->pw_gid == target_gid) {
         return true;
     }
 
-    // Check supplementary groups
-    int ngroups = getgroups(0, nullptr);
+    // Check all groups for the real user using getgrouplist()
+    // (not getgroups() which checks the current process's groups, i.e. root's)
+    int ngroups = 0;
+    getgrouplist(pw->pw_name, pw->pw_gid, nullptr, &ngroups);
     if (ngroups <= 0) {
         return false;
     }
 
     std::vector<gid_t> groups(ngroups);
-    if (getgroups(ngroups, groups.data()) < 0) {
+    if (getgrouplist(pw->pw_name, pw->pw_gid, groups.data(), &ngroups) < 0) {
         return false;
     }
 

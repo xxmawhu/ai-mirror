@@ -321,6 +321,15 @@ bool ConfigParser::save(const Config& config, const fs::path& config_path) {
         return false;
     }
 
+    // When running via sudo, the renamed file is owned by root.
+    // Chown to the real user so subsequent ownership checks pass.
+    uid_t login_uid = utils::get_login_uid();
+    if (login_uid != 0) {
+        if (chown(config_path.c_str(), login_uid, (gid_t)-1) != 0) {
+            utils::get_logger()->warn("Failed to chown config to uid {} after save: {}", login_uid, strerror(errno));
+        }
+    }
+
     return true;
 }
 

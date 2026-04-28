@@ -9,6 +9,8 @@ RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/so
 RUN apt-get update && apt-get install -y \
     build-essential g++ git \
     openssh-server sudo python3-pip wget \
+    libssl-dev \
+    time \
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget -q https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.sh -O /tmp/cmake.sh && \

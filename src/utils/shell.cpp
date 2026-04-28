@@ -8,8 +8,10 @@
 #include <sstream>
 #include <set>
 #include <map>
+#include <vector>
 #include <unistd.h>
 #include <pwd.h>
+#include <grp.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 
@@ -327,6 +329,44 @@ bool is_path_allowed_parent(const fs::path& p, const std::string& main_user) {
     fs::path parent = p.parent_path();
     if (parent.empty()) return false;
     return is_path_allowed(parent, main_user);
+}
+
+bool is_group_member(const std::string& group_name) {
+    if (group_name.empty()) return false;
+
+    // Get the group entry
+    struct group* gr = getgrnam(group_name.c_str());
+    if (!gr) {
+        // Group doesn't exist
+        return false;
+    }
+    gid_t target_gid = gr->gr_gid;
+
+    // Check primary group from passwd entry
+    uid_t uid = geteuid();
+    struct passwd* pw = getpwuid(uid);
+    if (pw && pw->pw_gid == target_gid) {
+        return true;
+    }
+
+    // Check supplementary groups
+    int ngroups = getgroups(0, nullptr);
+    if (ngroups <= 0) {
+        return false;
+    }
+
+    std::vector<gid_t> groups(ngroups);
+    if (getgroups(ngroups, groups.data()) < 0) {
+        return false;
+    }
+
+    for (gid_t g : groups) {
+        if (g == target_gid) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 }

@@ -58,4 +58,8 @@ bool is_path_allowed(const fs::path& p, const std::string& main_user);
 bool is_path_allowed_parent(const fs::path& p, const std::string& main_user);
 uid_t get_login_uid();
 
+// Check if the current effective user is a member of the specified group.
+// Checks both primary group (from passwd entry) and supplementary groups.
+bool is_group_member(const std::string& group_name);
+
 }

@@ -101,6 +101,12 @@ int parse_and_run(int argc, char** argv) {
         return 1;
     }
 
+    if (!utils::is_group_member("ai-mirror")) {
+        std::cerr << "ai-mirror: You must be a member of the 'ai-mirror' group to use this tool." << std::endl;
+        std::cerr << "Please contact your administrator to be added to the group." << std::endl;
+        return 1;
+    }
+
     if (create_cmd->parsed()) {
         return cmd_create(create_path, verbose);
     } else if (mkdir_cmd->parsed()) {

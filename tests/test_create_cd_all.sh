@@ -394,13 +394,18 @@ if [[ -n "$AI_USER" ]] && id "$AI_USER" &>/dev/null; then
 			[[ "$KEY_COUNT" -eq 1 ]] && log_pass "deduplicated (1 key in authorized_keys)" || log_warn "multiple entries ($KEY_COUNT)"
 		else
 			log_info "Two different keys"
-			# Check if id_ed25519 key is in authorized_keys
+			# ai_default_key should NOT be in authorized_keys (security)
+			# It should only be installed as ai-user's identity key (~/.ssh/id_ed25519.pub)
 			if grep -q "$PUB2" "$AI_HOME/.ssh/authorized_keys" 2>/dev/null; then
-				log_warn "user's personal key (id_ed25519) is in ai-user's authorized_keys"
-				log_warn "SECURITY: ai-user can SSH to any server that trusts id_ed25519!"
-				log_fail "SECURITY: ai_default_key grants ai-user access to main user's servers"
+				log_fail "SECURITY: ai_default_key pub key is in authorized_keys (should not be)"
 			else
-				log_pass "user's personal key NOT in authorized_keys (safe)"
+				log_pass "ai_default_key NOT in authorized_keys (safe)"
+			fi
+			# Verify: ai_default_key installed as ai-user's identity key
+			if [[ -f "$AI_HOME/.ssh/id_ed25519.pub" ]]; then
+				log_pass "ai_default_key installed as ai-user identity key (~/.ssh/id_ed25519.pub)"
+			else
+				log_warn "ai_default_key not found as identity key in ai-user .ssh"
 			fi
 		fi
 	fi

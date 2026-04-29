@@ -540,12 +540,77 @@ bool SSHManager::setup_default_key_from_file(const std::string& ai_user, const f
         return true;
     }
 
-    if (!authorize_key(ai_user, pub_key_path)) {
-        utils::get_logger()->warn("Failed to authorize default key from file for {}", ai_user);
+    // Copy the public key to ai-user's ~/.ssh/ as their default identity key.
+    // This allows the ai-user to use this key when connecting TO external servers.
+    // IMPORTANT: Do NOT add to authorized_keys — that would allow anyone with the
+    // corresponding private key to SSH INTO the ai-user, which is a security violation
+    // (the ai-user could then access the main user's servers).
+    struct passwd* pw = getpwnam(ai_user.c_str());
+    if (!pw) {
+        utils::get_logger()->warn("Cannot resolve ai-user '{}' for default key setup", ai_user);
         return false;
     }
 
-    utils::get_logger()->info("Authorized default key from {} for {}", pub_key_path.string(), ai_user);
+    fs::path ai_ssh_dir = fs::path(pw->pw_dir) / ".ssh";
+    if (!fs::exists(ai_ssh_dir, ec) || ec) {
+        utils::get_logger()->warn("ai-user .ssh directory does not exist: {}", ai_ssh_dir.string());
+        return false;
+    }
+
+    // Read the public key content
+    std::ifstream pub_in(pub_key_path);
+    if (!pub_in.is_open()) {
+        utils::get_logger()->warn("Cannot read default public key: {}", pub_key_path.string());
+        return false;
+    }
+    std::string pub_content((std::istreambuf_iterator<char>(pub_in)),
+                              std::istreambuf_iterator<char>());
+    pub_in.close();
+
+    // Determine the key type from the public key to choose a proper filename
+    std::string key_filename = "default_key.pub";
+    if (pub_content.find("ssh-ed25519") != std::string::npos) {
+        key_filename = "id_ed25519.pub";
+    } else if (pub_content.find("ssh-rsa") != std::string::npos) {
+        key_filename = "id_rsa.pub";
+    } else if (pub_content.find("ecdsa-sha2-nistp256") != std::string::npos) {
+        key_filename = "id_ecdsa.pub";
+    }
+
+    fs::path ai_default_pub = ai_ssh_dir / key_filename;
+    if (fs::exists(ai_default_pub, ec) && !ec) {
+        // Check if content already matches to avoid unnecessary writes
+        std::ifstream existing(ai_default_pub);
+        if (existing.is_open()) {
+            std::string existing_content((std::istreambuf_iterator<char>(existing)),
+                                          std::istreambuf_iterator<char>());
+            existing.close();
+            if (existing_content == pub_content) {
+                utils::get_logger()->info("Default public key already installed in ai-user .ssh");
+                return true;
+            }
+        }
+    }
+
+    // Write the public key file
+    int fd = ::open(ai_default_pub.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        utils::get_logger()->warn("Failed to create default key in ai-user .ssh: {}", ai_default_pub.string());
+        return false;
+    }
+    ssize_t written = ::write(fd, pub_content.data(), pub_content.size());
+    ::close(fd);
+    if (written != static_cast<ssize_t>(pub_content.size())) {
+        utils::get_logger()->warn("Failed to write default key content to {}", ai_default_pub.string());
+        return false;
+    }
+
+    // Set ownership to ai-user
+    if (::chown(ai_default_pub.c_str(), pw->pw_uid, pw->pw_gid) != 0) {
+        utils::get_logger()->warn("Failed to chown default key: {}", ai_default_pub.string());
+    }
+
+    utils::get_logger()->info("Installed default public key in ai-user .ssh: {} (identity key, not authorized_keys)", ai_default_pub.string());
     return true;
 }
 

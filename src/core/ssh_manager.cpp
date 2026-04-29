@@ -218,6 +218,13 @@ bool SSHManager::generate_key_pair(const fs::path& key_path, const std::string& 
         if (r.exit_code != 0) {
             utils::get_logger()->error("chmod 700 failed: {}", r.stderr_output);
         }
+        // chown ssh dir to login user so they can access their keys
+        uid_t dir_uid = utils::get_login_uid();
+        if (dir_uid != 0 && dir_uid != static_cast<uid_t>(-1)) {
+            if (chown(ssh_dir.c_str(), dir_uid, static_cast<gid_t>(-1)) != 0) {
+                utils::get_logger()->warn("Failed to chown SSH directory to loginuid {}: {}", dir_uid, strerror(errno));
+            }
+        }
     }
 
     if (fs::exists(key_path, ec)) {

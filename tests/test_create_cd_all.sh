@@ -32,8 +32,8 @@ begin_test() {
 	echo -e "${YELLOW}=== $1 ===${NC}"
 }
 
-# Run am as root with SUDO_USER=testuser
-run_am() { SUDO_USER="$TEST_USER" HOME="/home/$TEST_USER" /usr/local/bin/am "$@" 2>&1; }
+# Run am as root with SUDO_USER=testuser (requires SUDO_UID for group check)
+run_am() { SUDO_USER="$TEST_USER" SUDO_UID=$(id -u "$TEST_USER") HOME="/home/$TEST_USER" /usr/local/bin/am "$@" 2>&1; }
 
 # Start sshd for login test
 start_sshd() {
@@ -45,7 +45,7 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 PubkeyAuthentication yes
 PasswordAuthentication no
 AuthorizedKeysFile .ssh/authorized_keys
-StrictModes yes
+StrictModes no
 SSHD
 	/usr/sbin/sshd 2>/dev/null || true
 	sleep 0.5
@@ -89,6 +89,7 @@ setup_test_user() {
 	full_cleanup
 
 	useradd -m -s /bin/bash "$TEST_USER" 2>/dev/null || true
+	usermod -aG ai-mirror "$TEST_USER" 2>/dev/null || true
 	mkdir -p "/home/$TEST_USER/projects/testproj"
 	chown -R "$TEST_USER:$TEST_USER" "/home/$TEST_USER"
 

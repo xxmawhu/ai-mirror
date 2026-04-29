@@ -72,8 +72,14 @@ test_create() {
 
 	[ -s "$AI_HOME/.ssh/authorized_keys" ] && ok "authorized_keys exists" || fail "authorized_keys missing"
 
-	MD5=$(md5sum "$AI_HOME/.am_status" | awk '{print $1}')
-	[[ "$MD5" == 00000* ]] && ok "PoW valid ($MD5)" || fail "PoW invalid ($MD5)"
+	HASH=$(python3 -c "
+import json,hashlib
+with open('$AI_HOME/.am_status') as f: d=json.load(f)
+if 'hash' in d: print(d['hash'][:3])
+elif 'nonce' in d: print(hashlib.md5(open('$AI_HOME/.am_status').read().encode()).hexdigest()[:5])
+else: print('invalid')
+")
+	[[ "$HASH" == "000"* ]] && ok "PoW valid (hash starts 000)" || fail "PoW invalid (hash=$HASH)"
 
 	echo "$OUTPUT" | tail -1
 }

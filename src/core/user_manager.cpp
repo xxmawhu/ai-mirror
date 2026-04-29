@@ -34,33 +34,52 @@ static std::string md5_hex(const std::string& input) {
 }
 
 static std::string make_state_content(const UserInfo& info, const std::string& main_user) {
-    nlohmann::json j;
-    j["username"] = info.username;
-    j["uid"] = info.uid;
-    j["gid"] = info.gid;
-    j["home_dir"] = info.home_dir;
-    j["main_user"] = main_user;
-    // Use timestamp-based hash instead of PoW mining (5M iterations caused memory/CPU exhaustion)
+    // Build JSON via string concatenation, then PoW with us-level timestamp as nonce
+    // Difficulty: hash must start with "000" (3 leading zeros)
+    std::string base;
+    base.reserve(256);
+    base += "{\n";
+    base += "  \"username\": \""; base += info.username; base += "\",\n";
+    base += "  \"uid\": "; base += std::to_string(info.uid); base += ",\n";
+    base += "  \"gid\": "; base += std::to_string(info.gid); base += ",\n";
+    base += "  \"home_dir\": \""; base += info.home_dir; base += "\",\n";
+    base += "  \"main_user\": \""; base += main_user; base += "\",\n";
+
     auto now = std::chrono::system_clock::now();
     auto epoch = now.time_since_epoch();
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
-    j["timestamp"] = ms;
-    std::string content = j.dump(2) + "\n";
-    j["hash"] = md5_hex(content);
-    return j.dump(2) + "\n";
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
+
+    // PoW: try successive us timestamps until hash starts with "000"
+    // Expected ~4096 attempts for 12-bit difficulty, negligible CPU/memory
+    std::string pow_input;
+    for (int64_t t = us; ; ++t) {
+        pow_input = base;
+        pow_input += "  \"timestamp\": "; pow_input += std::to_string(t); pow_input += ",\n";
+        std::string h = md5_hex(pow_input);
+        if (h.substr(0, 3) == "000") {
+            pow_input += "  \"hash\": \""; pow_input += h; pow_input += "\"\n}\n";
+            return pow_input;
+        }
+    }
 }
 
 static bool verify_state_content(const std::string& content) {
-    // Accept both old PoW format (hash with leading zeros) and new timestamp-based format
     nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
     if (j.is_discarded()) return false;
-    
-    // New format: has timestamp field, verify hash exists
-    if (j.contains("timestamp") && j.contains("hash")) {
-        return true;  // New format is valid
+
+    // New PoW format: has "hash" field (also covers legacy timestamp+hash)
+    // Verify by extracting content before the hash line and re-hashing
+    if (j.contains("hash")) {
+        auto pos = content.rfind("\"hash\"");
+        if (pos == std::string::npos) return false;
+        auto line_start = content.rfind('\n', pos);
+        if (line_start == std::string::npos) line_start = 0;
+        std::string pow_input = content.substr(0, line_start + 1);
+        std::string pow_hash = md5_hex(pow_input);
+        return pow_hash.substr(0, 3) == "000";
     }
-    
-    // Old format: verify PoW hash with leading zeros
+
+    // Old PoW format (nonce-based): md5 of entire content must start with "00000"
     std::string h = md5_hex(content);
     return h.substr(0, 5) == "00000";
 }

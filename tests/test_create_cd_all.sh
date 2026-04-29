@@ -90,29 +90,53 @@ test_ssh_login() {
 # Cleanup all test state
 full_cleanup() {
 	stop_sshd
-	# Unmount any bind mounts under test home (lazy unmount)
-	# Scan /proc/mounts for bind mounts pointing into test user home
-	if [[ -d "/home/$TEST_USER" ]]; then
-		while IFS= read -r dev on mp rest; do
-			if [[ "$mp" == /home/$TEST_USER/* ]]; then
-				umount -l "$mp" 2>/dev/null || true
-			fi
-		done < <(grep " /home/$TEST_USER" /proc/mounts 2>/dev/null)
-	fi
-	# Remove all test ai-users
+	# Unmount any bind mounts under test home FIRST
+	# Must happen before userdel -r which tries to remove the directory tree
+	# Use multiple attempts with delays for lazy unmounts to complete
+	for attempt in 1 2 3; do
+		if [[ -d "/home/$TEST_USER" ]]; then
+			# Collect mount points in reverse order (deepest first)
+			local mounts=()
+			while IFS= read -r line; do
+				local mp=$(echo "$line" | awk '{print $2}')
+				if [[ "$mp" == /home/$TEST_USER/* ]]; then
+					mounts+=("$mp")
+				fi
+			done < <(grep " /home/$TEST_USER" /proc/mounts 2>/dev/null || true)
+			# Unmount in reverse order (deepest first)
+			for ((i = ${#mounts[@]} - 1; i >= 0; i--)); do
+				umount -l "${mounts[$i]}" 2>/dev/null || true
+			done
+			# Also unmount any ai-user homes
+			while IFS= read -r line; do
+				local mp=$(echo "$line" | awk '{print $2}')
+				if [[ "$mp" == /home/i${TEST_USER}_* ]]; then
+					umount -l "$mp" 2>/dev/null || true
+				fi
+			done < <(grep " /home/i${TEST_USER}" /proc/mounts 2>/dev/null || true)
+		fi
+		sleep 0.3
+	done
+	# Remove all test ai-users (without -r to avoid deleting home dirs with stale mounts)
 	if id "$TEST_USER" &>/dev/null; then
 		local prefix="i${TEST_USER}_"
 		while IFS= read -r line; do
 			local uname
 			uname=$(echo "$line" | cut -d: -f1)
 			if [[ "$uname" == ${prefix}* ]]; then
-				userdel -r "$uname" 2>/dev/null || true
+				userdel "$uname" 2>/dev/null || true
 				groupdel "$uname" 2>/dev/null || true
 			fi
 		done </etc/passwd
-		userdel -r "$TEST_USER" 2>/dev/null || true
+		userdel "$TEST_USER" 2>/dev/null || true
 	fi
-	rm -rf /home/$TEST_USER /tmp/test-project-* 2>/dev/null || true
+	# Final cleanup of directories (use --one-file-system to avoid bind mount issues)
+	rm -rf --one-file-system /home/$TEST_USER 2>/dev/null || true
+	# For ai-user homes, may have nested bind mounts - use separate rm for each
+	for d in /home/i${TEST_USER}_*; do
+		[[ -d "$d" ]] && rm -rf --one-file-system "$d" 2>/dev/null || true
+	done
+	rm -rf /tmp/test-project-* 2>/dev/null || true
 }
 
 # Create test user with optional SSH setup
@@ -124,7 +148,8 @@ setup_test_user() {
 	useradd -m -s /bin/bash "$TEST_USER" 2>/dev/null || true
 	usermod -aG ai-mirror "$TEST_USER" 2>/dev/null || true
 	mkdir -p "/home/$TEST_USER/projects/testproj"
-	chown -R "$TEST_USER:$TEST_USER" "/home/$TEST_USER"
+	# chown may fail on bind-mounted files (read-only), ignore errors
+	chown -R "$TEST_USER:$TEST_USER" "/home/$TEST_USER" 2>/dev/null || true
 
 	case "$key_setup" in
 	none)
@@ -589,7 +614,7 @@ setup_test_user standard
 mkdir -p /tmp/evil-project
 chown "$TEST_USER:$TEST_USER" /tmp/evil-project
 
-OUT=$(run_am create "/tmp/evil-project" 2>&1)
+OUT=$(run_am create "/tmp/evil-project" 2>&1 || true)
 log_info "create /tmp output: $OUT"
 echo "$OUT" | grep -qi "not allowed\|invalid\|error\|failed\|must be under" && log_pass "correctly rejected" || log_fail "did NOT reject out-of-HOME project"
 

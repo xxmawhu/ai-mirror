@@ -300,12 +300,29 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
     }
 
     {
-        // Ensure .ssh is 700 and authorized_keys is 600
+        // Ensure .ssh is 700 and authorized_keys is 600, owned by ai-user
+        // (sshd StrictModes requires correct ownership)
         fs::path ssh_dir = fs::path(home_dir) / ".ssh";
         fs::path auth_keys = ssh_dir / "authorized_keys";
         std::error_code ec;
+        struct passwd* ai_pw = getpwnam(username.c_str());
 
         if (fs::exists(ssh_dir, ec) && !ec) {
+            // Fix ownership
+            if (ai_pw) {
+                int ssh_fd = open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+                if (ssh_fd >= 0) {
+                    struct stat st;
+                    if (fstat(ssh_fd, &st) == 0 && (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
+                        if (fchown(ssh_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
+                            utils::get_logger()->info("Fixed .ssh ownership to {} (was uid={})", username, st.st_uid);
+                            fixes++;
+                        }
+                    }
+                    close(ssh_fd);
+                }
+            }
+            // Fix permissions
             int ssh_fd = open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
             if (ssh_fd >= 0) {
                 if (fchmod(ssh_fd, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
@@ -319,6 +336,21 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         }
 
         if (fs::exists(auth_keys, ec) && !ec) {
+            // Fix ownership
+            if (ai_pw) {
+                int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
+                if (ak_fd >= 0) {
+                    struct stat st;
+                    if (fstat(ak_fd, &st) == 0 && (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
+                        if (fchown(ak_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
+                            utils::get_logger()->info("Fixed authorized_keys ownership to {} (was uid={})", username, st.st_uid);
+                            fixes++;
+                        }
+                    }
+                    close(ak_fd);
+                }
+            }
+            // Fix permissions
             int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
             if (ak_fd >= 0) {
                 if (fchmod(ak_fd, S_IRUSR | S_IWUSR) != 0) {

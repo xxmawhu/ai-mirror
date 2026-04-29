@@ -146,7 +146,33 @@ UserManager::UserManager(const std::string& prefix) : prefix_(prefix) {}
 std::optional<std::string> UserManager::compute_username(const fs::path& project_path, bool check_collision) const {
     std::string stem = project_path.filename().string();
 
-    std::string base = prefix_ + utils::get_effective_username() + "_" + stem;
+    // Sanitize stem: replace characters not allowed in usernames with '-'
+    // Allowed: [a-z0-9_-] — dots, spaces, and other chars become '-'
+    std::string sanitized;
+    for (char c : stem) {
+        char lc = std::tolower(static_cast<unsigned char>(c));
+        if ((lc >= 'a' && lc <= 'z') || (lc >= '0' && lc <= '9') || lc == '_' || lc == '-') {
+            sanitized += lc;
+        } else {
+            // Replace invalid char with '-', but avoid consecutive dashes
+            if (!sanitized.empty() && sanitized.back() != '-') {
+                sanitized += '-';
+            }
+        }
+    }
+    // Remove trailing dash
+    while (!sanitized.empty() && sanitized.back() == '-') {
+        sanitized.pop_back();
+    }
+    if (sanitized.empty()) {
+        utils::get_logger()->error(
+            "Project name '{}' produces empty username after sanitization. "
+            "Please rename the project directory.",
+            stem);
+        return std::nullopt;
+    }
+
+    std::string base = prefix_ + utils::get_effective_username() + "_" + sanitized;
     std::transform(base.begin(), base.end(), base.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
@@ -154,10 +180,10 @@ std::optional<std::string> UserManager::compute_username(const fs::path& project
 
     if (!utils::validate_username(username)) {
         utils::get_logger()->error(
-            "Project name '{}' produces invalid username '{}': "
+            "Project name '{}' produces invalid username '{}' (sanitized from '{}'): "
             "must contain only [a-z0-9_-], no leading digit, max 32 chars. "
             "Please rename the project directory.",
-            stem, username);
+            stem, username, sanitized);
         return std::nullopt;
     }
 

@@ -22,6 +22,30 @@ log_pass() {
 log_fail() {
 	FAIL=$((FAIL + 1))
 	echo -e "  ${RED}[FAIL]${NC} $1"
+	# Auto-generate issue file for failed tests
+	local ts
+	ts=$(date +%Y-%m-%d)
+	local safe_name
+	safe_name=$(echo "$CURRENT_TEST: $1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+	local issue_file="/build/issues/${ts}-${safe_name}.md"
+	mkdir -p /build/issues
+	cat >"$issue_file" <<ISSUE_EOF
+# Issue: $CURRENT_TEST - $1
+
+**Date**: ${ts}
+**Source**: test_create_cd_all.sh auto-generated
+
+## Description
+
+Test case \`$CURRENT_TEST\` failed with:
+$1
+
+## Context
+
+- Test user: $TEST_USER
+- Full test output available in test run logs
+ISSUE_EOF
+	echo -e "  ${YELLOW}[ISSUE]${NC} Generated: $issue_file"
 }
 log_info() { echo -e "  ${CYAN}[INFO]${NC} $1"; }
 log_warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
@@ -45,7 +69,7 @@ HostKey /etc/ssh/ssh_host_ed25519_key
 PubkeyAuthentication yes
 PasswordAuthentication no
 AuthorizedKeysFile .ssh/authorized_keys
-StrictModes no
+StrictModes yes
 SSHD
 	/usr/sbin/sshd 2>/dev/null || true
 	sleep 0.5
@@ -66,6 +90,15 @@ test_ssh_login() {
 # Cleanup all test state
 full_cleanup() {
 	stop_sshd
+	# Unmount any bind mounts under test home (lazy unmount)
+	# Scan /proc/mounts for bind mounts pointing into test user home
+	if [[ -d "/home/$TEST_USER" ]]; then
+		while IFS= read -r dev on mp rest; do
+			if [[ "$mp" == /home/$TEST_USER/* ]]; then
+				umount -l "$mp" 2>/dev/null || true
+			fi
+		done < <(grep " /home/$TEST_USER" /proc/mounts 2>/dev/null)
+	fi
 	# Remove all test ai-users
 	if id "$TEST_USER" &>/dev/null; then
 		local prefix="i${TEST_USER}_"
@@ -109,7 +142,7 @@ setup_test_user() {
 		mkdir -p "$(dirname "$custom_path")"
 		ssh-keygen -t ed25519 -f "$custom_path" -N "" -q -C "custom"
 		chmod 600 "$custom_path"
-		chown -R "$TEST_USER:$TEST_USER" "/home/$TEST_USER"
+		chown -R "$TEST_USER:$TEST_USER" "/home/$TEST_USER" 2>/dev/null || true
 		;;
 	esac
 }
@@ -629,6 +662,186 @@ if [[ -n "$AI_USER" ]]; then
 	CD_OUT=$(run_am cd "/home/$TEST_USER/projects/testproj" 2>&1) || true
 	log_info "cd after delete output: $CD_OUT"
 	echo "$CD_OUT" | grep -qi "warning\|missing\|SSH" && log_pass "warning issued for missing SSH" || log_warn "no warning for missing authorized_keys"
+fi
+
+# ============================================================
+# E1: rm project then create same-name project
+# ============================================================
+begin_test "E1: rm project then create same-name project"
+setup_test_user standard
+
+# Create first project
+OUT1=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER1=$(echo "$OUT1" | tail -1 | tr -d '[:space:]')
+log_info "First create: $AI_USER1"
+
+if [[ -n "$AI_USER1" ]]; then
+	log_pass "first ai-user created: $AI_USER1"
+
+	# Remove the project
+	RM_OUT=$(run_am rm "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "rm output: $RM_OUT"
+
+	if echo "$RM_OUT" | grep -q "Removed:"; then
+		log_pass "project removed successfully"
+
+		# Recreate the project directory (rm may have removed it)
+		mkdir -p "/home/$TEST_USER/projects/testproj"
+		chown "$TEST_USER:$TEST_USER" "/home/$TEST_USER/projects/testproj"
+
+		# Create same-name project again
+		OUT2=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+		AI_USER2=$(echo "$OUT2" | tail -1 | tr -d '[:space:]')
+		log_info "Second create: $AI_USER2"
+
+		if [[ -n "$AI_USER2" ]] && id "$AI_USER2" &>/dev/null; then
+			log_pass "second ai-user created: $AI_USER2"
+			[[ "$AI_USER1" == "$AI_USER2" ]] && log_pass "same username" || log_pass "different username (acceptable)"
+		else
+			log_fail "second create failed: $OUT2"
+		fi
+	else
+		log_fail "rm failed: $RM_OUT"
+	fi
+else
+	log_fail "first create failed: $OUT1"
+fi
+
+# ============================================================
+# E2: rm project - check system residue
+# ============================================================
+begin_test "E2: rm project - check system residue"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+	AI_UID=$(getent passwd "$AI_USER" | cut -d: -f3)
+	AI_GID=$(getent passwd "$AI_USER" | cut -d: -f4)
+	log_info "Created user: $AI_USER uid=$AI_UID gid=$AI_GID home=$AI_HOME"
+
+	# Remove the project
+	RM_OUT=$(run_am rm "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "rm output: $RM_OUT"
+
+	RESIDUE=0
+
+	# Check /etc/passwd
+	if getent passwd "$AI_USER" &>/dev/null; then
+		log_fail "user still in /etc/passwd"
+		RESIDUE=$((RESIDUE + 1))
+	else
+		log_pass "user removed from /etc/passwd"
+	fi
+
+	# Check /etc/group
+	if getent group "$AI_USER" &>/dev/null; then
+		log_fail "group still in /etc/group"
+		RESIDUE=$((RESIDUE + 1))
+	else
+		log_pass "group removed from /etc/group"
+	fi
+
+	# Check home directory
+	if [[ -d "$AI_HOME" ]]; then
+		log_fail "home directory still exists: $AI_HOME"
+		RESIDUE=$((RESIDUE + 1))
+	else
+		log_pass "home directory removed"
+	fi
+
+	# Check .am_status file
+	if [[ -f "/home/$TEST_USER/projects/testproj/.am_status" ]]; then
+		log_fail ".am_status file still exists"
+		RESIDUE=$((RESIDUE + 1))
+	else
+		log_pass ".am_status file removed"
+	fi
+
+	# Check bind mounts
+	if grep -q "$AI_HOME" /proc/mounts 2>/dev/null; then
+		log_fail "bind mounts still active"
+		RESIDUE=$((RESIDUE + 1))
+	else
+		log_pass "no stale bind mounts"
+	fi
+
+	# Check user in main_user's supplementary groups
+	if id "$TEST_USER" 2>/dev/null | grep -q "$AI_USER"; then
+		log_warn "test user still has $AI_USER in supplementary groups (may need newgrp)"
+	else
+		log_pass "no group residue in test user"
+	fi
+
+	[[ $RESIDUE -eq 0 ]] && log_pass "no system residue found" || log_fail "$RESIDUE residue item(s) found"
+fi
+
+# ============================================================
+# E3: rm project - check system integrity
+# ============================================================
+begin_test "E3: rm project - check system integrity"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Remove the project
+	RM_OUT=$(run_am rm "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "rm output: $RM_OUT"
+
+	# Check system integrity
+	SYS_OK=1
+
+	# Check that main user still exists and is intact
+	if id "$TEST_USER" &>/dev/null; then
+		log_pass "main user $TEST_USER still exists"
+	else
+		log_fail "main user $TEST_USER was deleted!"
+		SYS_OK=0
+	fi
+
+	# Check main user home directory
+	if [[ -d "/home/$TEST_USER" ]]; then
+		log_pass "main user home directory intact"
+	else
+		log_fail "main user home directory was deleted!"
+		SYS_OK=0
+	fi
+
+	# Check main user's .ssh directory
+	if [[ -d "/home/$TEST_USER/.ssh" ]]; then
+		log_pass "main user .ssh directory intact"
+	else
+		log_warn "main user .ssh directory missing (may be expected)"
+	fi
+
+	# Check main user's projects directory
+	if [[ -d "/home/$TEST_USER/projects" ]]; then
+		log_pass "projects directory intact"
+	else
+		log_fail "projects directory was deleted!"
+		SYS_OK=0
+	fi
+
+	# Check that /etc/passwd is not corrupted (spot check)
+	if getent passwd root &>/dev/null && getent passwd "$TEST_USER" &>/dev/null; then
+		log_pass "/etc/passwd not corrupted"
+	else
+		log_fail "/etc/passwd appears corrupted!"
+		SYS_OK=0
+	fi
+
+	# Check that sudo still works (if available)
+	if command -v sudo &>/dev/null; then
+		log_pass "sudo command still available"
+	else
+		log_warn "sudo not available (may be expected in container)"
+	fi
+
+	[[ $SYS_OK -eq 1 ]] && log_pass "system integrity OK" || log_fail "system integrity compromised"
 fi
 
 # ============================================================

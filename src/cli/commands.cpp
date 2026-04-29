@@ -267,6 +267,14 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         utils::get_logger()->warn("Failed to grant write access to: {}", proj.string());
     }
 
+    // Fix SSH StrictModes compatibility: sshd requires the user's home directory
+    // and ~/.ssh to NOT be group-writable. Since home_dir == proj and we just
+    // set it to 775 (g+rwx) via grant_write_access, we must:
+    //   1. Remove g+w from home_dir to satisfy sshd StrictModes
+    //   2. Ensure .ssh directory is 700
+    //   3. Ensure .ssh/authorized_keys is 600
+    // The main user can still access files via group membership + setgid on
+    // subdirectories created after newgrp.
     {
         std::error_code ec;
         auto hp = fs::status(home_dir, ec);
@@ -274,6 +282,52 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
             fs::permissions(home_dir, hp.permissions() & ~fs::perms::set_gid, ec);
             if (!ec) {
                 utils::get_logger()->info("Cleared setgid on home_dir {}", home_dir);
+            }
+        }
+    }
+
+    {
+        // Remove g+w from home_dir for sshd StrictModes compatibility
+        std::error_code ec;
+        auto hp = fs::status(home_dir, ec);
+        if (!ec && (hp.permissions() & fs::perms::group_write) != fs::perms::none) {
+            fs::permissions(home_dir, hp.permissions() & ~fs::perms::group_write, ec);
+            if (!ec) {
+                utils::get_logger()->info("Removed g+w from home_dir {} (sshd StrictModes compatibility)", home_dir);
+                fixes++;
+            }
+        }
+    }
+
+    {
+        // Ensure .ssh is 700 and authorized_keys is 600
+        fs::path ssh_dir = fs::path(home_dir) / ".ssh";
+        fs::path auth_keys = ssh_dir / "authorized_keys";
+        std::error_code ec;
+
+        if (fs::exists(ssh_dir, ec) && !ec) {
+            int ssh_fd = open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+            if (ssh_fd >= 0) {
+                if (fchmod(ssh_fd, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
+                    utils::get_logger()->warn("Failed to chmod .ssh to 700: {}", strerror(errno));
+                } else {
+                    utils::get_logger()->info("Set .ssh to 700 for StrictModes compatibility");
+                    fixes++;
+                }
+                close(ssh_fd);
+            }
+        }
+
+        if (fs::exists(auth_keys, ec) && !ec) {
+            int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
+            if (ak_fd >= 0) {
+                if (fchmod(ak_fd, S_IRUSR | S_IWUSR) != 0) {
+                    utils::get_logger()->warn("Failed to chmod authorized_keys to 600: {}", strerror(errno));
+                } else {
+                    utils::get_logger()->info("Set authorized_keys to 600 for StrictModes compatibility");
+                    fixes++;
+                }
+                close(ak_fd);
             }
         }
     }

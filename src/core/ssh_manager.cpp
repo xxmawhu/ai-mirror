@@ -100,9 +100,49 @@ bool safe_read_authorized_keys(const fs::path& path, std::vector<std::string>& l
             path.c_str(), strerror(errno));
         return false;
     }
+
+    uid_t expected_uid = utils::get_login_uid();
+    if (expected_uid == 0) expected_uid = getuid();
+
     if (S_ISLNK(st.st_mode)) {
-        utils::get_logger()->error("safe_read_authorized_keys: rejecting symlink: {}", path.c_str());
-        return false;
+        // Symlink allowed: validate target ownership
+        struct stat target_st;
+        if (::stat(path.c_str(), &target_st) != 0) {
+            utils::get_logger()->error("safe_read_authorized_keys: symlink target cannot be resolved: {}", path.c_str());
+            return false;
+        }
+        if (target_st.st_uid != expected_uid) {
+            utils::get_logger()->error("safe_read_authorized_keys: symlink target not owned by expected user (uid {} != {}): {}",
+                target_st.st_uid, expected_uid, path.c_str());
+            return false;
+        }
+        // Target validated - read the resolved path (without O_NOFOLLOW)
+        utils::get_logger()->info("safe_read_authorized_keys: symlink validated, reading target: {}", path.c_str());
+        utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+        if (!ufd) {
+            utils::get_logger()->error("safe_read_authorized_keys: open({}) failed: {}",
+                path.c_str(), strerror(errno));
+            return false;
+        }
+        char buf[4096];
+        std::string content;
+        ssize_t n;
+        while ((n = ::read(ufd.get(), buf, sizeof(buf))) > 0) {
+            content.append(buf, n);
+        }
+        ufd.reset();
+        if (n < 0) {
+            utils::get_logger()->error("safe_read_authorized_keys: read failed: {}", strerror(errno));
+            return false;
+        }
+        std::istringstream iss(content);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (!line.empty()) {
+                lines_out.push_back(line);
+            }
+        }
+        return true;
     }
 
     utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
@@ -142,12 +182,30 @@ bool safe_read_public_key_file(const fs::path& path, std::string& content_out, [
             path.c_str(), strerror(errno));
         return false;
     }
+
+    int open_flags = O_RDONLY | O_NOFOLLOW | O_CLOEXEC;
+
     if (S_ISLNK(st.st_mode)) {
-        utils::get_logger()->error("safe_read_public_key_file: rejecting symlink: {}", path.c_str());
-        return false;
+        // Symlink allowed: validate target ownership
+        uid_t check_uid = utils::get_login_uid();
+        if (check_uid == 0) check_uid = getuid();
+
+        struct stat target_st;
+        if (::stat(path.c_str(), &target_st) != 0) {
+            utils::get_logger()->error("safe_read_public_key_file: symlink target cannot be resolved: {}", path.c_str());
+            return false;
+        }
+        if (target_st.st_uid != check_uid) {
+            utils::get_logger()->error("safe_read_public_key_file: symlink target not owned by expected user (uid {} != {}): {}",
+                target_st.st_uid, check_uid, path.c_str());
+            return false;
+        }
+        // Target validated - read without O_NOFOLLOW so the symlink is followed
+        utils::get_logger()->info("safe_read_public_key_file: symlink validated, reading target: {}", path.c_str());
+        open_flags = O_RDONLY | O_CLOEXEC;
     }
 
-    utils::unique_fd ufd(::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+    utils::unique_fd ufd(::open(path.c_str(), open_flags));
     if (!ufd) {
         utils::get_logger()->error("safe_read_public_key_file: open({}) failed: {}",
             path.c_str(), strerror(errno));

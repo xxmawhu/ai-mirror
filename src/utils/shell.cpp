@@ -14,6 +14,8 @@
 #include <grp.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include "ai_mirror/security/path_validator.hpp"
 
 namespace ai_mirror::utils {
 
@@ -283,45 +285,170 @@ uid_t get_login_uid() {
     return 0;
 }
 
-bool is_path_allowed(const fs::path& p, const std::string& main_user) {
+// Check if login_uid has write access to a path by examining stat permissions.
+// We cannot use seteuid()+access() because when real UID is root, access()
+// still uses root's DAC_OVERRIDE capability regardless of effective UID.
+// Instead, we manually check owner/group/other permission bits.
+static bool has_write_access(const fs::path& p, uid_t login_uid) {
+    struct stat st;
+    if (stat(p.c_str(), &st) != 0) return false;
+    
+    // 1. Owner check
+    if (st.st_uid == login_uid) {
+        return (st.st_mode & S_IWUSR) != 0;
+    }
+    
+    // 2. Group check - get all groups for login_uid
+    struct passwd* pw = getpwuid(login_uid);
+    if (pw) {
+        // Check primary group
+        if (st.st_gid == pw->pw_gid) {
+            return (st.st_mode & S_IWGRP) != 0;
+        }
+        
+        // Check supplementary groups
+        int ngroups = 0;
+        getgrouplist(pw->pw_name, pw->pw_gid, nullptr, &ngroups);
+        if (ngroups > 0) {
+            std::vector<gid_t> groups(ngroups);
+            if (getgrouplist(pw->pw_name, pw->pw_gid, groups.data(), &ngroups) >= 0) {
+                for (int i = 0; i < ngroups; i++) {
+                    if (st.st_gid == groups[i]) {
+                        return (st.st_mode & S_IWGRP) != 0;
+                    }
+                }
+            }
+        }
+    }
+    
+    // 3. Other check
+    return (st.st_mode & S_IWOTH) != 0;
+}
+
+// Check if a path is an ai-user home managed by the login user.
+// Looks for .am_status file in the path (or its parents) and verifies main_user.
+static bool is_managed_ai_user_home(const fs::path& p, uid_t login_uid) {
+    // Check path itself and each parent for .am_status
+    fs::path check = p;
+    for (int i = 0; i < 10 && !check.empty() && check != "/"; ++i) {
+        fs::path state_file = check / ".am_status";
+        std::ifstream ifs(state_file);
+        if (ifs.is_open()) {
+            try {
+                std::string content((std::istreambuf_iterator<char>(ifs)),
+                                     std::istreambuf_iterator<char>());
+                // Simple JSON parse for main_user field
+                auto pos = content.find("\"main_user\"");
+                if (pos != std::string::npos) {
+                    auto val_start = content.find('"', pos + 12);
+                    if (val_start != std::string::npos) {
+                        auto val_end = content.find('"', val_start + 1);
+                        if (val_end != std::string::npos) {
+                            std::string main_user = content.substr(val_start + 1, val_end - val_start - 1);
+                            struct passwd* pw = getpwuid(login_uid);
+                            if (pw && main_user == pw->pw_name) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            } catch (...) {}
+            // Found .am_status but not ours — stop searching
+            break;
+        }
+        check = check.parent_path();
+    }
+    return false;
+}
+
+bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main_user) {
     if (p.empty()) return false;
 
+    // Reject ".." traversal (security: prevent directory escape)
     for (const auto& part : p) {
         if (part == "..") return false;
     }
 
-    std::string main_home = get_effective_home();
-    if (main_home.empty()) {
-        main_home = get_home_dir(main_user);
+    // Get the real invoking user's UID (via SUDO_UID or loginuid)
+    uid_t login_uid = get_login_uid();
+    if (login_uid == 0) login_uid = geteuid();
+    if (login_uid == 0) {
+        utils::get_logger()->warn("Cannot determine real user UID for path validation");
+        return false;
     }
-    if (main_home.empty()) return false;
 
     std::error_code ec;
+
+    // Try canonical resolution for existing paths
     fs::path canon = fs::canonical(p, ec);
-    if (ec) {
-        fs::path parent = p.parent_path();
-        fs::path canon_parent = fs::canonical(parent, ec);
-        if (ec) return false;
-        std::string parent_str = canon_parent.string();
-        if (parent_str != main_home
-            && !(parent_str.length() > main_home.length()
-                 && parent_str[main_home.length()] == '/'
-                 && parent_str.substr(0, main_home.length()) == main_home)) {
-            return false;
+    if (!ec) {
+        // Path exists: check if owned by login_uid OR user has write access
+        struct stat st;
+        if (stat(canon.c_str(), &st) != 0) return false;
+        
+        // 1. Owner check: path owned by login_uid -> allow
+        if (st.st_uid == login_uid) {
+            return security::validate_path_allowed(canon);
         }
-        canon = fs::weakly_canonical(p, ec);
-        if (ec) return false;
-        for (const auto& part : canon) {
-            if (part == "..") return false;
+        
+        // 2. Managed ai-user home check: path is under an ai-user managed by login user
+        if (is_managed_ai_user_home(canon, login_uid)) {
+            return security::validate_path_allowed(canon);
         }
+        
+        // 3. Permission check: user has write access via group/other
+        if (has_write_access(canon, login_uid)) {
+            return security::validate_path_allowed(canon);
+        }
+        
+        // Path exists but no access - check parent chain for ownership
+        fs::path parent = canon.parent_path();
+        while (!parent.empty() && parent != "/") {
+            if (stat(parent.c_str(), &st) == 0) {
+                if (st.st_uid == login_uid) {
+                    return security::validate_path_allowed(parent);
+                }
+                if (is_managed_ai_user_home(parent, login_uid)) {
+                    return security::validate_path_allowed(parent);
+                }
+                // Also check if user has write access to parent
+                if (has_write_access(parent, login_uid)) {
+                    return security::validate_path_allowed(parent);
+                }
+            }
+            parent = parent.parent_path();
+        }
+        
+        // Path not owned by user and no access via permissions
+        return false;
     }
 
-    std::string s = canon.string();
+    // Path doesn't exist: check parent permissions
+    fs::path parent = p.parent_path();
+    if (parent.empty()) return false;
 
-    if (s == main_home) return true;
-    if (s.length() > main_home.length() && s[main_home.length()] == '/'
-        && s.substr(0, main_home.length()) == main_home) return true;
+    fs::path canon_parent = fs::canonical(parent, ec);
+    if (ec) return false;  // Parent doesn't exist or can't resolve
 
+    struct stat st;
+    if (stat(canon_parent.c_str(), &st) != 0) return false;
+
+    // 1. Parent owned by login_uid -> allow creating new path
+    if (st.st_uid == login_uid) {
+        return security::validate_path_allowed(canon_parent);
+    }
+    
+    // 2. Parent is managed ai-user home -> allow
+    if (is_managed_ai_user_home(canon_parent, login_uid)) {
+        return security::validate_path_allowed(canon_parent);
+    }
+
+    // 3. User has write access to parent via group/other -> allow
+    if (has_write_access(canon_parent, login_uid)) {
+        return security::validate_path_allowed(canon_parent);
+    }
+
+    // Parent not owned by user and no write access
     return false;
 }
 

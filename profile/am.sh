@@ -58,9 +58,11 @@ _am_parse_output() {
 
 # Main am function
 am() {
-	# Check binary exists
+	# Check binary exists with detailed diagnostics
 	if [[ ! -x "$_AM_BIN" ]]; then
-		echo "error: $_AM_BIN not found or not executable" >&2
+		echo "error: ai-mirror binary not available" >&2
+		echo "  expected path: $_AM_BIN" >&2
+		echo "  hint: check AI_MIRROR_BIN env var or run 'ai-mirror install'" >&2
 		return 1
 	fi
 
@@ -124,7 +126,9 @@ am() {
 				echo "error: SSH key missing: $ssh_key. Run 'am update' first." >&2
 				return 1
 			fi
-			ssh -i "$ssh_key" -o IdentitiesOnly=yes "${user}@localhost" -t "cd '${path}'"
+			# SSH to AI user: start interactive login shell
+			# The ai user's HOME is set to the project directory, so no explicit cd needed
+			ssh -i "$ssh_key" -o IdentitiesOnly=yes "${user}@localhost"
 			;;
 		cd)
 			# Validate path

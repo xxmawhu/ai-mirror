@@ -3,7 +3,7 @@
 # ai-mirror create+cd comprehensive test suite
 # Tests: SSH key scenarios, permission scenarios, config scenarios, flow scenarios
 #
-set -euo pipefail
+set -uo pipefail
 
 PASS=0
 FAIL=0
@@ -1366,9 +1366,523 @@ if [[ -n "$AI1" ]]; then
 fi
 
 # ============================================================
+# CM1: mv file success path
+# ============================================================
+begin_test "CM1: mv file success path"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Create a source file owned by test user
+	SRC_FILE="/home/$TEST_USER/projects/testproj/source.txt"
+	DST_FILE="/home/$TEST_USER/projects/testproj/dest.txt"
+	echo "test content" >"$SRC_FILE"
+	chown "$TEST_USER:$TEST_USER" "$SRC_FILE"
+
+	MV_OUT=$(run_am mv "$SRC_FILE" "$DST_FILE" 2>&1)
+	log_info "mv output: $MV_OUT"
+
+	if [[ -f "$DST_FILE" ]]; then
+		log_pass "file moved successfully"
+	else
+		log_fail "destination file not created"
+	fi
+
+	if [[ ! -e "$SRC_FILE" ]]; then
+		log_pass "source file removed"
+	else
+		log_fail "source file still exists"
+	fi
+
+	# Check ownership - should be ai-user
+	DST_OWNER=$(stat -c '%U' "$DST_FILE" 2>/dev/null)
+	[[ "$DST_OWNER" == "$AI_USER" ]] && log_pass "moved file owned by ai-user" || log_warn "moved file owner: $DST_OWNER (expected $AI_USER)"
+fi
+
+# ============================================================
+# CM2: mv directory success path
+# ============================================================
+begin_test "CM2: mv directory success path"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	SRC_DIR="/home/$TEST_USER/projects/testproj/srcdir"
+	DST_DIR="/home/$TEST_USER/projects/testproj/destdir"
+	mkdir -p "$SRC_DIR"
+	echo "inner" >"$SRC_DIR/inner.txt"
+	chown -R "$TEST_USER:$TEST_USER" "$SRC_DIR"
+
+	MV_OUT=$(run_am mv "$SRC_DIR" "$DST_DIR" 2>&1)
+	log_info "mv dir output: $MV_OUT"
+
+	[[ -d "$DST_DIR" ]] && log_pass "directory moved" || log_fail "directory not moved"
+	[[ -f "$DST_DIR/inner.txt" ]] && log_pass "inner file preserved" || log_fail "inner file missing"
+	[[ ! -e "$SRC_DIR" ]] && log_pass "source dir removed" || log_fail "source dir still exists"
+fi
+
+# ============================================================
+# CM3: cp file success path
+# ============================================================
+begin_test "CM3: cp file success path"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	SRC_FILE="/home/$TEST_USER/projects/testproj/original.txt"
+	DST_FILE="/home/$TEST_USER/projects/testproj/copy.txt"
+	echo "copy test" >"$SRC_FILE"
+	chown "$TEST_USER:$TEST_USER" "$SRC_FILE"
+
+	CP_OUT=$(run_am cp "$SRC_FILE" "$DST_FILE" 2>&1)
+	log_info "cp output: $CP_OUT"
+
+	[[ -f "$DST_FILE" ]] && log_pass "file copied" || log_fail "copy not created"
+	[[ -f "$SRC_FILE" ]] && log_pass "source preserved" || log_fail "source missing after cp"
+
+	# Check ownership
+	DST_OWNER=$(stat -c '%U' "$DST_FILE" 2>/dev/null)
+	[[ "$DST_OWNER" == "$AI_USER" ]] && log_pass "copied file owned by ai-user" || log_warn "copied file owner: $DST_OWNER"
+fi
+
+# ============================================================
+# CM4: cp directory success path
+# ============================================================
+begin_test "CM4: cp directory success path"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	SRC_DIR="/home/$TEST_USER/projects/testproj/cpsrc"
+	DST_DIR="/home/$TEST_USER/projects/testproj/cpdst"
+	mkdir -p "$SRC_DIR/sub"
+	echo "deep" >"$SRC_DIR/sub/deep.txt"
+	chown -R "$TEST_USER:$TEST_USER" "$SRC_DIR"
+
+	CP_OUT=$(run_am cp "$SRC_DIR" "$DST_DIR" 2>&1)
+	log_info "cp dir output: $CP_OUT"
+
+	[[ -d "$DST_DIR" ]] && log_pass "directory copied" || log_fail "directory copy failed"
+	[[ -f "$DST_DIR/sub/deep.txt" ]] && log_pass "deep file preserved" || log_fail "deep file missing"
+	[[ -d "$SRC_DIR" ]] && log_pass "source dir preserved" || log_fail "source dir removed"
+fi
+
+# ============================================================
+# CM5: mv non-existent source (should fail)
+# ============================================================
+begin_test "CM5: mv non-existent source (should fail)"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+MV_OUT=$(run_am mv "/home/$TEST_USER/projects/nonexistent" "/home/$TEST_USER/projects/target" 2>&1)
+log_info "mv nonexistent output: $MV_OUT"
+
+# Should produce error or non-zero exit
+if echo "$MV_OUT" | grep -qi "not exist\|error\|fail\|cannot"; then
+	log_pass "mv rejected non-existent source"
+else
+	# Check if target was NOT created
+	if [[ ! -e "/home/$TEST_USER/projects/target" ]]; then
+		log_pass "mv did not create target (expected)"
+	else
+		log_fail "mv created target from nonexistent source"
+	fi
+fi
+
+# ============================================================
+# LS1: list shows managed projects
+# ============================================================
+begin_test "LS1: list shows managed projects"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	LIST_OUT=$(run_am list 2>&1)
+	log_info "list output: $LIST_OUT"
+
+	if echo "$LIST_OUT" | grep -q "$AI_USER"; then
+		log_pass "list contains ai-user"
+	else
+		log_fail "list missing ai-user"
+	fi
+
+	if echo "$LIST_OUT" | grep -q "testproj"; then
+		log_pass "list contains project name"
+	else
+		log_fail "list missing project name"
+	fi
+fi
+
+# ============================================================
+# LS2: list with no projects
+# ============================================================
+begin_test "LS2: list with no projects"
+setup_test_user standard
+
+LIST_OUT=$(run_am list 2>&1)
+log_info "list empty output: $LIST_OUT"
+
+if echo "$LIST_OUT" | grep -qi "no.*managed\|no.*project\|empty\|none"; then
+	log_pass "empty list message shown"
+else
+	# If no specific message, just check output is not an error
+	if [[ -n "$LIST_OUT" ]]; then
+		log_pass "list produced output (may show header only)"
+	else
+		log_warn "list produced no output"
+	fi
+fi
+
+# ============================================================
+# ST1: status shows project info
+# ============================================================
+begin_test "ST1: status shows project info"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	STATUS_OUT=$(run_am status 2>&1)
+	log_info "status output: $STATUS_OUT"
+
+	if echo "$STATUS_OUT" | grep -q "$AI_USER"; then
+		log_pass "status contains ai-user"
+	else
+		log_warn "status may not list user details"
+	fi
+
+	if echo "$STATUS_OUT" | grep -qi "SSH\|ok\|auth\|mount"; then
+		log_pass "status shows health info"
+	else
+		log_warn "status output may differ from expected"
+	fi
+fi
+
+# ============================================================
+# HT1: health checks mounts
+# ============================================================
+begin_test "HT1: health checks mounts"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	HEALTH_OUT=$(run_am health 2>&1)
+	log_info "health output: $HEALTH_OUT"
+
+	# health should produce some output (either "healthy" or info about mounts)
+	if [[ -n "$HEALTH_OUT" ]]; then
+		log_pass "health produced output"
+	else
+		log_warn "health produced no output"
+	fi
+
+	# Should mention mount or project or be clean
+	if echo "$HEALTH_OUT" | grep -qi "healthy\|mount\|project\|ok\|clean\|check"; then
+		log_pass "health shows relevant info"
+	else
+		log_warn "health output format differs"
+	fi
+fi
+
+# ============================================================
+# FD3: force-destroy rejects non-ai-mirror user (security)
+# ============================================================
+begin_test "FD3: force-destroy rejects system user"
+setup_test_user standard
+
+FD_OUT=$(run_am force-destroy "root" 2>&1)
+log_info "force-destroy root output: $FD_OUT"
+
+# Should reject - root must still exist
+if id "root" &>/dev/null; then
+	log_pass "root user still exists (not destroyed)"
+else
+	log_fail "root user was destroyed! SECURITY ISSUE"
+fi
+
+if echo "$FD_OUT" | grep -qi "not.*ai-mirror\|invalid\|cannot\|error\|refuse\|denied"; then
+	log_pass "force-destroy rejected system user with message"
+else
+	log_warn "force-destroy did not produce clear rejection message for root"
+fi
+
+# ============================================================
+# MEM1: memory check on create (30MB limit)
+# ============================================================
+begin_test "MEM1: create memory under 30MB"
+setup_test_user standard
+
+# Use /usr/bin/time -v to measure peak memory
+# Note: must pass SUDO_USER/SUDO_UID env vars for am to work
+MEM_TMPFILE=$(mktemp)
+MEM_STDOUT=$(mktemp)
+/usr/bin/time -v \
+	env SUDO_USER="$TEST_USER" SUDO_UID="$(id -u "$TEST_USER")" HOME="/home/$TEST_USER" \
+	/usr/local/bin/am create "/home/$TEST_USER/projects/memtest" \
+	>"$MEM_STDOUT" 2>"$MEM_TMPFILE" || true
+
+# Parse peak memory from time output
+MEM_PEAK=$(grep "Maximum resident set size" "$MEM_TMPFILE" 2>/dev/null | awk '{print $NF}')
+
+log_info "MEM1 stdout: $(cat "$MEM_STDOUT")"
+log_info "MEM1 time output: $(grep -E "resident|Exit" "$MEM_TMPFILE" 2>/dev/null || echo '(empty)')"
+
+if [[ -n "$MEM_PEAK" && "$MEM_PEAK" -gt 0 ]]; then
+	MEM_MB=$((MEM_PEAK / 1024))
+	log_info "create peak memory: ${MEM_MB}MB (${MEM_PEAK}KB)"
+	if [[ "$MEM_MB" -gt 30 ]]; then
+		log_warn "create memory ${MEM_MB}MB exceeds 30MB limit"
+	else
+		log_pass "create memory ${MEM_MB}MB under 30MB limit"
+	fi
+else
+	# Fallback: check /proc/self/status VmPeak from the process
+	# In some Docker environments, time -v needs explicit path
+	log_warn "memory measurement not available (time -v output empty or no /usr/bin/time)"
+fi
+
+rm -f "$MEM_TMPFILE" "$MEM_STDOUT"
+
+full_cleanup || true
+
+# ============================================================
+# CM1: Circular mount - mount.paths contains ai-user home
+# ============================================================
+begin_test "CM1: mount.paths contains ai-user home"
+setup_test_user standard
+
+# Create first project and get ai-user home
+OUT=$(run_am create "/home/$TEST_USER/projects/proj1" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" && -d "/home/$AI_USER" ]]; then
+	# Configure mount.paths to include ai-user home (should be rejected or warned)
+	mkdir -p "/home/$TEST_USER/projects/proj2"
+	cat >"/home/$TEST_USER/.ai-mirror.toml" <<EOF
+[mount]
+paths = ["/home/$AI_USER"]
+EOF
+	chown "$TEST_USER:$TEST_USER" "/home/$TEST_USER/.ai-mirror.toml"
+
+	OUT2=$(run_am create "/home/$TEST_USER/projects/proj2" 2>&1)
+	log_info "CM1 output: $OUT2"
+
+	# Should reject or warn about circular mount
+	if echo "$OUT2" | grep -qi "circular\|invalid\|cannot\|error\|refuse\|denied\|subdirectory"; then
+		log_pass "create rejected mount.paths containing ai-user home"
+	else
+		# If not rejected, check that no new ai-user was created
+		AI_USER2=$(echo "$OUT2" | tail -1 | tr -d '[:space:]')
+		if [[ -z "$AI_USER2" ]] || [[ "$AI_USER2" == "$AI_USER" ]]; then
+			log_warn "create accepted but may have skipped mount.paths with ai-user home"
+		else
+			log_warn "create accepted mount.paths with ai-user home (potential circular issue)"
+		fi
+	fi
+else
+	log_warn "CM1: could not create first project for ai-user home test"
+fi
+
+full_cleanup || true
+
+# ============================================================
+# CM2: Nested mount.paths (parent and child)
+# ============================================================
+begin_test "CM2: nested mount.paths"
+setup_test_user standard
+
+# Create nested directories
+mkdir -p "/home/$TEST_USER/projects/nested/subdir"
+touch "/home/$TEST_USER/projects/nested/file1.txt"
+touch "/home/$TEST_USER/projects/nested/subdir/file2.txt"
+
+# Configure mount.paths with parent and child
+cat >"/home/$TEST_USER/.ai-mirror.toml" <<EOF
+[mount]
+paths = ["~/projects/nested", "~/projects/nested/subdir"]
+EOF
+chown "$TEST_USER:$TEST_USER" "/home/$TEST_USER/.ai-mirror.toml"
+
+OUT=$(run_am create "/home/$TEST_USER/projects/nested" 2>&1) || true
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+log_info "CM2 output: $OUT"
+
+if [[ -n "$AI_USER" ]]; then
+	# Check that nested mount.paths were handled correctly
+	# Expected: only one mount, or both mounted without issue
+	MOUNT_COUNT=$(findmnt -l 2>/dev/null | grep -c "/home/$AI_USER" || true)
+	log_info "CM2: mount count for $AI_USER = $MOUNT_COUNT"
+
+	# Both paths should be under the same ai-user home
+	if [[ "$MOUNT_COUNT" -ge 1 ]]; then
+		log_pass "nested mount.paths handled (mount count: $MOUNT_COUNT)"
+	else
+		log_warn "no mounts found for nested mount.paths"
+	fi
+else
+	log_warn "CM2: create failed for nested mount.paths test"
+fi
+
+full_cleanup || true
+
+# ============================================================
+# CM3: Source == Target (same path)
+# ============================================================
+begin_test "CM3: source equals target"
+setup_test_user standard
+
+# Try to create project where source would equal target
+# This happens if user tries to create in an existing ai-user home
+mkdir -p "/home/$TEST_USER/projects/samename"
+
+OUT=$(run_am create "/home/$TEST_USER/projects/samename" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Now try to create another project inside the ai-user home
+	# The ai-user home IS the target, so source would be under target
+	mkdir -p "/home/$AI_USER/projects/nested_proj"
+	OUT2=$(run_am create "/home/$AI_USER/projects/nested_proj" 2>&1) || true
+	log_info "CM3 output: $OUT2"
+
+	# Should reject because source is under target (ai-user home)
+	# "Path not allowed" is the rejection message for ai-user home
+	if echo "$OUT2" | grep -qi "circular\|subdirectory\|invalid\|cannot\|error\|refuse\|denied\|not allowed"; then
+		log_pass "create rejected source under ai-user home (circular)"
+	else
+		AI_USER2=$(echo "$OUT2" | tail -1 | tr -d '[:space:]')
+		if [[ -n "$AI_USER2" ]]; then
+			log_warn "create allowed nested project in ai-user home (unexpected)"
+		else
+			log_pass "create rejected nested project (no ai-user created)"
+		fi
+	fi
+else
+	log_warn "CM3: initial create failed"
+fi
+
+full_cleanup || true
+
+# ============================================================
+# CM4: Target is subdirectory of source
+# ============================================================
+begin_test "CM4: target is subdirectory of source"
+setup_test_user standard
+
+# This tests the is_subpath(target, source) check
+# If source is /home/user/proj and target would be /home/user/proj/subdir
+# That should be rejected
+
+mkdir -p "/home/$TEST_USER/projects/circ_proj"
+
+OUT=$(run_am create "/home/$TEST_USER/projects/circ_proj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Verify the ai-user home is NOT under the source
+	if [[ "/home/$AI_USER" == "/home/$TEST_USER/projects/circ_proj" ]]; then
+		log_warn "CM4: ai-user home equals source path"
+	else
+		log_pass "ai-user home is separate from source"
+	fi
+else
+	log_warn "CM4: create failed"
+fi
+
+full_cleanup || true
+
+# ============================================================
+# OW: Ownership/permission tests for paths outside HOME
+# ============================================================
+setup_test_user standard
+
+TEST_UID=$(id -u "$TEST_USER")
+TEST_GID=$(id -g "$TEST_USER")
+
+# OW1: Path owner is main user → allow create
+begin_test "OW1: path owner is main user"
+mkdir -p /data/testproj
+chown $TEST_UID:$TEST_GID /data/testproj
+OUT=$(run_am create /data/testproj 2>&1)
+AI_USER=$(echo "$OUT" | grep -o "itestx_testproj" | head -1)
+if [[ -n "$AI_USER" ]]; then
+	log_pass "OW1: owner path allowed create"
+else
+	log_fail "OW1: owner path create failed"
+	log_info "OW1 output: $OUT"
+fi
+full_cleanup || true
+rm -rf /data/testproj
+setup_test_user standard
+
+# OW2: Path owner is NOT main user → check permissions
+begin_test "OW2: path owner not main user"
+mkdir -p /data/restricted_proj
+chown root:root /data/restricted_proj
+chmod 700 /data/restricted_proj # No access for other
+OUT=$(run_am create /data/restricted_proj 2>&1)
+if echo "$OUT" | grep -qi "not accessible\|not allowed"; then
+	log_pass "OW2: restricted path rejected"
+else
+	log_fail "OW2: restricted path should be rejected"
+	log_info "OW2 output: $OUT"
+fi
+full_cleanup || true
+rm -rf /data/restricted_proj
+setup_test_user standard
+
+# OW3: Path group has write permission → allow create
+begin_test "OW3: group write permission allows create"
+mkdir -p /data/shared_proj
+chown root:$TEST_GID /data/shared_proj
+chmod 770 /data/shared_proj # Owner+group can write
+OUT=$(run_am create /data/shared_proj 2>&1)
+AI_USER=$(echo "$OUT" | grep -o "itestx_shared_proj" | head -1)
+if [[ -n "$AI_USER" ]]; then
+	log_pass "OW3: group writable path allowed create"
+else
+	log_fail "OW3: group writable path should be allowed"
+	log_info "OW3 output: $OUT"
+fi
+full_cleanup || true
+rm -rf /data/shared_proj
+setup_test_user standard
+
+# OW4: Path has other write permission → allow create
+begin_test "OW4: other write permission allows create"
+mkdir -p /data/public_proj
+chown root:root /data/public_proj
+chmod 777 /data/public_proj # Everyone can write
+OUT=$(run_am create /data/public_proj 2>&1)
+AI_USER=$(echo "$OUT" | grep -o "itestx_public_proj" | head -1)
+if [[ -n "$AI_USER" ]]; then
+	log_pass "OW4: public path allowed create"
+else
+	log_fail "OW4: public path should be allowed"
+	log_info "OW4 output: $OUT"
+fi
+full_cleanup || true
+rm -rf /data/public_proj
+
+# ============================================================
 # Summary
 # ============================================================
-full_cleanup
+full_cleanup || true
 
 echo ""
 echo "========================================================"

@@ -63,9 +63,11 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         fs::path mhome = utils::get_home_dir(main_user);
         fs::path p = fs::absolute(proj);
         std::vector<fs::path> dirs_to_fix;
-        while (p.has_parent_path() && p != mhome && !p.empty()) {
+        // 防止无限循环：最多遍历到根目录或最多32层
+        int max_depth = 32;
+        while (p.has_parent_path() && p != mhome && !p.empty() && p != "/" && --max_depth > 0) {
             p = p.parent_path();
-            if (p == mhome) break;
+            if (p == mhome || p == "/") break;
             dirs_to_fix.push_back(p);
         }
         for (auto& d : dirs_to_fix) {

@@ -35,7 +35,8 @@ static std::string md5_hex(const std::string& input) {
 
 static std::string make_state_content(const UserInfo& info, const std::string& main_user) {
     // Build JSON via string concatenation, then PoW with us-level timestamp as nonce
-    // Difficulty: hash must start with "000" (3 leading zeros)
+    // Difficulty: hash of entire content must start with "000" (3 leading zeros)
+    // NO hash field is stored - the PoW is verified by checking md5(content) prefix
     std::string base;
     base.reserve(256);
     base += "{\n";
@@ -49,39 +50,23 @@ static std::string make_state_content(const UserInfo& info, const std::string& m
     auto epoch = now.time_since_epoch();
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
 
-    // PoW: try successive us timestamps until hash starts with "000"
+    // PoW: try successive us timestamps until md5 of entire content starts with "000"
     // Expected ~4096 attempts for 12-bit difficulty, negligible CPU/memory
-    std::string pow_input;
     for (int64_t t = us; ; ++t) {
-        pow_input = base;
-        pow_input += "  \"timestamp\": "; pow_input += std::to_string(t); pow_input += ",\n";
-        std::string h = md5_hex(pow_input);
+        std::string content = base;
+        content += "  \"timestamp\": "; content += std::to_string(t); content += "\n}\n";
+        std::string h = md5_hex(content);
         if (h.substr(0, 3) == "000") {
-            pow_input += "  \"hash\": \""; pow_input += h; pow_input += "\"\n}\n";
-            return pow_input;
+            return content;  // Return content WITHOUT hash field
         }
     }
 }
 
 static bool verify_state_content(const std::string& content) {
-    nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
-    if (j.is_discarded()) return false;
-
-    // New PoW format: has "hash" field (also covers legacy timestamp+hash)
-    // Verify by extracting content before the hash line and re-hashing
-    if (j.contains("hash")) {
-        auto pos = content.rfind("\"hash\"");
-        if (pos == std::string::npos) return false;
-        auto line_start = content.rfind('\n', pos);
-        if (line_start == std::string::npos) line_start = 0;
-        std::string pow_input = content.substr(0, line_start + 1);
-        std::string pow_hash = md5_hex(pow_input);
-        return pow_hash.substr(0, 3) == "000";
-    }
-
-    // Old PoW format (nonce-based): md5 of entire content must start with "00000"
+    // Simple PoW verification: md5 of entire content must start with "000"
+    // No legacy format support - old versions will fail verification
     std::string h = md5_hex(content);
-    return h.substr(0, 5) == "00000";
+    return h.substr(0, 3) == "000";
 }
 
 static bool write_state_file(const fs::path& home_dir, const UserInfo& info, const std::string& main_user) {
@@ -330,10 +315,18 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     }
 
     std::string ps = abs_proj.string();
-    if (ps.length() < main_home_canon.length()
-        || ps.substr(0, main_home_canon.length()) != main_home_canon
-        || (ps.length() > main_home_canon.length() && ps[main_home_canon.length()] != '/')) {
-        std::string err = "Project path must be under caller home (" + main_home_canon + "): " + ps;
+    
+    // Check project path permissions using is_path_allowed
+    // This handles owner, group, and other permissions properly
+    if (!utils::is_path_allowed(abs_proj, main_user)) {
+        std::string err = "Project path not accessible by user: " + ps;
+        utils::get_logger()->error("{}", err);
+        return {"", "", "", 0, 0, false, err};
+    }
+    
+    // Also check SYSTEM_DIRS blacklist
+    if (!security::validate_path_allowed(abs_proj)) {
+        std::string err = "Project path in system directory (not allowed): " + ps;
         utils::get_logger()->error("{}", err);
         return {"", "", "", 0, 0, false, err};
     }

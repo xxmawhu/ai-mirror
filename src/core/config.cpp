@@ -32,12 +32,29 @@ static bool validate_config_file_security(const fs::path& p) {
     if (lstat(p.c_str(), &st) != 0) {
         return false;
     }
-    if (S_ISLNK(st.st_mode)) {
-        utils::get_logger()->error("Config file is a symlink, rejecting: {}", p.string());
-        return false;
-    }
+
     uid_t expected_uid = utils::get_login_uid();
     if (expected_uid == 0) expected_uid = getuid();
+
+    if (S_ISLNK(st.st_mode)) {
+        // Symlink allowed: validate target file security
+        struct stat target_st;
+        if (stat(p.c_str(), &target_st) != 0) {
+            utils::get_logger()->error("Config symlink target does not exist or cannot be resolved: {}", p.string());
+            return false;
+        }
+        if (target_st.st_uid != expected_uid) {
+            utils::get_logger()->error("Config symlink target not owned by expected user (uid {} != {}), rejecting: {}",
+                target_st.st_uid, expected_uid, p.string());
+            return false;
+        }
+        if (target_st.st_mode & (S_IWGRP | S_IWOTH)) {
+            utils::get_logger()->warn("Config symlink target is group/world writable: {}", p.string());
+        }
+        utils::get_logger()->info("Config file is a symlink, target validated: {}", p.string());
+        return true;
+    }
+
     if (st.st_uid != expected_uid) {
         utils::get_logger()->error("Config file not owned by expected user (uid {} != {}), rejecting: {}",
             st.st_uid, expected_uid, p.string());
@@ -257,6 +274,7 @@ Config ConfigParser::create_default_config(const fs::path& config_path) {
     config.mount.paths = {
         fs::path("~/.bashrc"),
         fs::path("~/.config"),
+        fs::path("~/.local/bin"),
     };
     config.ssh.key_type = "ed25519";
     // key_path: Leave empty to enable runtime auto-detection (id_ed25519 > id_rsa > id_ecdsa > ai-mirror)
@@ -269,8 +287,21 @@ Config ConfigParser::create_default_config(const fs::path& config_path) {
 bool ConfigParser::save(const Config& config, const fs::path& config_path) {
     struct stat st;
     if (lstat(config_path.c_str(), &st) == 0 && S_ISLNK(st.st_mode)) {
-        utils::get_logger()->error("Config path is a symlink, rejecting: {}", config_path.string());
-        return false;
+        // Symlink allowed: validate target ownership
+        uid_t expected_uid = utils::get_login_uid();
+        if (expected_uid == 0) expected_uid = getuid();
+        struct stat target_st;
+        if (stat(config_path.c_str(), &target_st) != 0) {
+            utils::get_logger()->error("Config symlink target cannot be resolved: {}", config_path.string());
+            return false;
+        }
+        if (target_st.st_uid != expected_uid) {
+            utils::get_logger()->error("Config symlink target not owned by expected user (uid {} != {}), rejecting: {}",
+                target_st.st_uid, expected_uid, config_path.string());
+            return false;
+        }
+        // Target is valid - write to the resolved path
+        utils::get_logger()->info("Config path is a symlink, target validated: {}", config_path.string());
     }
 
     fs::path tmp_path = config_path;

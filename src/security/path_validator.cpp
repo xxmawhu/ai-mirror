@@ -32,10 +32,27 @@ fs::path safe_canonical(const fs::path& p) {
 
 bool validate_path_allowed(const fs::path& p) {
     if (p.empty()) return false;
+    
+    // Try canonical first for existing paths
     auto resolved = safe_canonical(p);
-    if (resolved.empty()) return false;
-    std::string s = resolved.string();
-
+    if (!resolved.empty()) {
+        std::string s = resolved.string();
+        for (const auto& d : SYSTEM_DIRS) {
+            if (s == d) return false;
+            if (s.length() > d.length() && s[d.length()] == '/' && s.substr(0, d.length()) == d) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // Path doesn't exist: check parent chain against SYSTEM_DIRS
+    // Use weakly_canonical for non-existent paths to resolve symlinks in parent chain
+    std::error_code ec;
+    fs::path weak_resolved = fs::weakly_canonical(p, ec);
+    if (ec) return false;
+    
+    std::string s = weak_resolved.string();
     for (const auto& d : SYSTEM_DIRS) {
         if (s == d) return false;
         if (s.length() > d.length() && s[d.length()] == '/' && s.substr(0, d.length()) == d) {

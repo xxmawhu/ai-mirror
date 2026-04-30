@@ -32,7 +32,8 @@ struct UserInfo {
 // to prevent prefix collision attacks (e.g., prefix_alice matching prefix_alice2).
 class UserManager {
 public:
-    explicit UserManager(const std::string& prefix);
+    explicit UserManager(const std::string& prefix,
+                         const std::vector<fs::path>& allowed_bases = {});
 
     UserInfo create_ai_user(const std::string& project_path);
     bool remove_ai_user(const std::string& username, bool force = false);
@@ -47,6 +48,7 @@ public:
 
 private:
     std::string prefix_;
+    std::vector<fs::path> allowed_bases_;
     std::optional<std::string> generate_username(const fs::path& project_path) const;
     std::optional<std::string> compute_username(const fs::path& project_path, bool check_collision) const;
     bool execute_useradd(const std::string& username, const fs::path& home_dir, uid_t uid, gid_t gid);

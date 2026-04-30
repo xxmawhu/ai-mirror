@@ -50,12 +50,15 @@ std::string get_effective_home();
 std::string shell_escape(const std::string& s);
 bool validate_path_no_shell_metachars(const std::string& path);
 
-// Validate path is under main_user's home directory.
+// Validate path is under main_user's home directory or allowed_bases.
 // Uses fs::canonical() for existing paths. For non-existent paths,
-// validates parent directory exists and is canonical under home.
+// validates parent directory exists and is canonical under home/allowed_bases.
 // Rejects paths with ".." components.
-bool is_path_allowed(const fs::path& p, const std::string& main_user);
-bool is_path_allowed_parent(const fs::path& p, const std::string& main_user);
+// allowed_bases: extra base paths beyond $HOME (e.g. BeeGFS mount points)
+bool is_path_allowed(const fs::path& p, const std::string& main_user,
+                     const std::vector<fs::path>& allowed_bases = {});
+bool is_path_allowed_parent(const fs::path& p, const std::string& main_user,
+                             const std::vector<fs::path>& allowed_bases = {});
 uid_t get_login_uid();
 
 // Check if the current effective user is a member of the specified group.

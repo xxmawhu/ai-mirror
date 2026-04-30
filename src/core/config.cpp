@@ -130,8 +130,23 @@ Config ConfigParser::load(const fs::path& config_path) {
                 if (user.as_table().contains("prefix")) {
                     config.user.prefix = toml::get<std::string>(user["prefix"]);
                 }
+                if (user.as_table().contains("allowed_bases")) {
+                    auto bases = toml::get<std::vector<std::string>>(user["allowed_bases"]);
+                    for (const auto& b : bases) {
+                        fs::path expanded = expand_path(b);
+                        // Replace {user} placeholder with actual username
+                        std::string base_str = expanded.string();
+                        size_t pos = base_str.find("{user}");
+                        if (pos != std::string::npos) {
+                            std::string main_user = utils::get_effective_username();
+                            base_str.replace(pos, 6, main_user);
+                            expanded = fs::path(base_str);
+                        }
+                        config.user.allowed_bases.push_back(expanded);
+                    }
+                }
             } catch (const std::exception& e) {
-                std::string field_err = std::string("user.prefix: ") + e.what();
+                std::string field_err = std::string("user section: ") + e.what();
                 config.load_error += (config.load_error.empty() ? "" : "; ") + field_err;
                 utils::get_logger()->warn("Config field error: {}", field_err);
             }
@@ -320,7 +335,16 @@ bool ConfigParser::save(const Config& config, const fs::path& config_path) {
     }
 
     std::ostringstream oss;
-    oss << "[mount]\n"
+    oss << "[user]\n"
+        << "prefix = \"" << toml_escape(config.user.prefix) << "\"\n";
+    if (!config.user.allowed_bases.empty()) {
+        oss << "allowed_bases = [\n";
+        for (const auto& b : config.user.allowed_bases) {
+            oss << "    \"" << toml_escape(b.string()) << "\",\n";
+        }
+        oss << "]\n";
+    }
+    oss << "\n[mount]\n"
         << "paths = [\n";
     for (const auto& p : config.mount.paths) {
         oss << "    \"" << toml_escape(p.string()) << "\",\n";

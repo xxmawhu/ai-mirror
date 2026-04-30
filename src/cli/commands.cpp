@@ -46,7 +46,7 @@ struct CommandContext {
 static CommandContext make_context(bool verbose) {
     CommandContext ctx;
     ctx.config = core::ConfigParser::load_default();
-    ctx.user_mgr = std::make_unique<core::UserManager>(ctx.config.user.prefix);
+    ctx.user_mgr = std::make_unique<core::UserManager>(ctx.config.user.prefix, ctx.config.user.allowed_bases);
     ctx.graft = std::make_unique<core::Graft>(ctx.config.user.prefix);
     ctx.ssh_mgr = std::make_unique<core::SSHManager>();
     ctx.verbose = verbose;

@@ -126,7 +126,9 @@ static unsigned int compute_next_seq(uid_t base_uid) {
     return max_seq + 1;
 }
 
-UserManager::UserManager(const std::string& prefix) : prefix_(prefix) {}
+UserManager::UserManager(const std::string& prefix,
+                         const std::vector<fs::path>& allowed_bases)
+    : prefix_(prefix), allowed_bases_(allowed_bases) {}
 
 std::optional<std::string> UserManager::compute_username(const fs::path& project_path, bool check_collision) const {
     std::string stem = project_path.filename().string();
@@ -274,7 +276,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
 
     std::string main_user = utils::get_effective_username();
 
-    if (!utils::is_path_allowed(proj, main_user)) {
+    if (!utils::is_path_allowed(proj, main_user, allowed_bases_)) {
         std::string err = "Project path not allowed for user '" + main_user + "': " + proj.string();
         utils::get_logger()->error("{}", err);
         return {"", "", "", 0, 0, false, err};
@@ -318,7 +320,7 @@ UserInfo UserManager::create_ai_user(const std::string& project_path) {
     
     // Check project path permissions using is_path_allowed
     // This handles owner, group, and other permissions properly
-    if (!utils::is_path_allowed(abs_proj, main_user)) {
+    if (!utils::is_path_allowed(abs_proj, main_user, allowed_bases_)) {
         std::string err = "Project path not accessible by user: " + ps;
         utils::get_logger()->error("{}", err);
         return {"", "", "", 0, 0, false, err};

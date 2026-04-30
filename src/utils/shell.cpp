@@ -361,7 +361,24 @@ static bool is_managed_ai_user_home(const fs::path& p, uid_t login_uid) {
     return false;
 }
 
-bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main_user) {
+// Helper: check if a path is under any allowed_base
+static bool is_under_allowed_bases(const fs::path& p, const std::vector<fs::path>& allowed_bases) {
+    if (allowed_bases.empty()) return false;
+    std::string s = p.string();
+    for (const auto& base : allowed_bases) {
+        std::string base_str = base.string();
+        if (base_str.empty()) continue;
+        // Ensure trailing slash comparison is correct
+        if (s == base_str) return true;
+        if (s.length() > base_str.length() &&
+            s[base_str.length()] == '/' &&
+            s.substr(0, base_str.length()) == base_str) return true;
+    }
+    return false;
+}
+
+bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main_user,
+                     const std::vector<fs::path>& allowed_bases) {
     if (p.empty()) return false;
 
     // Reject ".." traversal (security: prevent directory escape)
@@ -401,9 +418,26 @@ bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main
             return security::validate_path_allowed(canon);
         }
         
+        // 4. Allowed bases: path under configured extra base paths (e.g. BeeGFS)
+        //    Still requires ownership/permission on some parent, AND not in SYSTEM_DIRS
+        if (is_under_allowed_bases(canon, allowed_bases)) {
+            // Check parent chain for ownership or write access
+            fs::path check = canon;
+            while (!check.empty() && check != "/") {
+                struct stat pst;
+                if (stat(check.c_str(), &pst) == 0) {
+                    if (pst.st_uid == login_uid || has_write_access(check, login_uid)) {
+                        return security::validate_path_allowed(canon);
+                    }
+                }
+                check = check.parent_path();
+            }
+        }
+        
         // Path exists but no access - check parent chain for ownership
         fs::path parent = canon.parent_path();
-        while (!parent.empty() && parent != "/") {
+        int max_depth = 32;
+        while (!parent.empty() && parent != "/" && --max_depth > 0) {
             if (stat(parent.c_str(), &st) == 0) {
                 if (st.st_uid == login_uid) {
                     return security::validate_path_allowed(parent);
@@ -448,14 +482,30 @@ bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main
         return security::validate_path_allowed(canon_parent);
     }
 
+    // 4. Allowed bases: parent under configured extra base paths
+    if (is_under_allowed_bases(canon_parent, allowed_bases)) {
+        // Check parent chain for ownership or write access
+        fs::path check = canon_parent;
+        while (!check.empty() && check != "/") {
+            struct stat pst;
+            if (stat(check.c_str(), &pst) == 0) {
+                if (pst.st_uid == login_uid || has_write_access(check, login_uid)) {
+                    return security::validate_path_allowed(canon_parent);
+                }
+            }
+            check = check.parent_path();
+        }
+    }
+
     // Parent not owned by user and no write access
     return false;
 }
 
-bool is_path_allowed_parent(const fs::path& p, const std::string& main_user) {
+bool is_path_allowed_parent(const fs::path& p, const std::string& main_user,
+                             const std::vector<fs::path>& allowed_bases) {
     fs::path parent = p.parent_path();
     if (parent.empty()) return false;
-    return is_path_allowed(parent, main_user);
+    return is_path_allowed(parent, main_user, allowed_bases);
 }
 
 bool is_group_member(const std::string& group_name) {

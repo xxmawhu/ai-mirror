@@ -16,6 +16,7 @@ struct SSHKeyEntry {
 struct Config {
     struct UserConfig {
         std::string prefix = "i";
+        std::vector<fs::path> allowed_bases;  // extra allowed base paths beyond $HOME (e.g. BeeGFS mount points)
     } user;
 
     struct MountConfig {

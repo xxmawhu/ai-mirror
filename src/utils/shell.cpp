@@ -419,7 +419,8 @@ bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main
         }
         
         // 4. Allowed bases: path under configured extra base paths (e.g. BeeGFS)
-        //    Still requires ownership/permission on some parent, AND not in SYSTEM_DIRS
+        //    Still requires ownership/permission on some parent, but skips SYSTEM_DIRS
+        //    (allowed_bases may be under /scratch etc. which are still in SYSTEM_DIRS)
         if (is_under_allowed_bases(canon, allowed_bases)) {
             // Check parent chain for ownership or write access
             fs::path check = canon;
@@ -427,7 +428,7 @@ bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main
                 struct stat pst;
                 if (stat(check.c_str(), &pst) == 0) {
                     if (pst.st_uid == login_uid || has_write_access(check, login_uid)) {
-                        return security::validate_path_allowed(canon);
+                        return security::validate_path_allowed_skip_system_dirs(canon);
                     }
                 }
                 check = check.parent_path();
@@ -483,6 +484,7 @@ bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main
     }
 
     // 4. Allowed bases: parent under configured extra base paths
+    //    Skips SYSTEM_DIRS check (allowed_bases may be under /scratch etc.)
     if (is_under_allowed_bases(canon_parent, allowed_bases)) {
         // Check parent chain for ownership or write access
         fs::path check = canon_parent;
@@ -490,7 +492,7 @@ bool is_path_allowed(const fs::path& p, [[maybe_unused]] const std::string& main
             struct stat pst;
             if (stat(check.c_str(), &pst) == 0) {
                 if (pst.st_uid == login_uid || has_write_access(check, login_uid)) {
-                    return security::validate_path_allowed(canon_parent);
+                    return security::validate_path_allowed_skip_system_dirs(canon_parent);
                 }
             }
             check = check.parent_path();

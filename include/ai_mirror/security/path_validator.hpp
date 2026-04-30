@@ -13,7 +13,7 @@ namespace ai_mirror::security {
 //
 // All validation functions reject paths that:
 // - Are empty or contain ".." components
-// - Fall under SYSTEM_DIRS blacklist (18 FHS directories)
+// - Fall under SYSTEM_DIRS blacklist (17 FHS directories; /mnt excluded for HPC/BeeGFS)
 // - Are symlinks that resolve outside allowed boundaries
 //
 // safe_canonical() returns empty path on failure (non-existent, dangling symlink),
@@ -46,6 +46,11 @@ fs::path safe_canonical(const fs::path& p);
 // Validate path is not under SYSTEM_DIRS blacklist.
 // Does NOT validate home directory prefix - use is_path_allowed() for that.
 bool validate_path_allowed(const fs::path& p);
+
+// Same as validate_path_allowed but skips SYSTEM_DIRS check.
+// Used for allowed_bases paths which are explicitly configured by the user
+// and may be under /mnt, /scratch etc.
+bool validate_path_allowed_skip_system_dirs(const fs::path& p);
 
 // Validate mount source path (wrapper for validate_path_allowed).
 bool validate_mount_source(const fs::path& source);

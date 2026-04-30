@@ -10,12 +10,13 @@
 namespace ai_mirror::security {
 
 // FHS system directories - all paths under these are forbidden.
-// Covers both privileged (/etc, /root, /boot) and shared (/tmp, /opt, /srv, /mnt, /media).
+// Covers privileged (/etc, /root, /boot) and shared (/tmp, /opt, /srv, /media).
+// /mnt is intentionally excluded: BeeGFS and other shared filesystems mount there.
 // /lost+found is filesystem-specific recovery directory (ext4 etc.).
 static const std::vector<std::string> SYSTEM_DIRS = {
     "/etc", "/root", "/var", "/proc", "/sys", "/dev",
     "/boot", "/lib", "/usr", "/sbin", "/bin", "/run",
-    "/opt", "/tmp", "/srv", "/mnt", "/media", "/lost+found"
+    "/opt", "/tmp", "/srv", "/media", "/lost+found"
 };
 
 // Resolve path to canonical form using fs::canonical().  Returns empty path
@@ -59,6 +60,19 @@ bool validate_path_allowed(const fs::path& p) {
             return false;
         }
     }
+    return true;
+}
+
+// Same as validate_path_allowed but skips SYSTEM_DIRS blacklist check.
+// For allowed_bases paths that are explicitly configured (e.g. BeeGFS, /scratch).
+bool validate_path_allowed_skip_system_dirs(const fs::path& p) {
+    if (p.empty()) return false;
+
+    // Only reject trivially dangerous paths: ".." components
+    for (const auto& part : p) {
+        if (part == "..") return false;
+    }
+
     return true;
 }
 

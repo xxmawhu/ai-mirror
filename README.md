@@ -341,7 +341,7 @@ ai-mirror 从设计之初就把安全作为核心约束，不是事后补丁：
 
 ### 路径验证
 - **Home + allowed_bases 白名单**: 所有文件操作路径必须在主用户 home 目录下，或位于 `[user].allowed_bases` 配置的额外路径白名单内
-- **系统目录黑名单**: 阻止对系统关键目录的操作（/bin, /sbin, /usr, /lib, /etc, /root, /var, /proc, /sys, /dev, /run, /boot, /opt, /tmp, /srv, /mnt, /media, /lost+found），防止系统级破坏
+- **系统目录黑名单**: 阻止对系统关键目录的操作（/bin, /sbin, /usr, /lib, /etc, /root, /var, /proc, /sys, /dev, /run, /boot, /opt, /tmp, /srv, /media, /lost+found），防止系统级破坏。`/mnt` 已从黑名单移除以支持 BeeGFS 等共享存储
 - **符号链接防护**: canonical 失败时返回失败，不回退原始路径
 - **Mount 前二次验证**: 防止 TOCTOU 攻击
 - **HPC 共享存储支持**: 通过 `allowed_bases` 配置 BeeGFS/NFS 等共享路径，`{user}` 占位符防止跨用户访问

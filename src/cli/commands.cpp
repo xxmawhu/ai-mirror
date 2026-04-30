@@ -386,7 +386,7 @@ int cmd_create(const std::string& project_path, bool verbose) {
     fs::path proj = *proj_opt;
 
     std::string main_user = utils::get_effective_username();
-    if (!utils::is_path_allowed(proj, main_user)) {
+    if (!utils::is_path_allowed(proj, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Path not allowed: " << proj.string() << std::endl;
         return 1;
     }

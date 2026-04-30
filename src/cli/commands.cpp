@@ -247,7 +247,7 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         if (!source_opt) continue;
         fs::path source = *source_opt;
         if (!fs::exists(source)) continue;
-        if (!utils::is_path_allowed(source, main_user)) continue;
+        if (!utils::is_path_allowed(source, main_user, ctx.config.user.allowed_bases)) continue;
 
         fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
         if (ctx.graft->is_mounted(target)) continue;
@@ -670,7 +670,7 @@ int cmd_mkdir(const std::string& path, const std::string& ai_user, bool verbose)
     }
     fs::path dir_path = *dir_path_opt;
 
-    if (!utils::is_path_allowed(dir_path, main_user)) {
+    if (!utils::is_path_allowed(dir_path, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Path not allowed: " << dir_path.string() << std::endl;
         return 1;
     }
@@ -720,7 +720,7 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
     }
     fs::path file_path = *file_path_opt;
 
-    if (!utils::is_path_allowed(file_path, main_user)) {
+    if (!utils::is_path_allowed(file_path, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Path not allowed: " << file_path.string() << std::endl;
         return 1;
     }
@@ -729,7 +729,7 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
         std::error_code ec;
         fs::path parent = file_path.parent_path();
         if (!parent.empty() && !fs::exists(parent)) {
-            if (!utils::is_path_allowed(parent, main_user)) {
+            if (!utils::is_path_allowed(parent, main_user, ctx.config.user.allowed_bases)) {
                 std::cerr << "Parent path not allowed: " << parent.string() << std::endl;
                 return 1;
             }
@@ -781,12 +781,12 @@ int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
     }
     fs::path dst_path = *dst_path_opt;
 
-    if (!utils::is_path_allowed(dst_path, main_user)) {
+    if (!utils::is_path_allowed(dst_path, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Destination path not allowed: " << dst_path.string() << std::endl;
         return 1;
     }
 
-    if (!utils::is_path_allowed(src_path, main_user)) {
+    if (!utils::is_path_allowed(src_path, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Source path not allowed: " << src_path.string() << std::endl;
         return 1;
     }
@@ -859,12 +859,12 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
     }
     fs::path dst_path = *dst_path_opt;
 
-    if (!utils::is_path_allowed(dst_path, main_user)) {
+    if (!utils::is_path_allowed(dst_path, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Destination path not allowed: " << dst_path.string() << std::endl;
         return 1;
     }
 
-    if (!utils::is_path_allowed(src_path, main_user)) {
+    if (!utils::is_path_allowed(src_path, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Source path not allowed: " << src_path.string() << std::endl;
         return 1;
     }

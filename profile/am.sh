@@ -22,12 +22,28 @@ _am_get_main_user() {
 	fi
 }
 
-# Validate path is under HOME or /home
+# Validate path is under HOME, /home, or in allowed_bases
+# Also validates BeeGFS paths (/mnt/beegfs_data) and /scratch
 _am_validate_path() {
 	local path="$1"
 	local home="${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
+	local main_user
+	main_user=$(_am_get_main_user)
 
-	if [[ "$path" == "$home"* ]] || [[ "$path" == /home/* ]]; then
+	# Under HOME
+	if [[ "$path" == "$home"* ]]; then
+		return 0
+	fi
+	# Under /home/{main_user}
+	if [[ "$path" == "/home/${main_user}"* ]]; then
+		return 0
+	fi
+	# BeeGFS paths (allowed_bases pattern: /mnt/beegfs_data/usr/{user})
+	if [[ "$path" == "/mnt/beegfs_data/usr/${main_user}"* ]]; then
+		return 0
+	fi
+	# /scratch paths (allowed_bases pattern: /scratch/{user})
+	if [[ "$path" == "/scratch/${main_user}"* ]]; then
 		return 0
 	fi
 	return 1
@@ -128,7 +144,7 @@ am() {
 			fi
 			# SSH to AI user: start interactive login shell
 			# The ai user's HOME is set to the project directory, so no explicit cd needed
-			ssh -i "$ssh_key" -o IdentitiesOnly=yes "${user}@localhost"
+			ssh -tt -i "$ssh_key" -o IdentitiesOnly=yes "${user}@localhost"
 			;;
 		cd)
 			# Validate path

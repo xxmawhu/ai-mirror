@@ -254,6 +254,20 @@ am config
 用户级配置 `~/.ai-mirror.toml`（首次运行自动创建，用于覆盖默认值）：
 
 ```toml
+# [user] 用户创建与路径限制配置
+# allowed_bases: 额外允许创建 ai-user 的路径白名单
+#   - 默认只允许在主用户 $HOME 下创建 ai-user
+#   - HPC 共享存储场景（如 BeeGFS）需要配置此项
+#   - 支持 {user} 占位符，运行时替换为当前用户名
+#   - 白名单路径仍需通过 ownership/权限验证 + SYSTEM_DIRS 黑名单检查
+#
+# 示例：允许在 BeeGFS 共享存储创建 ai-user
+# [user]
+# prefix = "i"
+# allowed_bases = ["/mnt/beegfs_data/usr/{user}", "/scratch/{user}"]
+#
+# 注意：prefix 在编译时已设置默认值，通常无需配置
+
 # [mount] 只读挂载到每个 ai-user home 目录的文件/目录
 # ai-user 通过 bind mount 以只读方式看到这些内容，无法修改。
 # 用途：让 ai-user 继承主用户的 shell 环境、编辑器配置、语言设置等，
@@ -326,10 +340,11 @@ src/
 ai-mirror 从设计之初就把安全作为核心约束，不是事后补丁：
 
 ### 路径验证
-- **Home-only 允许列表**: 所有文件操作路径必须在主用户 home 目录下
+- **Home + allowed_bases 白名单**: 所有文件操作路径必须在主用户 home 目录下，或位于 `[user].allowed_bases` 配置的额外路径白名单内
 - **系统目录黑名单**: 阻止对系统关键目录的操作（/bin, /sbin, /usr, /lib, /etc, /root, /var, /proc, /sys, /dev, /run, /boot, /opt, /tmp, /srv, /mnt, /media, /lost+found），防止系统级破坏
 - **符号链接防护**: canonical 失败时返回失败，不回退原始路径
 - **Mount 前二次验证**: 防止 TOCTOU 攻击
+- **HPC 共享存储支持**: 通过 `allowed_bases` 配置 BeeGFS/NFS 等共享路径，`{user}` 占位符防止跨用户访问
 
 ### 所有权验证
 - **ai-user 归属检查**: 所有涉及 ai-user 的命令均验证归属关系

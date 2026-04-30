@@ -107,33 +107,37 @@ full_cleanup() {
 			for ((i = ${#mounts[@]} - 1; i >= 0; i--)); do
 				umount -l "${mounts[$i]}" 2>/dev/null || true
 			done
-			# Also unmount any ai-user homes
+			# Also unmount any ai-user homes (match any prefix pattern)
 			while IFS= read -r line; do
 				local mp=$(echo "$line" | awk '{print $2}')
-				if [[ "$mp" == /home/i${TEST_USER}_* ]]; then
+				case "$mp" in
+				/home/i${TEST_USER}_* | /home/ai_${TEST_USER}_* | /home/${TEST_USER}_*)
 					umount -l "$mp" 2>/dev/null || true
-				fi
-			done < <(grep " /home/i${TEST_USER}" /proc/mounts 2>/dev/null || true)
+					;;
+				esac
+			done < <(grep " /home/" /proc/mounts 2>/dev/null || true)
 		fi
 		sleep 0.3
 	done
 	# Remove all test ai-users (without -r to avoid deleting home dirs with stale mounts)
-	if id "$TEST_USER" &>/dev/null; then
-		local prefix="i${TEST_USER}_"
+	if id "$TEST_USER" &>/dev/null || [[ -d /home/$TEST_USER ]]; then
+		# Match any prefix pattern (i, ai_, custom)
 		while IFS= read -r line; do
 			local uname
 			uname=$(echo "$line" | cut -d: -f1)
-			if [[ "$uname" == ${prefix}* ]]; then
+			case "$uname" in
+			i${TEST_USER}_* | ai_${TEST_USER}_* | ${TEST_USER}_*)
 				userdel "$uname" 2>/dev/null || true
 				groupdel "$uname" 2>/dev/null || true
-			fi
+				;;
+			esac
 		done </etc/passwd
 		userdel "$TEST_USER" 2>/dev/null || true
 	fi
 	# Final cleanup of directories (use --one-file-system to avoid bind mount issues)
 	rm -rf --one-file-system /home/$TEST_USER 2>/dev/null || true
 	# For ai-user homes, may have nested bind mounts - use separate rm for each
-	for d in /home/i${TEST_USER}_*; do
+	for d in /home/i${TEST_USER}_* /home/ai_${TEST_USER}_* /home/${TEST_USER}_*; do
 		[[ -d "$d" ]] && rm -rf --one-file-system "$d" 2>/dev/null || true
 	done
 	rm -rf /tmp/test-project-* 2>/dev/null || true
@@ -145,7 +149,21 @@ setup_test_user() {
 	local key_setup="${1:-none}"
 	full_cleanup
 
-	useradd -m -s /bin/bash "$TEST_USER" 2>/dev/null || true
+	# Force create test user (may fail if partially cleaned, retry)
+	useradd -m -s /bin/bash "$TEST_USER" 2>/dev/null ||
+		{
+			userdel "$TEST_USER" 2>/dev/null
+			groupdel "$TEST_USER" 2>/dev/null
+			rm -rf /home/$TEST_USER
+			useradd -m -s /bin/bash "$TEST_USER"
+		}
+
+	# Verify user exists before continuing
+	id "$TEST_USER" &>/dev/null || {
+		log_fail "setup_test_user: cannot create $TEST_USER"
+		return 1
+	}
+
 	usermod -aG ai-mirror "$TEST_USER" 2>/dev/null || true
 	mkdir -p "/home/$TEST_USER/projects/testproj"
 	# chown may fail on bind-mounted files (read-only), ignore errors
@@ -872,6 +890,479 @@ if [[ -n "$AI_USER" ]]; then
 	fi
 
 	[[ $SYS_OK -eq 1 ]] && log_pass "system integrity OK" || log_fail "system integrity compromised"
+fi
+
+# ============================================================
+# F1: force-destroy by username
+# ============================================================
+begin_test "F1: force-destroy by username"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+	log_info "Created: $AI_USER home=$AI_HOME"
+
+	# Check bind mount exists
+	if findmnt "$AI_HOME/.bashrc" >/dev/null 2>&1; then
+		log_pass ".bashrc is mounted before force-destroy"
+	else
+		log_warn ".bashrc not mounted (config may differ)"
+	fi
+
+	# Force-destroy by username
+	FD_OUT=$(run_am force-destroy "$AI_USER" 2>&1)
+	log_info "force-destroy output: $FD_OUT"
+
+	# Verify user removed
+	if id "$AI_USER" &>/dev/null; then
+		log_fail "user still exists after force-destroy"
+	else
+		log_pass "user removed after force-destroy"
+	fi
+
+	# Verify mounts cleaned
+	if findmnt "$AI_HOME/.bashrc" >/dev/null 2>&1; then
+		log_fail "mount still exists after force-destroy"
+	else
+		log_pass "mounts cleaned after force-destroy"
+	fi
+
+	# Verify home dir NOT removed (force-destroy doesn't rm home)
+	if [[ -d "$AI_HOME" ]]; then
+		log_pass "home dir preserved after force-destroy (expected)"
+	else
+		log_warn "home dir removed (unexpected for force-destroy)"
+	fi
+fi
+
+# ============================================================
+# F2: force-destroy by project path
+# ============================================================
+begin_test "F2: force-destroy by project path"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	log_info "Created: $AI_USER"
+
+	# Force-destroy by project path (alternative input)
+	FD_OUT=$(run_am force-destroy "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "force-destroy by path output: $FD_OUT"
+
+	if id "$AI_USER" &>/dev/null; then
+		log_fail "user still exists"
+	else
+		log_pass "user removed via project path input"
+	fi
+fi
+
+# ============================================================
+# M1: mkdir success path
+# ============================================================
+begin_test "M1: mkdir success path"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	EXTRA_DIR="/home/$TEST_USER/projects/extra-dir"
+
+	# mkdir should create dir and grant write access
+	MK_OUT=$(run_am mkdir "$EXTRA_DIR" "$AI_USER" 2>&1)
+	log_info "mkdir output: $MK_OUT"
+
+	if [[ -d "$EXTRA_DIR" ]]; then
+		log_pass "directory created"
+	else
+		log_fail "directory not created"
+	fi
+
+	# Check group ownership
+	DIR_GROUP=$(stat -c '%G' "$EXTRA_DIR" 2>/dev/null)
+	if [[ "$DIR_GROUP" == "$AI_USER" ]]; then
+		log_pass "group ownership set to ai-user"
+	else
+		log_fail "wrong group: $DIR_GROUP"
+	fi
+
+	# Check SGID
+	if [[ -g "$EXTRA_DIR" ]]; then
+		log_pass "SGID bit set"
+	else
+		log_fail "SGID not set"
+	fi
+
+	# Check group write
+	PERMS=$(stat -c '%a' "$EXTRA_DIR" 2>/dev/null)
+	GROUP_PERM="${PERMS:1:1}"
+	if [[ "$GROUP_PERM" -ge 6 ]]; then
+		log_pass "group has write permission"
+	else
+		log_fail "group missing write: $PERMS"
+	fi
+fi
+
+# ============================================================
+# M2: mkdir on existing dir
+# ============================================================
+begin_test "M2: mkdir on existing dir (grant only)"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Pre-create directory with wrong ownership
+	EXTRA_DIR="/home/$TEST_USER/projects/preexist-dir"
+	mkdir -p "$EXTRA_DIR"
+	chown "$TEST_USER:$TEST_USER" "$EXTRA_DIR"
+	chmod 755 "$EXTRA_DIR"
+
+	MK_OUT=$(run_am mkdir "$EXTRA_DIR" "$AI_USER" 2>&1)
+	log_info "mkdir existing output: $MK_OUT"
+
+	DIR_GROUP=$(stat -c '%G' "$EXTRA_DIR" 2>/dev/null)
+	[[ "$DIR_GROUP" == "$AI_USER" ]] && log_pass "ownership fixed" || log_fail "wrong group: $DIR_GROUP"
+	[[ -g "$EXTRA_DIR" ]] && log_pass "SGID set" || log_fail "no SGID"
+fi
+
+# ============================================================
+# M3: touch success path
+# ============================================================
+begin_test "M3: touch success path"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	EXTRA_FILE="/home/$TEST_USER/projects/testproj/extra-file.txt"
+
+	# touch should create file with ai-user ownership
+	TCH_OUT=$(run_am touch "$EXTRA_FILE" "$AI_USER" 2>&1)
+	log_info "touch output: $TCH_OUT"
+
+	if [[ -f "$EXTRA_FILE" ]]; then
+		log_pass "file created"
+	else
+		log_fail "file not created"
+	fi
+
+	FILE_OWNER=$(stat -c '%U' "$EXTRA_FILE" 2>/dev/null)
+	[[ "$FILE_OWNER" == "$AI_USER" ]] && log_pass "file owned by ai-user" || log_fail "wrong owner: $FILE_OWNER"
+
+	FILE_PERMS=$(stat -c '%a' "$EXTRA_FILE" 2>/dev/null)
+	[[ "$FILE_PERMS" == "600" ]] && log_pass "file mode 600" || log_warn "unexpected mode: $FILE_PERMS"
+fi
+
+# ============================================================
+# M4: touch on existing file
+# ============================================================
+begin_test "M4: touch on existing file"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Pre-create file with wrong ownership
+	EXTRA_FILE="/home/$TEST_USER/projects/testproj/preexist.txt"
+	touch "$EXTRA_FILE"
+	chown "$TEST_USER:$TEST_USER" "$EXTRA_FILE"
+	chmod 644 "$EXTRA_FILE"
+
+	TCH_OUT=$(run_am touch "$EXTRA_FILE" "$AI_USER" 2>&1)
+	log_info "touch existing output: $TCH_OUT"
+
+	FILE_OWNER=$(stat -c '%U' "$EXTRA_FILE" 2>/dev/null)
+	[[ "$FILE_OWNER" == "$AI_USER" ]] && log_pass "ownership fixed" || log_fail "wrong owner: $FILE_OWNER"
+fi
+
+# ============================================================
+# U1: update remounts missing bind mounts
+# ============================================================
+begin_test "U1: update remounts missing bind mounts"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+
+	# Verify initial mount
+	if findmnt "$AI_HOME/.bashrc" >/dev/null 2>&1; then
+		log_pass "initial .bashrc mounted"
+	else
+		log_warn "initial .bashrc not mounted"
+	fi
+
+	# Unmount it manually
+	umount -l "$AI_HOME/.bashrc" 2>/dev/null || true
+	sleep 0.3
+
+	if ! findmnt "$AI_HOME/.bashrc" >/dev/null 2>&1; then
+		log_pass "mount removed manually"
+	else
+		log_warn "could not unmount (Docker limitation)"
+	fi
+
+	# Run update
+	UPD_OUT=$(run_am update "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "update output: $UPD_OUT"
+
+	# Check mount restored
+	if findmnt "$AI_HOME/.bashrc" >/dev/null 2>&1; then
+		log_pass "mount restored by update"
+	else
+		log_fail "mount NOT restored by update"
+	fi
+fi
+
+# ============================================================
+# U2: update removes stale mounts
+# ============================================================
+begin_test "U2: update removes stale mounts"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+
+	# Create a stale mount point (not in config)
+	STALE_FILE="$AI_HOME/.stale_config"
+	touch "/home/$TEST_USER/.stale_config" 2>/dev/null || true
+	mkdir -p "$AI_HOME"
+
+	# Attempt bind mount (may fail in Docker without --privileged)
+	mount --bind "/home/$TEST_USER/.stale_config" "$STALE_FILE" 2>/dev/null || log_warn "cannot create stale mount (Docker)"
+
+	if findmnt "$STALE_FILE" >/dev/null 2>&1; then
+		log_info "stale mount created"
+
+		UPD_OUT=$(run_am update "/home/$TEST_USER/projects/testproj" 2>&1)
+		log_info "update output: $UPD_OUT"
+
+		if ! findmnt "$STALE_FILE" >/dev/null 2>&1; then
+			log_pass "stale mount removed by update"
+		else
+			log_fail "stale mount NOT removed"
+		fi
+	else
+		log_warn "stale mount test skipped (Docker limitation)"
+	fi
+fi
+
+# ============================================================
+# G1: create with multiple mount.paths
+# ============================================================
+begin_test "G1: create with multiple mount.paths"
+setup_test_user standard
+
+# Write config with multiple mount paths (chown to test user for security check)
+cat >"/home/$TEST_USER/.ai-mirror.toml" <<'CFG'
+[user]
+prefix = "i"
+
+[mount]
+paths = ["~/.bashrc", "~/.config"]
+
+[ssh]
+key_type = "ed25519"
+CFG
+chown "$TEST_USER:$TEST_USER" "/home/$TEST_USER/.ai-mirror.toml"
+
+mkdir -p "/home/$TEST_USER/.config"
+echo "test config" >"/home/$TEST_USER/.config/test.conf"
+chown -R "$TEST_USER:$TEST_USER" "/home/$TEST_USER/.config"
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+
+	# Check .bashrc mount
+	if findmnt "$AI_HOME/.bashrc" >/dev/null 2>&1; then
+		log_pass ".bashrc mounted"
+	else
+		# Check if mount was attempted (may not show in findmnt in some Docker setups)
+		if echo "$OUT" | grep -q "Bind mounted.*\.bashrc"; then
+			log_pass ".bashrc mount reported successful"
+		else
+			log_fail ".bashrc NOT mounted"
+		fi
+	fi
+
+	# Check .config mount (directory bind mount)
+	if findmnt "$AI_HOME/.config" >/dev/null 2>&1; then
+		log_pass ".config mounted"
+	else
+		if echo "$OUT" | grep -q "Bind mounted.*\.config"; then
+			log_pass ".config mount reported successful"
+		else
+			log_fail ".config NOT mounted"
+		fi
+	fi
+
+	# Verify .config content readable
+	if [[ -f "$AI_HOME/.config/test.conf" ]]; then
+		grep -q "test config" "$AI_HOME/.config/test.conf" && log_pass ".config content visible" || log_fail ".config content wrong"
+	else
+		log_fail ".config/test.conf not found"
+	fi
+fi
+
+# ============================================================
+# G2: create with custom prefix
+# ============================================================
+begin_test "G2: create with custom prefix"
+
+# Aggressive cleanup: remove ALL possible ai-users from any prefix
+for uname in $(awk -F: '{print $1}' /etc/passwd); do
+	case "$uname" in
+	i${TEST_USER}_* | ai_${TEST_USER}_*)
+		umount -lR "$(getent passwd "$uname" | cut -d: -f6)" 2>/dev/null || true
+		userdel "$uname" 2>/dev/null || true
+		groupdel "$uname" 2>/dev/null || true
+		;;
+	esac
+done
+userdel "$TEST_USER" 2>/dev/null || true
+groupdel "$TEST_USER" 2>/dev/null || true
+rm -rf /home/${TEST_USER} /home/i${TEST_USER}_* /home/ai_${TEST_USER}_* 2>/dev/null || true
+
+setup_test_user standard
+
+# Write config with custom prefix (chown to test user for security check)
+cat >"/home/$TEST_USER/.ai-mirror.toml" <<'CFG'
+[user]
+prefix = "ai_"
+
+[mount]
+paths = ["~/.bashrc"]
+
+[ssh]
+key_type = "ed25519"
+CFG
+chown "$TEST_USER:$TEST_USER" "/home/$TEST_USER/.ai-mirror.toml"
+
+log_info "Config owner: $(stat -c '%U:%G' /home/$TEST_USER/.ai-mirror.toml)"
+log_info "Config content:"
+cat "/home/$TEST_USER/.ai-mirror.toml" | while IFS= read -r line; do log_info "  $line"; done
+
+# Verify config loads correctly
+CFG_OUT=$(run_am config 2>&1)
+log_info "config output: $CFG_OUT"
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	log_info "Created user: $AI_USER"
+
+	# Verify prefix in username
+	if [[ "$AI_USER" == ai_${TEST_USER}_* ]]; then
+		log_pass "custom prefix 'ai_' in username"
+	else
+		log_fail "wrong prefix format: $AI_USER"
+	fi
+
+	id "$AI_USER" &>/dev/null && log_pass "user exists" || log_fail "user not found"
+fi
+
+# ============================================================
+# W1: create -> cd -> update -> cd workflow
+# ============================================================
+begin_test "W1: create -> cd -> update -> cd workflow"
+setup_test_user standard
+
+# Step 1: create
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+log_info "Step 1: create -> $AI_USER"
+
+if [[ -n "$AI_USER" ]]; then
+	# Step 2: cd (should return action=ssh)
+	CD1=$(run_am cd "/home/$TEST_USER/projects/testproj" 2>&1)
+	echo "$CD1" | grep -q "action=ssh" && log_pass "step2: cd returns ssh" || log_fail "step2: wrong action"
+	echo "$CD1" | grep -q "user=$AI_USER" && log_pass "step2: user correct" || log_fail "step2: wrong user"
+
+	# Step 3: update (remount, fix permissions)
+	UPD=$(run_am update "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "step3: update done"
+
+	# Step 4: cd again (should still work)
+	CD2=$(run_am cd "/home/$TEST_USER/projects/testproj" 2>&1)
+	echo "$CD2" | grep -q "action=ssh" && log_pass "step4: cd still works" || log_fail "step4: cd broken after update"
+fi
+
+# ============================================================
+# W2: create -> mkdir -> touch -> cd workflow
+# ============================================================
+begin_test "W2: create -> mkdir -> touch -> cd workflow"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# mkdir additional dir
+	MK_OUT=$(run_am mkdir "/home/$TEST_USER/projects/data" "$AI_USER" 2>&1)
+	[[ -d "/home/$TEST_USER/projects/data" ]] && log_pass "mkdir created data dir" || log_fail "mkdir failed"
+
+	# touch file in new dir
+	TCH_OUT=$(run_am touch "/home/$TEST_USER/projects/data/file.txt" "$AI_USER" 2>&1)
+	[[ -f "/home/$TEST_USER/projects/data/file.txt" ]] && log_pass "touch created file" || log_fail "touch failed"
+
+	# cd should still work
+	CD=$(run_am cd "/home/$TEST_USER/projects/testproj" 2>&1)
+	echo "$CD" | grep -q "action=ssh" && log_pass "cd works after mkdir/touch" || log_fail "cd broken"
+fi
+
+# ============================================================
+# W3: create -> rm -> create same project workflow
+# ============================================================
+begin_test "W3: create -> rm -> create same project workflow"
+setup_test_user standard
+
+# First create
+OUT1=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI1=$(echo "$OUT1" | tail -1 | tr -d '[:space:]')
+log_info "First create: $AI1"
+
+if [[ -n "$AI1" ]]; then
+	# rm
+	RM_OUT=$(run_am rm "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "rm done"
+
+	# Verify removed
+	if id "$AI1" &>/dev/null; then
+		log_fail "first user still exists after rm"
+	else
+		log_pass "first user removed"
+	fi
+
+	# Recreate
+	mkdir -p "/home/$TEST_USER/projects/testproj"
+	chown "$TEST_USER:$TEST_USER" "/home/$TEST_USER/projects/testproj"
+
+	OUT2=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+	AI2=$(echo "$OUT2" | tail -1 | tr -d '[:space:]')
+	log_info "Second create: $AI2"
+
+	if [[ -n "$AI2" ]]; then
+		[[ "$AI1" == "$AI2" ]] && log_pass "same username on recreate" || log_pass "new username on recreate"
+		id "$AI2" &>/dev/null && log_pass "second user exists" || log_fail "second create failed"
+	fi
 fi
 
 # ============================================================

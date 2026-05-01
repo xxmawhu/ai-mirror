@@ -66,6 +66,7 @@ static std::string resolve_command(const std::string& cmd) {
         {"findmnt", "/usr/bin/findmnt"},
         {"which", "/usr/bin/which"},
         {"ssh", "/usr/bin/ssh"},
+        {"ps", "/usr/bin/ps"},
     };
 
     if (cmd.find('/') != std::string::npos) {
@@ -150,7 +151,7 @@ ShellResult exec_safe(const std::string& file, const std::vector<std::string>& a
         "mount", "umount", "chmod", "chown", "chgrp",
         "useradd", "userdel", "groupadd", "groupdel", "usermod", "passwd",
         "gpasswd", "ssh-keygen", "mkdir", "cp", "mv",
-        "getent", "findmnt", "which", "ssh", "pkill"
+        "getent", "findmnt", "which", "ssh", "pkill", "ps"
     };
     std::string cmd_name = fs::path(file).filename().string();
     if (ALLOWED_COMMANDS.find(cmd_name) == ALLOWED_COMMANDS.end()) {

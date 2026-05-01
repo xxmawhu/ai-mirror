@@ -96,6 +96,32 @@ sudo ./install.sh --clean
 - 需要提权的命令通过 `am` shell 函数自动处理 sudo
 - **bash 用户**：安装后新登录自动加载 `am()` shell 函数；或手动 `source /etc/profile.d/am.sh`
 
+### Bash 自动补齐
+
+`am` 支持 bash 命令补齐，类似 git 的 tab 补全体验。
+
+**安装方式**：
+
+```bash
+# 方式1: 手动加载（临时测试）
+source completions/am-completion.bash
+
+# 方式2: 系统级安装（推荐）
+sudo cp completions/am-completion.bash /etc/bash_completion.d/am
+
+# 方式3: 用户级安装（无需 root）
+mkdir -p ~/.local/share/bash-completion/completions
+cp completions/am-completion.bash ~/.local/share/bash-completion/completions/am
+```
+
+安装后新终端自动生效，或执行 `source ~/.bashrc` 立即启用。
+
+**补齐功能**：
+- 子命令补齐：`am <tab>` → create, cd, rm, list, status, health, update...
+- 参数补齐：`am create <tab>` → 项目目录补齐
+- 用户名补齐：`am rm <tab>` → 已创建的 ai-user 名称补齐
+- 文件路径补齐：基于当前目录的文件/目录补齐
+
 ### sudoers 安全说明
 
 虽然 sudoers 规则允许 `ai-mirror` 组无密码执行 `am`，但程序内部实现了多层验证：
@@ -290,10 +316,13 @@ paths = [
 #           底层使用此密钥 SSH 到 ai-user@localhost。
 #           不配置时自动检测：id_ed25519 > id_rsa > id_ecdsa > ai-mirror
 #
-# ai_default_key: ai-user 的 authorized_keys 中额外追加的公钥
+# ai_default_key: ai-user 的身份密钥（identity key）
 #                 典型场景：让 ai-user 能以自己的身份读取远程 Git 仓库
 #                 （GitLab、GitHub 等），而不需要主用户的完整 SSH 权限。
-#                 ai-mirror 会读取此公钥文件内容并写入 ai-user 的 authorized_keys。
+#                 ai-mirror 会复制此密钥到 ai-user ~/.ssh/，并自动检测格式
+#                 （ed25519/rsa/ecdsa），重命名为 SSH 默认文件名（id_ed25519/id_rsa/id_ecdsa）。
+#                 支持配置公钥路径（.pub）或私钥路径，两者都会被复制。
+#                 注意：此密钥作为 ai-user 的身份密钥，不会添加到 authorized_keys。
 #
 # key_type: 密钥算法，推荐 ed25519（更短、更安全、更快）
 [ssh]

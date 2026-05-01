@@ -89,6 +89,9 @@ int parse_and_run(int argc, char** argv) {
     auto* update_cmd = app.add_subcommand("update", "Re-apply SSH and mount fixes for a project");
     update_cmd->add_option("project_path", update_path, "Path to the project directory")->required();
 
+    // watch
+    app.add_subcommand("watch", "Monitor ai-users in real-time (htop-style)");
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {
@@ -133,6 +136,8 @@ int parse_and_run(int argc, char** argv) {
         return cmd_status(verbose);
     } else if (update_cmd->parsed()) {
         return cmd_update(update_path, verbose);
+    } else if (app.got_subcommand("watch")) {
+        return cmd_watch(verbose);
     }
 
     return 1;

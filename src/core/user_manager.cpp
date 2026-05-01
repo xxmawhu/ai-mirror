@@ -63,10 +63,36 @@ static std::string make_state_content(const UserInfo& info, const std::string& m
 }
 
 static bool verify_state_content(const std::string& content) {
-    // Simple PoW verification: md5 of entire content must start with "000"
-    // No legacy format support - old versions will fail verification
-    std::string h = md5_hex(content);
-    return h.substr(0, 3) == "000";
+    // PoW verification: md5 of content must start with "000"
+    // Supports both formats:
+    //   - New format: no "hash" field → md5(content) starts with "000"
+    //   - Legacy format: has "hash" field → verify stored hash starts with "000"
+    //     AND hash matches md5 of content without the hash field
+    auto j = nlohmann::json::parse(content, nullptr, false);
+    if (j.is_discarded()) return false;
+
+    if (!j.contains("hash")) {
+        // New format: verify as-is
+        return md5_hex(content).substr(0, 3) == "000";
+    }
+
+    // Legacy format: verify the stored hash value (PoW proof) is valid
+    std::string stored_hash = j["hash"].get<std::string>();
+    if (stored_hash.substr(0, 3) != "000") return false;
+
+    // Rebuild content without hash field using the same concatenation format
+    // as the old make_state_content: username, uid, gid, home_dir, main_user, timestamp
+    std::string clean;
+    clean.reserve(content.size());
+    clean += "{\n";
+    clean += "  \"username\": \""; clean += j["username"].get<std::string>(); clean += "\",\n";
+    clean += "  \"uid\": "; clean += j["uid"].dump(); clean += ",\n";
+    clean += "  \"gid\": "; clean += j["gid"].dump(); clean += ",\n";
+    clean += "  \"home_dir\": \""; clean += j["home_dir"].get<std::string>(); clean += "\",\n";
+    clean += "  \"main_user\": \""; clean += j["main_user"].get<std::string>(); clean += "\",\n";
+    clean += "  \"timestamp\": "; clean += j["timestamp"].dump(); clean += "\n}\n";
+
+    return md5_hex(clean) == stored_hash;
 }
 
 static bool write_state_file(const fs::path& home_dir, const UserInfo& info, const std::string& main_user) {

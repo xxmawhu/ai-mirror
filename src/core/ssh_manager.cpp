@@ -548,61 +548,80 @@ bool SSHManager::setup_default_key_from_file(const std::string& ai_user, const f
         return true;
     }
 
-    fs::path pub_key_path = key_path;
     std::error_code ec;
 
+    // Resolve actual private and public key paths from the config key_path
+    // key_path can be: a .pub file, a private key file, or a key without extension
+    fs::path priv_key_path, pub_key_path;
+
     if (key_path.extension() == ".pub") {
-        // Already a public key path
+        // Config points to .pub → derive private key by removing .pub
+        pub_key_path = key_path;
+        priv_key_path = fs::path(key_path.string().substr(0, key_path.string().size() - 4));
     } else {
-        // Private key path - derive public key path
+        // Config points to private key (or key without extension)
+        priv_key_path = key_path;
         pub_key_path = fs::path(key_path.string() + ".pub");
+    }
 
-        if (!fs::exists(pub_key_path, ec) || ec) {
-            // Public key doesn't exist, try to generate it from private key
-            if (!fs::exists(key_path, ec) || ec) {
-                utils::get_logger()->warn("Default key file not found: {}", key_path.string());
-                return false;
-            }
-            auto result = utils::exec_safe({"ssh-keygen", "-y", "-f", key_path.string()});
+    // Ensure public key exists: generate from private key if needed
+    if (!fs::exists(pub_key_path, ec) || ec) {
+        if (fs::exists(priv_key_path, ec) && !ec) {
+            auto result = utils::exec_safe({"ssh-keygen", "-y", "-f", priv_key_path.string()});
             if (result.exit_code != 0) {
-                utils::get_logger()->warn("Failed to derive public key from {}: {}", key_path.string(), result.stderr_output);
-                return false;
+                utils::get_logger()->warn("Failed to derive public key from {}: {}", priv_key_path.string(), result.stderr_output);
+            } else {
+                utils::unique_fd ufd(::open(pub_key_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644));
+                if (ufd) {
+                    FILE* f = ::fdopen(ufd.release(), "w");
+                    if (f) {
+                        fputs(result.stdout_output.c_str(), f);
+                        if (!result.stdout_output.empty() && result.stdout_output.back() != '\n') fputc('\n', f);
+                        fclose(f);
+                        uid_t login_uid = utils::get_login_uid();
+                        if (login_uid == 0) login_uid = getuid();
+                        if (::chown(pub_key_path.c_str(), login_uid, static_cast<gid_t>(-1)) != 0) {
+                            utils::get_logger()->warn("Failed to chown generated public key: {}", pub_key_path.string());
+                        }
+                        utils::get_logger()->info("Generated public key from private key: {}", pub_key_path.string());
+                    }
+                }
             }
-            // Write public key file
-            utils::unique_fd ufd(::open(pub_key_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644));
-            if (!ufd) {
-                utils::get_logger()->warn("Failed to create public key file: {}", pub_key_path.string());
-                return false;
-            }
-            FILE* f = ::fdopen(ufd.release(), "w");
-            if (!f) {
-                fs::remove(pub_key_path, ec);
-                return false;
-            }
-            fputs(result.stdout_output.c_str(), f);
-            if (result.stdout_output.back() != '\n') fputc('\n', f);
-            fclose(f);
-
-            uid_t login_uid = utils::get_login_uid();
-            if (login_uid == 0) login_uid = getuid();
-            if (chown(pub_key_path.c_str(), login_uid, static_cast<gid_t>(-1)) != 0) {
-                utils::get_logger()->warn("Failed to chown public key: {}", pub_key_path.string());
-            }
-            utils::get_logger()->info("Generated public key from private key: {}", pub_key_path.string());
         }
     }
 
+    // Read public key to determine key type
     if (!fs::exists(pub_key_path, ec) || ec) {
-        // Gracefully skip if default key file doesn't exist (non-fatal)
         utils::get_logger()->info("Default public key file not found, skipping: {}", pub_key_path.string());
         return true;
     }
 
-    // Copy the public key to ai-user's ~/.ssh/ as their default identity key.
-    // This allows the ai-user to use this key when connecting TO external servers.
-    // IMPORTANT: Do NOT add to authorized_keys — that would allow anyone with the
-    // corresponding private key to SSH INTO the ai-user, which is a security violation
-    // (the ai-user could then access the main user's servers).
+    std::ifstream pub_in(pub_key_path);
+    if (!pub_in.is_open()) {
+        utils::get_logger()->warn("Cannot read default public key: {}", pub_key_path.string());
+        return false;
+    }
+    std::string pub_content((std::istreambuf_iterator<char>(pub_in)),
+                              std::istreambuf_iterator<char>());
+    pub_in.close();
+
+    // Determine SSH default filenames based on key type
+    std::string key_basename = "id_default";       // private key filename
+    std::string pub_filename = "id_default.pub";    // public key filename
+    if (pub_content.find("ssh-ed25519") != std::string::npos) {
+        key_basename = "id_ed25519";
+        pub_filename = "id_ed25519.pub";
+    } else if (pub_content.find("ssh-rsa") != std::string::npos) {
+        key_basename = "id_rsa";
+        pub_filename = "id_rsa.pub";
+    } else if (pub_content.find("ecdsa-sha2-nistp256") != std::string::npos ||
+               pub_content.find("ecdsa-sha2-nistp384") != std::string::npos ||
+               pub_content.find("ecdsa-sha2-nistp521") != std::string::npos) {
+        key_basename = "id_ecdsa";
+        pub_filename = "id_ecdsa.pub";
+    }
+
+    // Resolve ai-user
     struct passwd* pw = getpwnam(ai_user.c_str());
     if (!pw) {
         utils::get_logger()->warn("Cannot resolve ai-user '{}' for default key setup", ai_user);
@@ -615,60 +634,87 @@ bool SSHManager::setup_default_key_from_file(const std::string& ai_user, const f
         return false;
     }
 
-    // Read the public key content
-    std::ifstream pub_in(pub_key_path);
-    if (!pub_in.is_open()) {
-        utils::get_logger()->warn("Cannot read default public key: {}", pub_key_path.string());
-        return false;
-    }
-    std::string pub_content((std::istreambuf_iterator<char>(pub_in)),
-                              std::istreambuf_iterator<char>());
-    pub_in.close();
-
-    // Determine the key type from the public key to choose a proper filename
-    std::string key_filename = "default_key.pub";
-    if (pub_content.find("ssh-ed25519") != std::string::npos) {
-        key_filename = "id_ed25519.pub";
-    } else if (pub_content.find("ssh-rsa") != std::string::npos) {
-        key_filename = "id_rsa.pub";
-    } else if (pub_content.find("ecdsa-sha2-nistp256") != std::string::npos) {
-        key_filename = "id_ecdsa.pub";
-    }
-
-    fs::path ai_default_pub = ai_ssh_dir / key_filename;
-    if (fs::exists(ai_default_pub, ec) && !ec) {
-        // Check if content already matches to avoid unnecessary writes
-        std::ifstream existing(ai_default_pub);
+    // --- Copy PUBLIC key to ai-user ~/.ssh/<pub_filename> ---
+    fs::path ai_target_pub = ai_ssh_dir / pub_filename;
+    bool pub_unchanged = false;
+    if (fs::exists(ai_target_pub, ec) && !ec) {
+        std::ifstream existing(ai_target_pub);
         if (existing.is_open()) {
             std::string existing_content((std::istreambuf_iterator<char>(existing)),
                                           std::istreambuf_iterator<char>());
             existing.close();
-            if (existing_content == pub_content) {
-                utils::get_logger()->info("Default public key already installed in ai-user .ssh");
-                return true;
-            }
+            if (existing_content == pub_content) pub_unchanged = true;
         }
     }
 
-    // Write the public key file
-    int fd = ::open(ai_default_pub.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
-    if (fd < 0) {
-        utils::get_logger()->warn("Failed to create default key in ai-user .ssh: {}", ai_default_pub.string());
-        return false;
-    }
-    ssize_t written = ::write(fd, pub_content.data(), pub_content.size());
-    ::close(fd);
-    if (written != static_cast<ssize_t>(pub_content.size())) {
-        utils::get_logger()->warn("Failed to write default key content to {}", ai_default_pub.string());
-        return false;
+    if (!pub_unchanged) {
+        int fd = ::open(ai_target_pub.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+        if (fd < 0) {
+            utils::get_logger()->warn("Failed to create public key in ai-user .ssh: {}", ai_target_pub.string());
+            return false;
+        }
+        ssize_t written = ::write(fd, pub_content.data(), pub_content.size());
+        ::close(fd);
+        if (written != static_cast<ssize_t>(pub_content.size())) {
+            utils::get_logger()->warn("Failed to write public key to {}", ai_target_pub.string());
+            return false;
+        }
+        if (::chown(ai_target_pub.c_str(), pw->pw_uid, pw->pw_gid) != 0) {
+            utils::get_logger()->warn("Failed to chown public key: {}", ai_target_pub.string());
+        }
+        utils::get_logger()->info("Installed default public key: {} → {}", pub_key_path.string(), ai_target_pub.string());
     }
 
-    // Set ownership to ai-user
-    if (::chown(ai_default_pub.c_str(), pw->pw_uid, pw->pw_gid) != 0) {
-        utils::get_logger()->warn("Failed to chown default key: {}", ai_default_pub.string());
+    // --- Copy PRIVATE key to ai-user ~/.ssh/<key_basename> ---
+    if (fs::exists(priv_key_path, ec) && !ec) {
+        fs::path ai_target_priv = ai_ssh_dir / key_basename;
+
+        // Read private key content
+        std::ifstream priv_in(priv_key_path);
+        if (!priv_in.is_open()) {
+            utils::get_logger()->warn("Cannot read private key: {}", priv_key_path.string());
+        } else {
+            std::string priv_content((std::istreambuf_iterator<char>(priv_in)),
+                                      std::istreambuf_iterator<char>());
+            priv_in.close();
+
+            // Check if already identical
+            bool priv_unchanged = false;
+            if (fs::exists(ai_target_priv, ec) && !ec) {
+                std::ifstream existing(ai_target_priv);
+                if (existing.is_open()) {
+                    std::string existing_content((std::istreambuf_iterator<char>(existing)),
+                                                  std::istreambuf_iterator<char>());
+                    existing.close();
+                    if (existing_content == priv_content) priv_unchanged = true;
+                }
+            }
+
+            if (!priv_unchanged) {
+                // Write private key with restrictive permissions (0600)
+                int fd = ::open(ai_target_priv.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+                if (fd < 0) {
+                    utils::get_logger()->warn("Failed to create private key in ai-user .ssh: {}", ai_target_priv.string());
+                } else {
+                    ssize_t written = ::write(fd, priv_content.data(), priv_content.size());
+                    ::close(fd);
+                    if (written != static_cast<ssize_t>(priv_content.size())) {
+                        utils::get_logger()->warn("Failed to write private key to {}", ai_target_priv.string());
+                    } else {
+                        if (::chown(ai_target_priv.c_str(), pw->pw_uid, pw->pw_gid) != 0) {
+                            utils::get_logger()->warn("Failed to chown private key: {}", ai_target_priv.string());
+                        }
+                        utils::get_logger()->info("Installed default private key: {} → {}",
+                            priv_key_path.string(), ai_target_priv.string());
+                    }
+                }
+            }
+        }
+    } else {
+        utils::get_logger()->info("No private key found at {}, only public key installed", priv_key_path.string());
     }
 
-    utils::get_logger()->info("Installed default public key in ai-user .ssh: {} (identity key, not authorized_keys)", ai_default_pub.string());
+    utils::get_logger()->info("Default key setup complete for ai-user {} (identity key, not authorized_keys)", ai_user);
     return true;
 }
 

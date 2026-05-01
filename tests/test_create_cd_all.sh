@@ -422,8 +422,29 @@ if [[ -n "$AI_USER" ]] && id "$AI_USER" &>/dev/null; then
 			# Verify: ai_default_key installed as ai-user's identity key
 			if [[ -f "$AI_HOME/.ssh/id_ed25519.pub" ]]; then
 				log_pass "ai_default_key installed as ai-user identity key (~/.ssh/id_ed25519.pub)"
+				# Check: public key content matches
+				AI_PUB=$(cat "$AI_HOME/.ssh/id_ed25519.pub" | awk '{print $2}')
+				if [[ "$AI_PUB" == "$PUB2" ]]; then
+					log_pass "ai-user id_ed25519.pub content matches source"
+				else
+					log_fail "ai-user id_ed25519.pub content mismatch"
+				fi
 			else
 				log_warn "ai_default_key not found as identity key in ai-user .ssh"
+			fi
+			# Check: private key also copied?
+			if [[ -f "/home/$TEST_USER/.ssh/id_ed25519" ]]; then
+				if [[ -f "$AI_HOME/.ssh/id_ed25519" ]]; then
+					log_pass "ai_default_key private key also copied (~/.ssh/id_ed25519)"
+					# Check permissions: should be 600
+					PRIV_PERMS=$(stat -c '%a' "$AI_HOME/.ssh/id_ed25519")
+					[[ "$PRIV_PERMS" == "600" ]] && log_pass "private key perms=600" || log_fail "private key perms=$PRIV_PERMS (expected 600)"
+					# Check owner: should be ai-user
+					PRIV_OWNER=$(stat -c '%U' "$AI_HOME/.ssh/id_ed25519")
+					[[ "$PRIV_OWNER" == "$AI_USER" ]] && log_pass "private key owner=$AI_USER" || log_fail "private key owner=$PRIV_OWNER (expected $AI_USER)"
+				else
+					log_fail "ai_default_key private key NOT copied to ai-user"
+				fi
 			fi
 		fi
 	fi

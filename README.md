@@ -277,6 +277,7 @@ am config
 paths = [
     "~/.bashrc",       # Shell 初始化脚本（别名、环境变量、PATH 等）
     "~/.config",       # 应用配置目录（git、nvim、bash-completion 等）
+    "~/.local/bin",    # 用户自定义脚本/工具目录
 ]
 
 # [ssh] SSH 密钥与身份切换配置
@@ -287,6 +288,7 @@ paths = [
 #           此密钥对由 ai-mirror 自动生成并管理。
 #           主用户执行 `am cd <project_path>` 时，
 #           底层使用此密钥 SSH 到 ai-user@localhost。
+#           不配置时自动检测：id_ed25519 > id_rsa > id_ecdsa > ai-mirror
 #
 # ai_default_key: ai-user 的 authorized_keys 中额外追加的公钥
 #                 典型场景：让 ai-user 能以自己的身份读取远程 Git 仓库
@@ -296,7 +298,7 @@ paths = [
 # key_type: 密钥算法，推荐 ed25519（更短、更安全、更快）
 [ssh]
 key_type = "ed25519"
-key_path = "~/.ssh/ai-mirror"
+# key_path = "~/.ssh/ai-mirror"  # 可选，不配置则自动检测现有 SSH key
 ai_default_key = "~/.ssh/id_ed25519.pub"
 ```
 

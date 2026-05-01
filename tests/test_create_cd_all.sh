@@ -1880,6 +1880,50 @@ full_cleanup || true
 rm -rf /data/public_proj
 
 # ============================================================
+# BUG-19: Legacy .am_status format compatibility
+# ============================================================
+setup_test_user standard
+
+begin_test "BUG-19: legacy format with hash field"
+mkdir -p /data/legacy_test
+chown $TEST_USER:$TEST_GID /data/legacy_test
+chmod 755 /data/legacy_test
+
+# Create a new ai-user first
+OUT=$(run_am create /data/legacy_test 2>&1)
+AI_USER=$(echo "$OUT" | grep -o "itestx_legacy_test" | head -1)
+if [[ -z "$AI_USER" ]]; then
+	log_fail "BUG-19: failed to create ai-user for legacy test"
+	log_info "Create output: $OUT"
+else
+	# Read the current .am_status (new format)
+	STATE_FILE="/data/legacy_test/.am_status"
+	if [[ ! -f "$STATE_FILE" ]]; then
+		log_fail "BUG-19: .am_status not created"
+	else
+		# Convert to legacy format by adding a fake hash field
+		# The hash value starts with "000" to pass PoW check
+		LEGACY_CONTENT=$(cat "$STATE_FILE" | sed 's/"timestamp": /"timestamp": /' | sed 's/}$/,\n  "hash": "000deadbeefcafe123456789abcdef"\n}/')
+		echo "$LEGACY_CONTENT" >"$STATE_FILE"
+		chown $TEST_USER:$TEST_GID "$STATE_FILE"
+
+		# Now try am update - should accept legacy format
+		OUT=$(run_am update /data/legacy_test 2>&1)
+		if echo "$OUT" | grep -q "State file md5 verification failed"; then
+			log_fail "BUG-19: legacy format verification failed"
+			log_info "Update output: $OUT"
+		elif echo "$OUT" | grep -q "No .am_status found"; then
+			log_fail "BUG-19: misleading 'No .am_status found' error"
+			log_info "Update output: $OUT"
+		else
+			log_pass "BUG-19: legacy format accepted"
+		fi
+	fi
+fi
+full_cleanup || true
+rm -rf /data/legacy_test
+
+# ============================================================
 # Summary
 # ============================================================
 full_cleanup || true

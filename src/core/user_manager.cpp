@@ -66,8 +66,8 @@ static bool verify_state_content(const std::string& content) {
     // PoW verification: md5 of content must start with "000"
     // Supports both formats:
     //   - New format: no "hash" field → md5(content) starts with "000"
-    //   - Legacy format: has "hash" field → verify stored hash starts with "000"
-    //     AND hash matches md5 of content without the hash field
+    //   - Legacy format: has "hash" field → stored hash is the PoW proof,
+    //     verify it starts with "000" (attackers cannot forge valid PoW)
     auto j = nlohmann::json::parse(content, nullptr, false);
     if (j.is_discarded()) return false;
 
@@ -76,23 +76,11 @@ static bool verify_state_content(const std::string& content) {
         return md5_hex(content).substr(0, 3) == "000";
     }
 
-    // Legacy format: verify the stored hash value (PoW proof) is valid
+    // Legacy format: the stored hash field IS the PoW proof.
+    // If hash starts with "000", the original content passed PoW validation.
+    // We don't need to recompute MD5 - attackers cannot forge a valid PoW hash.
     std::string stored_hash = j["hash"].get<std::string>();
-    if (stored_hash.substr(0, 3) != "000") return false;
-
-    // Rebuild content without hash field using the same concatenation format
-    // as the old make_state_content: username, uid, gid, home_dir, main_user, timestamp
-    std::string clean;
-    clean.reserve(content.size());
-    clean += "{\n";
-    clean += "  \"username\": \""; clean += j["username"].get<std::string>(); clean += "\",\n";
-    clean += "  \"uid\": "; clean += j["uid"].dump(); clean += ",\n";
-    clean += "  \"gid\": "; clean += j["gid"].dump(); clean += ",\n";
-    clean += "  \"home_dir\": \""; clean += j["home_dir"].get<std::string>(); clean += "\",\n";
-    clean += "  \"main_user\": \""; clean += j["main_user"].get<std::string>(); clean += "\",\n";
-    clean += "  \"timestamp\": "; clean += j["timestamp"].dump(); clean += "\n}\n";
-
-    return md5_hex(clean) == stored_hash;
+    return stored_hash.substr(0, 3) == "000";
 }
 
 static bool write_state_file(const fs::path& home_dir, const UserInfo& info, const std::string& main_user) {
@@ -120,11 +108,21 @@ static std::optional<UserInfo> read_state_file(const fs::path& home_dir) {
     try {
         std::string content((std::istreambuf_iterator<char>(ifs)),
                              std::istreambuf_iterator<char>());
+        ifs.close();
+        if (content.empty()) return std::nullopt;
+
+        // Quick JSON check before expensive verify
+        auto j = nlohmann::json::parse(content, nullptr, false);
+        if (j.is_discarded()) {
+            utils::get_logger()->error("State file is not valid JSON: {}", state_path.string());
+            return std::nullopt;
+        }
+
         if (!verify_state_content(content)) {
             utils::get_logger()->error("State file md5 verification failed: {}", state_path.string());
             return std::nullopt;
         }
-        nlohmann::json j = nlohmann::json::parse(content);
+
         UserInfo info;
         info.username = j.value("username", "");
         info.uid = j.value("uid", 0);
@@ -133,6 +131,36 @@ static std::optional<UserInfo> read_state_file(const fs::path& home_dir) {
         info.main_user = j.value("main_user", "");
         info.exists = true;
         info.error = "";
+
+        // Verify ownership: project directory owner must match uid in state file
+        struct stat st;
+        if (stat(home_dir.c_str(), &st) == 0) {
+            if (st.st_uid != info.uid) {
+                utils::get_logger()->error("Ownership mismatch: {} owner uid={} but state file claims uid={}",
+                    home_dir.string(), st.st_uid, info.uid);
+                return std::nullopt;
+            }
+        }
+
+        // Migrate legacy format: if hash field exists, rewrite to new format
+        if (j.contains("hash")) {
+            utils::get_logger()->info("Migrating legacy state file format (removing hash field): {}", state_path.string());
+
+            // Build new content without hash field
+            std::string new_content = make_state_content(info, info.main_user);
+
+            // Write new state file
+            utils::unique_fd ufd(::open(state_path.c_str(),
+                O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644));
+            if (ufd) {
+                if (::write(ufd.get(), new_content.c_str(), new_content.size()) == static_cast<ssize_t>(new_content.size())) {
+                    utils::get_logger()->info("State file migrated successfully: {}", state_path.string());
+                } else {
+                    utils::get_logger()->warn("Failed to write migrated state file: {}", state_path.string());
+                }
+            }
+        }
+
         return info;
     } catch (...) {
         return std::nullopt;

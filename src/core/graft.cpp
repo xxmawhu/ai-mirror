@@ -18,6 +18,39 @@ namespace ai_mirror::core {
 
 using security::safe_create_directories;
 
+// Helper: chown all directories in path chain from home_dir down to target parent
+// Only chown directories that don't already have the target ownership
+static void chown_path_chain(const fs::path& target_parent, uid_t owner_uid, gid_t owner_gid) {
+    if (owner_uid == 0 && owner_gid == 0) return;
+
+    // Walk from target_parent up, collecting paths to chown
+    // Then chown from top (closest to home) down to target_parent
+    std::vector<fs::path> paths_to_chown;
+    fs::path p = target_parent;
+    while (!p.empty() && p != "/") {
+        struct stat st;
+        if (stat(p.c_str(), &st) == 0) {
+            // Only add if ownership differs
+            if (st.st_uid != owner_uid || st.st_gid != owner_gid) {
+                paths_to_chown.push_back(p);
+            }
+        }
+        p = p.parent_path();
+    }
+
+    // Chown from top (closest to root/home) down to target
+    // This ensures parent directories are chowned before children
+    for (auto it = paths_to_chown.rbegin(); it != paths_to_chown.rend(); ++it) {
+        if (chown(it->c_str(), owner_uid, owner_gid) == 0) {
+            utils::get_logger()->info("chown_path_chain: {} -> uid:{} gid:{}",
+                it->string(), owner_uid, owner_gid);
+        } else {
+            utils::get_logger()->warn("chown_path_chain: chown {} failed: {}",
+                it->string(), strerror(errno));
+        }
+    }
+}
+
 Graft::Graft(const std::string& user_prefix) : prefix_(user_prefix) {}
 
 const std::vector<MountEntry>& Graft::get_mount_cache() const {
@@ -45,6 +78,10 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
                 if (!safe_create_directories(parent)) {
                     utils::get_logger()->error("execute_mount: failed to create parent dir for {}", target.string());
                     return false;
+                }
+                // Chown parent directories to ai-user from home_dir down
+                if (owner_uid != 0 || owner_gid != 0) {
+                    chown_path_chain(parent, owner_uid, owner_gid);
                 }
             }
             utils::unique_fd ufd(open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600));

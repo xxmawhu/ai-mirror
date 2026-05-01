@@ -461,6 +461,107 @@ if [[ -n "$AI_USER" ]] && id "$AI_USER" &>/dev/null; then
 fi
 
 # ============================================================
+# S5b: ai_default_key == separate key (ai_git_key, ed25519)
+# Verifies: 1) key copied, 2) format detected, 3) renamed to SSH default name
+# ============================================================
+begin_test "S5b: ai_default_key as separate ai_git_key (key copy+rename)"
+setup_test_user standard
+# Generate a SEPARATE key for ai_default_key (not the same as id_ed25519)
+ssh-keygen -t ed25519 -f "/home/$TEST_USER/.ssh/ai_git_key" -N "" -q -C "ai-git-key"
+chmod 600 "/home/$TEST_USER/.ssh/ai_git_key"
+write_config '[user]
+prefix = "i"
+
+[ssh]
+key_path = "/home/'"$TEST_USER"'/.ssh/ai-mirror"
+key_type = "ed25519"
+ai_default_key = "/home/'"$TEST_USER"'/.ssh/ai_git_key"
+
+[mount]
+paths = []'
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+log_info "create output (last 5 lines): $(echo "$OUT" | tail -5)"
+
+if [[ -n "$AI_USER" ]] && id "$AI_USER" &>/dev/null; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+	log_pass "ai-user created: $AI_USER"
+
+	# 1. Key copied: private key exists
+	if [[ -f "$AI_HOME/.ssh/id_ed25519" ]]; then
+		log_pass "S5b.1: ai_default_key private key copied to ~/.ssh/id_ed25519"
+	else
+		log_fail "S5b.1: ai_default_key private key NOT copied"
+	fi
+
+	# 1b. Key copied: public key exists
+	if [[ -f "$AI_HOME/.ssh/id_ed25519.pub" ]]; then
+		log_pass "S5b.1b: ai_default_key public key copied to ~/.ssh/id_ed25519.pub"
+	else
+		log_fail "S5b.1b: ai_default_key public key NOT copied"
+	fi
+
+	# 2. Format detected correctly: content matches source
+	SRC_PUB=$(cat "/home/$TEST_USER/.ssh/ai_git_key.pub" | awk '{print $2}')
+	DST_PUB=$(cat "$AI_HOME/.ssh/id_ed25519.pub" 2>/dev/null | awk '{print $2}')
+	if [[ "$SRC_PUB" == "$DST_PUB" ]]; then
+		log_pass "S5b.2: format detected correctly, public key content matches source ai_git_key.pub"
+	else
+		log_fail "S5b.2: public key content mismatch (src=$SRC_PUB dst=$DST_PUB)"
+	fi
+
+	# 2b. Private key content also matches
+	SRC_PRIV_MD5=$(md5sum "/home/$TEST_USER/.ssh/ai_git_key" | awk '{print $1}')
+	DST_PRIV_MD5=$(md5sum "$AI_HOME/.ssh/id_ed25519" 2>/dev/null | awk '{print $1}')
+	if [[ "$SRC_PRIV_MD5" == "$DST_PRIV_MD5" ]]; then
+		log_pass "S5b.2b: private key content matches source ai_git_key"
+	else
+		log_fail "S5b.2b: private key content mismatch"
+	fi
+
+	# 3. Renamed to SSH default name (id_ed25519, not ai_git_key)
+	if [[ ! -f "$AI_HOME/.ssh/ai_git_key" ]] && [[ -f "$AI_HOME/.ssh/id_ed25519" ]]; then
+		log_pass "S5b.3: key renamed from ai_git_key to id_ed25519 (SSH default name)"
+	else
+		log_fail "S5b.3: key NOT renamed to SSH default name (still ai_git_key or missing id_ed25519)"
+	fi
+
+	# 3b. NOT in authorized_keys (identity key, not login key)
+	if ! grep -q "$SRC_PUB" "$AI_HOME/.ssh/authorized_keys" 2>/dev/null; then
+		log_pass "S5b.3b: ai_default_key NOT in authorized_keys (identity key only)"
+	else
+		log_fail "S5b.3b: SECURITY: ai_default_key should NOT be in authorized_keys"
+	fi
+
+	# Permissions check
+	PRIV_PERMS=$(stat -c '%a' "$AI_HOME/.ssh/id_ed25519" 2>/dev/null)
+	[[ "$PRIV_PERMS" == "600" ]] && log_pass "S5b.perm: private key perms=600" || log_fail "S5b.perm: private key perms=$PRIV_PERMS (expected 600)"
+	PRIV_OWNER=$(stat -c '%U' "$AI_HOME/.ssh/id_ed25519" 2>/dev/null)
+	[[ "$PRIV_OWNER" == "$AI_USER" ]] && log_pass "S5b.owner: private key owner=$AI_USER" || log_fail "S5b.owner: private key owner=$PRIV_OWNER (expected $AI_USER)"
+
+	# Verify key_path key IS in authorized_keys (login key)
+	KEY_PATH_PUB=$(cat "/home/$TEST_USER/.ssh/ai-mirror.pub" 2>/dev/null | awk '{print $2}')
+	if [[ -n "$KEY_PATH_PUB" ]] && grep -q "$KEY_PATH_PUB" "$AI_HOME/.ssh/authorized_keys" 2>/dev/null; then
+		log_pass "S5b.auth: key_path key present in authorized_keys"
+	else
+		log_fail "S5b.auth: key_path key missing from authorized_keys"
+	fi
+
+	# SSH login test with key_path
+	start_sshd
+	SSH_OUT=$(test_ssh_login "$AI_USER" "/home/$TEST_USER/.ssh/ai-mirror" 2>&1)
+	if echo "$SSH_OUT" | grep -q "SSH_OK"; then
+		log_pass "S5b.ssh: SSH login with key_path works"
+	else
+		log_fail "S5b.ssh: SSH login failed: $SSH_OUT"
+	fi
+	stop_sshd
+else
+	log_fail "S5b: ai-user not created"
+fi
+
+# ============================================================
 # S6: key_path == id_ed25519 (user's personal key as key_path)
 # ============================================================
 begin_test "S6: key_path == user's id_ed25519 (auto-detect)"

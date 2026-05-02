@@ -117,10 +117,12 @@ cp completions/am-completion.bash ~/.local/share/bash-completion/completions/am
 安装后新终端自动生效，或执行 `source ~/.bashrc` 立即启用。
 
 **补齐功能**：
-- 子命令补齐：`am <tab>` → create, cd, rm, list, status, health, update...
-- 参数补齐：`am create <tab>` → 项目目录补齐
-- 用户名补齐：`am rm <tab>` → 已创建的 ai-user 名称补齐
+- 子命令补齐：`am <tab>` → create, cd, rm, list, status, health, update, watch...
+- 参数补齐：`am create <tab>` → 项目目录补齐（基于 `~/.ai-mirror.toml` 的 `allowed_bases`）
+- 用户名补齐：`am rm <tab>` → 动态查询 `am list` 获取 ai-user 名称
+- 选项补齐：`am create -<tab>` → `-h --help`
 - 文件路径补齐：基于当前目录的文件/目录补齐
+- Debug 模式：`_AM_COMP_DEBUG=1` 启用补全调试日志
 
 ### sudoers 安全说明
 

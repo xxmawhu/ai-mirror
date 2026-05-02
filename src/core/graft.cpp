@@ -18,16 +18,19 @@ namespace ai_mirror::core {
 
 using security::safe_create_directories;
 
-// Helper: chown all directories in path chain from home_dir down to target parent
+// Helper: chown all directories in path chain from target_parent up to (but not including) boundary_dir
 // Only chown directories that don't already have the target ownership
-static void chown_path_chain(const fs::path& target_parent, uid_t owner_uid, gid_t owner_gid) {
+static void chown_path_chain(const fs::path& target_parent, const fs::path& boundary_dir, uid_t owner_uid, gid_t owner_gid) {
     if (owner_uid == 0 && owner_gid == 0) return;
 
+    fs::path abs_boundary = fs::weakly_canonical(boundary_dir);
+
     // Walk from target_parent up, collecting paths to chown
-    // Then chown from top (closest to home) down to target_parent
+    // Stop at boundary_dir (do not chown boundary_dir itself or anything above it)
     std::vector<fs::path> paths_to_chown;
     fs::path p = target_parent;
     while (!p.empty() && p != "/") {
+        if (fs::weakly_canonical(p) == abs_boundary) break;
         struct stat st;
         if (stat(p.c_str(), &st) == 0) {
             // Only add if ownership differs
@@ -38,7 +41,7 @@ static void chown_path_chain(const fs::path& target_parent, uid_t owner_uid, gid
         p = p.parent_path();
     }
 
-    // Chown from top (closest to root/home) down to target
+    // Chown from top (closest to boundary) down to target
     // This ensures parent directories are chowned before children
     for (auto it = paths_to_chown.rbegin(); it != paths_to_chown.rend(); ++it) {
         if (chown(it->c_str(), owner_uid, owner_gid) == 0) {
@@ -69,8 +72,11 @@ void Graft::invalidate_cache() {
     mount_cache_.clear();
 }
 
-bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid) {
+bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid, const fs::path& home_dir) {
     std::error_code ec;
+    // Determine boundary: stop chown at home_dir, never chown above ai-user home
+    fs::path boundary = home_dir.empty() ? target.parent_path().parent_path() : home_dir;
+
     if (!fs::exists(target, ec)) {
         if (fs::is_regular_file(source)) {
             fs::path parent = target.parent_path();
@@ -79,9 +85,9 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
                     utils::get_logger()->error("execute_mount: failed to create parent dir for {}", target.string());
                     return false;
                 }
-                // Chown parent directories to ai-user from home_dir down
+                // Chown parent directories to ai-user, bounded by home_dir
                 if (owner_uid != 0 || owner_gid != 0) {
-                    chown_path_chain(parent, owner_uid, owner_gid);
+                    chown_path_chain(parent, boundary, owner_uid, owner_gid);
                 }
             }
             utils::unique_fd ufd(open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600));
@@ -105,7 +111,7 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
                 // Chown all intermediate directories first (e.g., .local/ when mounting .local/bin)
                 fs::path parent = target.parent_path();
                 if (!parent.empty()) {
-                    chown_path_chain(parent, owner_uid, owner_gid);
+                    chown_path_chain(parent, boundary, owner_uid, owner_gid);
                 }
                 // Then chown the final target directory
                 utils::unique_fd dir_fd(open(target.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
@@ -113,6 +119,26 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
                     if (fchown(dir_fd.get(), owner_uid, owner_gid) != 0) {
                         utils::get_logger()->warn("execute_mount: fchown dir failed: {} ({})", target.string(), strerror(errno));
                     }
+                }
+            }
+        }
+    } else if (owner_uid != 0 || owner_gid != 0) {
+        // Target already exists — fix ownership of intermediate dirs and target itself
+        // This handles the case where directories were created by root on first run
+        // and am cd is called again (e.g., after a fix deployment)
+        fs::path parent = target.parent_path();
+        if (!parent.empty()) {
+            chown_path_chain(parent, boundary, owner_uid, owner_gid);
+        }
+        // Fix target ownership too
+        struct stat st;
+        if (stat(target.c_str(), &st) == 0 && (st.st_uid != owner_uid || st.st_gid != owner_gid)) {
+            utils::unique_fd fd(open(target.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+            if (fd) {
+                if (fchown(fd.get(), owner_uid, owner_gid) != 0) {
+                    utils::get_logger()->warn("execute_mount: fix ownership failed for existing {}: {}", target.string(), strerror(errno));
+                } else {
+                    utils::get_logger()->info("execute_mount: fixed ownership of existing {}", target.string());
                 }
             }
         }
@@ -228,7 +254,7 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
     return entries;
 }
 
-bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid) {
+bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid, const fs::path& home_dir) {
     if (!security::validate_mount_source(source)) {
         utils::get_logger()->error("Mount source rejected (system path): {}", source.string());
         return false;
@@ -262,7 +288,7 @@ bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read
         return false;
     }
 
-    return execute_mount(pre_exec_source, target, read_only, owner_uid, owner_gid);
+    return execute_mount(pre_exec_source, target, read_only, owner_uid, owner_gid, home_dir);
 }
 
 bool Graft::unmount(const fs::path& target, bool lazy) {

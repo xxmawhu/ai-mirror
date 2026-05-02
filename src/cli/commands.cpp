@@ -268,7 +268,7 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         if (ctx.graft->is_mounted(target)) continue;
 
         utils::get_logger()->info("Fixing mount: {} -> {}", source.string(), target.string());
-        if (ctx.graft->bind_mount(source, target, true, state.uid, state.gid)) {
+        if (ctx.graft->bind_mount(source, target, true, state.uid, state.gid, home_dir)) {
             fixes++;
         } else {
             mount_failures++;

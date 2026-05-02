@@ -21,7 +21,7 @@ class Graft {
 public:
     explicit Graft(const std::string& user_prefix = "i");
 
-    bool bind_mount(const fs::path& source, const fs::path& target, bool read_only = true, uid_t owner_uid = 0, gid_t owner_gid = 0);
+    bool bind_mount(const fs::path& source, const fs::path& target, bool read_only = true, uid_t owner_uid = 0, gid_t owner_gid = 0, const fs::path& home_dir = {});
     bool unmount(const fs::path& target, bool lazy = false);
     bool unmount_all(const std::string& username);
     std::vector<MountEntry> list_mounts(const std::string& username) const;
@@ -46,7 +46,7 @@ private:
     mutable bool cache_valid_ = false;
     static constexpr std::chrono::milliseconds cache_ttl_{500};
 
-    bool execute_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid);
+    bool execute_mount(const fs::path& source, const fs::path& target, bool read_only, uid_t owner_uid, gid_t owner_gid, const fs::path& home_dir = {});
     bool execute_umount(const fs::path& target, bool lazy);
     // Mount query cache: all external mount queries (unmount_all, list_mounts,
     // is_mounted, health_check) go through get_mount_cache() with 500ms TTL.

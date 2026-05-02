@@ -69,6 +69,7 @@ sudo ./install.sh --clean
 | 验证 | 检查二进制文件完整性 + `--help` 冒烟测试 |
 | 安装 | 部署 `ai-mirror-bin` 到 `/usr/local/bin/` |
 | Profile | 安装 `am()` bash 函数到 `/etc/profile.d/am.sh`（登录自动加载） |
+| Completion | 安装 bash 补齐到 `/etc/bash_completion.d/am`（登录自动加载） |
 | Sudoers | 创建 `/etc/ai-mirror/sudoers.d/ai-mirror`，无通配符白名单规则 |
 | 用户组 | 创建 `ai-mirror` 系统组 |
 
@@ -100,7 +101,9 @@ sudo ./install.sh --clean
 
 `am` 支持 bash 命令补齐，类似 git 的 tab 补全体验。
 
-**安装方式**：
+> **注意**: `install.sh` 已自动安装系统级补齐到 `/etc/bash_completion.d/am`，新终端登录自动生效。以下仅用于手动更新或离线安装场景。
+
+**手动安装方式**：
 
 ```bash
 # 方式1: 手动加载（临时测试）
@@ -274,6 +277,26 @@ am config
 ```
 
 显示当前加载的配置文件路径及所有配置项。
+
+---
+
+### `update` — 修复 SSH 和挂载
+
+```bash
+am update <project_path>
+```
+
+重新应用 SSH 密钥和 bind mount 配置，用于修复异常状态（如密钥丢失、挂载失效等）。
+
+---
+
+### `watch` — 实时监控
+
+```bash
+am watch
+```
+
+以 htop 风格实时监控所有 ai-user 的状态。
 
 ## 配置文件
 

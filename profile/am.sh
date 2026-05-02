@@ -202,3 +202,13 @@ export -f _am_get_main_user
 export -f _am_validate_path
 export -f _am_validate_ai_user
 export -f _am_parse_output
+
+# Source bash completion if available and not already loaded
+# This ensures completion works in all shell types (login, non-login, tmux, screen, etc.)
+if [[ -n "${BASH_VERSION:-}" ]] && [[ -z "${_am_completion_loaded:-}" ]]; then
+	_am_completion_file="/etc/bash_completion.d/am"
+	if [[ -r "$_am_completion_file" ]]; then
+		. "$_am_completion_file"
+	fi
+	_am_completion_loaded=1
+fi

@@ -10,8 +10,12 @@
 #   - 'cd' to AI user project via SSH with automatic user detection
 #   - Pass-through for all other commands
 
-# Find the ai-mirror binary
-_AM_BIN="${AI_MIRROR_BIN:-/usr/local/bin/ai-mirror-bin}"
+# Binary search paths (checked in order)
+_AM_SEARCH_PATHS=(
+	"${AI_MIRROR_BIN:-}"
+	"/usr/local/bin/ai-mirror-bin"
+	"${HOME:-}/.local/bin/ai-mirror-bin"
+)
 
 # Cache the main user (detected from SUDO_USER or current user)
 _am_get_main_user() {
@@ -72,13 +76,29 @@ _am_parse_output() {
 	echo "$output" | grep "^${key}=" | cut -d= -f2- || true
 }
 
+# Resolve the binary path (lazy, cached on first call)
+_am_resolve_bin() {
+	if [[ -n "${_AM_BIN:-}" && -x "$_AM_BIN" ]]; then
+		return 0
+	fi
+	local candidate
+	for candidate in "${_AM_SEARCH_PATHS[@]}"; do
+		[[ -z "$candidate" ]] && continue
+		if [[ -x "$candidate" ]]; then
+			_AM_BIN="$candidate"
+			return 0
+		fi
+	done
+	return 1
+}
+
 # Main am function
 am() {
-	# Check binary exists with detailed diagnostics
-	if [[ ! -x "$_AM_BIN" ]]; then
-		echo "error: ai-mirror binary not available" >&2
-		echo "  expected path: $_AM_BIN" >&2
-		echo "  hint: check AI_MIRROR_BIN env var or run 'ai-mirror install'" >&2
+	# Resolve binary path dynamically
+	if ! _am_resolve_bin; then
+		echo "error: ai-mirror binary not found" >&2
+		echo "  searched: ${_AM_SEARCH_PATHS[*]}" >&2
+		echo "  hint: run 'bash install.sh' from ai-mirror source, or set AI_MIRROR_BIN" >&2
 		return 1
 	fi
 

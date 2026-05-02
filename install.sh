@@ -192,9 +192,10 @@ phase_install() {
 	if [[ -f "$profile_src" ]]; then
 		sudo install -d /etc/profile.d
 
-		# Build the expected content (with binary path substituted)
+		# Build expected content with search paths updated
+		# The profile now searches multiple paths, ensure PREFIX/bin is first non-empty entry
 		local expected_content
-		expected_content=$(sed "s|/usr/local/bin/ai-mirror-bin|${PREFIX}/bin/${REAL_BIN_NAME}|g" "$profile_src")
+		expected_content=$(sed -E "s|^_AM_SEARCH_PATHS=\\(.*|_AM_SEARCH_PATHS=(\"${PREFIX}/bin/${REAL_BIN_NAME}\" \"\${AI_MIRROR_BIN:-}\" \"\${HOME:-}/.local/bin/ai-mirror-bin\")|g" "$profile_src")
 
 		# Compare with installed version
 		local needs_update=false

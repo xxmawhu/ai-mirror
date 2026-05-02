@@ -96,11 +96,18 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
             }
             ufd.reset();
         } else {
+            // Create target directory and all parents (e.g., /home/ai_user/.local/bin)
             if (!safe_create_directories(target)) {
                 utils::get_logger()->error("execute_mount: failed to create target dir {}", target.string());
                 return false;
             }
             if (owner_uid != 0 || owner_gid != 0) {
+                // Chown all intermediate directories first (e.g., .local/ when mounting .local/bin)
+                fs::path parent = target.parent_path();
+                if (!parent.empty()) {
+                    chown_path_chain(parent, owner_uid, owner_gid);
+                }
+                // Then chown the final target directory
                 utils::unique_fd dir_fd(open(target.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
                 if (dir_fd) {
                     if (fchown(dir_fd.get(), owner_uid, owner_gid) != 0) {

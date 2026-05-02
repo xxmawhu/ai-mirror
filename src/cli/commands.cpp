@@ -265,7 +265,47 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         if (!utils::is_path_allowed(source, main_user, ctx.config.user.allowed_bases)) continue;
 
         fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
-        if (ctx.graft->is_mounted(target)) continue;
+        if (ctx.graft->is_mounted(target)) {
+            // Already mounted — still fix ownership of intermediate dirs and target
+            // This handles the case where dirs were created by root on first run
+            if (state.uid != 0 || state.gid != 0) {
+                utils::get_logger()->info("Fixing ownership for already-mounted target: {}", target.string());
+                fs::path boundary = home_dir.empty() ? fs::path(target.parent_path().parent_path()) : fs::path(home_dir);
+                // Fix intermediate directories
+                fs::path parent = target.parent_path();
+                if (!parent.empty()) {
+                    // chown intermediate dirs via exec_safe (chown_path_chain is static in graft.cpp)
+                    fs::path p = parent;
+                    std::vector<fs::path> to_fix;
+                    while (!p.empty() && p != "/" && p != boundary) {
+                        struct stat st;
+                        if (stat(p.c_str(), &st) == 0 && (st.st_uid != state.uid || st.st_gid != state.gid)) {
+                            to_fix.push_back(p);
+                        }
+                        p = p.parent_path();
+                    }
+                    for (auto it = to_fix.rbegin(); it != to_fix.rend(); ++it) {
+                        auto r = utils::exec_safe({"chown",
+                            std::to_string(state.uid) + ":" + std::to_string(state.gid),
+                            it->string()});
+                        if (r.exit_code == 0) {
+                            utils::get_logger()->info("Fixed ownership: {} -> {}:{}", it->string(), state.uid, state.gid);
+                        }
+                    }
+                }
+                // Fix target itself
+                struct stat tgt_st;
+                if (stat(target.c_str(), &tgt_st) == 0 && (tgt_st.st_uid != state.uid || tgt_st.st_gid != state.gid)) {
+                    auto r = utils::exec_safe({"chown",
+                        std::to_string(state.uid) + ":" + std::to_string(state.gid),
+                        target.string()});
+                    if (r.exit_code == 0) {
+                        utils::get_logger()->info("Fixed ownership: {} -> {}:{}", target.string(), state.uid, state.gid);
+                    }
+                }
+            }
+            continue;
+        }
 
         utils::get_logger()->info("Fixing mount: {} -> {}", source.string(), target.string());
         if (ctx.graft->bind_mount(source, target, true, state.uid, state.gid, home_dir)) {
@@ -273,6 +313,81 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         } else {
             mount_failures++;
             utils::get_logger()->warn("Failed to mount {} -> {}", source.string(), target.string());
+        }
+    }
+
+    // Second pass: fix ownership of ALL existing mounts (including those not in current config)
+    // This handles the case where mounts were created with an old config and
+    // intermediate directories (e.g., .local/) were left as root:root
+    if (state.uid != 0 || state.gid != 0) {
+        auto all_mounts = ctx.graft->list_mounts(username);
+        for (const auto& m : all_mounts) {
+            fs::path boundary = fs::path(home_dir);
+            fs::path parent = m.target.parent_path();
+            if (!parent.empty()) {
+                fs::path p = parent;
+                std::vector<fs::path> to_fix;
+                while (!p.empty() && p != "/" && p != boundary) {
+                    struct stat st;
+                    if (stat(p.c_str(), &st) == 0 && (st.st_uid != state.uid || st.st_gid != state.gid)) {
+                        to_fix.push_back(p);
+                    }
+                    p = p.parent_path();
+                }
+                for (auto it = to_fix.rbegin(); it != to_fix.rend(); ++it) {
+                    auto r = utils::exec_safe({"chown",
+                        std::to_string(state.uid) + ":" + std::to_string(state.gid),
+                        it->string()});
+                    if (r.exit_code == 0) {
+                        utils::get_logger()->info("Fixed ownership for existing mount parent: {} -> {}:{}", it->string(), state.uid, state.gid);
+                        fixes++;
+                    }
+                }
+            }
+        }
+    }
+
+    // Third pass: fix ownership of ALL entries in home_dir (except .am_status which should be root:root)
+    {
+        fs::path am_status_path = fs::path(home_dir) / ".am_status";
+        std::error_code iter_ec;
+        for (const auto& entry : fs::directory_iterator(home_dir, iter_ec)) {
+            if (iter_ec) break;
+
+            if (entry.path() == am_status_path) continue;
+
+            struct stat st;
+            if (lstat(entry.path().c_str(), &st) != 0) continue;
+
+            if (st.st_uid != state.uid || st.st_gid != state.gid) {
+                if (S_ISLNK(st.st_mode)) {
+                    if (lchown(entry.path().c_str(), state.uid, state.gid) != 0) {
+                        utils::get_logger()->warn("Failed to fix symlink ownership: {}", entry.path().string());
+                    } else {
+                        utils::get_logger()->info("Fixed symlink ownership: {} -> {}:{}", entry.path().string(), state.uid, state.gid);
+                        fixes++;
+                    }
+                } else {
+                    int fd = open(entry.path().c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+                    if (fd < 0) {
+                        fd = open(entry.path().c_str(), O_RDONLY | O_NOFOLLOW);
+                    }
+                    if (fd >= 0) {
+                        if (fchown(fd, state.uid, state.gid) == 0) {
+                            utils::get_logger()->info("Fixed ownership: {} -> {}:{}", entry.path().string(), state.uid, state.gid);
+                            fixes++;
+                        } else {
+                            utils::get_logger()->warn("Failed to fix ownership: {}", entry.path().string());
+                        }
+                        close(fd);
+                    } else if (errno == ELOOP) {
+                        if (lchown(entry.path().c_str(), state.uid, state.gid) == 0) {
+                            utils::get_logger()->info("Fixed symlink ownership: {} -> {}:{}", entry.path().string(), state.uid, state.gid);
+                            fixes++;
+                        }
+                    }
+                }
+            }
         }
     }
 

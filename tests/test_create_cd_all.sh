@@ -722,6 +722,76 @@ if [[ -n "$AI_USER" ]]; then
 fi
 
 # ============================================================
+# P5: ownership verification - .am_status=root, non-mount entries=ai-user
+# ============================================================
+begin_test "P5: ownership check after create"
+setup_test_user standard
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+
+	# .am_status should be root:root
+	AM_STATUS_OWNER=$(stat -c '%U:%G' "$AI_HOME/.am_status" 2>/dev/null || echo "missing")
+	[[ "$AM_STATUS_OWNER" == "root:root" ]] && log_pass ".am_status owner=root:root" || log_fail ".am_status owner=$AM_STATUS_OWNER (expected root:root)"
+
+	# .ssh should be ai-user:ai-user
+	SSH_OWNER=$(stat -c '%U:%G' "$AI_HOME/.ssh" 2>/dev/null || echo "missing")
+	[[ "$SSH_OWNER" == "$AI_USER:$AI_USER" ]] && log_pass ".ssh owner=$AI_USER:$AI_USER" || log_fail ".ssh owner=$SSH_OWNER (expected $AI_USER:$AI_USER)"
+
+	# .bashrc is a bind mount (read-only from main user), ownership reflects source - skip check
+	if mountpoint -q "$AI_HOME/.bashrc" 2>/dev/null; then
+		log_pass ".bashrc is bind mount (ownership reflects source)"
+	else
+		BASHRC_OWNER=$(stat -c '%U:%G' "$AI_HOME/.bashrc" 2>/dev/null || echo "missing")
+		[[ "$BASHRC_OWNER" == "$AI_USER:$AI_USER" ]] && log_pass ".bashrc owner=$AI_USER:$AI_USER" || log_fail ".bashrc owner=$BASHRC_OWNER (expected $AI_USER:$AI_USER)"
+	fi
+
+	# Check non-mount directories (.config/.local are bind mount targets when source exists)
+	for _dir in .config .local; do
+		if [[ -d "$AI_HOME/$_dir" ]] && ! mountpoint -q "$AI_HOME/$_dir" 2>/dev/null; then
+			DIR_OWNER=$(stat -c '%U:%G' "$AI_HOME/$_dir" 2>/dev/null || echo "missing")
+			[[ "$DIR_OWNER" == "$AI_USER:$AI_USER" ]] && log_pass "$_dir owner=$AI_USER:$AI_USER" || log_fail "$_dir owner=$DIR_OWNER (expected $AI_USER:$AI_USER)"
+		fi
+	done
+fi
+
+# ============================================================
+# P6: wrong ownership of non-mount dir -> update fixes
+# ============================================================
+begin_test "P6: wrong ownership of non-mount dir -> update fixes"
+setup_test_user standard
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+
+	# Create a test directory with wrong ownership (simulating leftover from root)
+	TEST_OWN_DIR="$AI_HOME/_test_ownership"
+	mkdir -p "$TEST_OWN_DIR"
+	chown root:root "$TEST_OWN_DIR"
+
+	BEFORE_OWNER=$(stat -c '%U:%G' "$TEST_OWN_DIR")
+	log_info "Before update: $TEST_OWN_DIR owner=$BEFORE_OWNER"
+
+	OUT2=$(run_am update "/home/$TEST_USER/projects/testproj" 2>&1)
+	log_info "update output (last 3): $(echo "$OUT2" | tail -3)"
+
+	AFTER_OWNER=$(stat -c '%U:%G' "$TEST_OWN_DIR")
+	[[ "$AFTER_OWNER" == "$AI_USER:$AI_USER" ]] && log_pass "update fixed _test_ownership dir to $AI_USER:$AI_USER" || log_fail "update did NOT fix owner (still $AFTER_OWNER)"
+
+	# Also test .ssh if it exists (non-mount, should be fixed)
+	if [[ -d "$AI_HOME/.ssh" ]]; then
+		chown root:root "$AI_HOME/.ssh"
+		run_am update "/home/$TEST_USER/projects/testproj" 2>&1 >/dev/null
+		SSH_OWNER=$(stat -c '%U:%G' "$AI_HOME/.ssh")
+		[[ "$SSH_OWNER" == "$AI_USER:$AI_USER" ]] && log_pass "update fixed .ssh owner to $AI_USER:$AI_USER" || log_fail ".ssh owner=$SSH_OWNER (expected $AI_USER:$AI_USER)"
+	fi
+fi
+
+# ============================================================
 # C1: No config file -> auto-detect
 # ============================================================
 begin_test "C1: No config file -> auto-detect defaults"

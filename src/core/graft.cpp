@@ -267,14 +267,12 @@ bool Graft::bind_mount(const fs::path& source, const fs::path& target, bool read
     }
 
     if (is_mounted(target)) {
-        utils::get_logger()->warn("Target already mounted: {}", target.string());
-        return true;
+        utils::get_logger()->info("Target already mounted, will still fix ownership if needed: {}", target.string());
     }
 
     // Double-check with live /proc/mounts to avoid cache staleness
     if (is_mounted_live(target)) {
-        utils::get_logger()->warn("Target already mounted (live check): {}", target.string());
-        return true;
+        utils::get_logger()->info("Target already mounted (live check), will still fix ownership if needed: {}", target.string());
     }
 
     if (!security::validate_path_exists(source)) {

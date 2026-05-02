@@ -315,6 +315,67 @@ run_test "7.5: Cleanup ownership test" \
 
 echo ""
 echo "========================================"
+echo "Scenario 7B: Update Ownership Fix"
+echo "========================================"
+
+setup_testuser_env
+mkdir -p /home/testuser/projects/owntest2
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "7B.1: Create project for update-ownership test" \
+	"/usr/local/bin/am create /home/testuser/projects/owntest2" \
+	"success"
+
+owntest2_user=$(getent passwd | grep '^itestuser_.*owntest2' | cut -d: -f1 | head -1)
+
+# Ownership rule: .am_status should be root, everything else should be ai-user or main-user (mount source)
+run_test "7B.2: .am_status owned by root" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.am_status" \
+	"contains" "root"
+
+# Check .local ownership (intermediate dir should be ai-user, not root)
+run_test "7B.3: .local dir owned by ai-user (not root)" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.local" \
+	"contains" "$owntest2_user"
+
+# Check .local/bin ownership (bind mount source owned by testuser)
+run_test "7B.4: .local/bin owned by testuser (mount source)" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.local/bin" \
+	"contains" "testuser"
+
+# Check .bashrc ownership (bind mount source owned by testuser)
+run_test "7B.5: .bashrc owned by testuser (mount source)" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.bashrc" \
+	"contains" "testuser"
+
+# Check .ssh ownership (ai-user's own dir)
+run_test "7B.6: .ssh owned by ai-user" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.ssh" \
+	"contains" "$owntest2_user"
+
+# Run am update and verify ownership is preserved/fixed
+run_test "7B.7: am update preserves ownership" \
+	"/usr/local/bin/am update /home/testuser/projects/owntest2" \
+	"success"
+
+run_test "7B.8: .am_status still owned by root after update" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.am_status" \
+	"contains" "root"
+
+run_test "7B.9: .local still owned by ai-user after update" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.local" \
+	"contains" "$owntest2_user"
+
+run_test "7B.10: .local/bin still owned by testuser after update" \
+	"stat -c '%U' /home/testuser/projects/owntest2/.local/bin" \
+	"contains" "testuser"
+
+run_test "7B.11: Cleanup owntest2" \
+	"/usr/local/bin/am rm /home/testuser/projects/owntest2" \
+	"success"
+
+echo ""
+echo "========================================"
 echo "Scenario 8: Recreate Same Project"
 echo "========================================"
 

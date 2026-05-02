@@ -90,6 +90,43 @@ setup_ssh_for_datauser
 
 echo ""
 echo "========================================"
+echo "Scenario 0: Install Verification"
+echo "========================================"
+
+run_test "0.1: /etc/profile.d/am.sh syntax check" \
+	"bash -n /etc/profile.d/am.sh" \
+	"success"
+
+run_test "0.2: /etc/profile.d/am.sh has no orphan ')'" \
+	"bash -c 'source /etc/profile.d/am.sh && echo OK'" \
+	"contains" "OK"
+
+run_test "0.3: am binary is executable" \
+	"test -x /usr/local/bin/am" \
+	"success"
+
+run_test "0.4: ai-mirror-bin symlink exists and is executable" \
+	"test -x /usr/local/bin/ai-mirror-bin" \
+	"success"
+
+run_test "0.5: install.sh itself passes syntax check" \
+	"bash -n /app/install.sh" \
+	"success"
+
+run_test "0.6: profile/am.sh source has no syntax error" \
+	"bash -n /app/profile/am.sh" \
+	"success"
+
+run_test "0.7: bash_completion is readable" \
+	"test -r /etc/bash_completion.d/am" \
+	"success"
+
+run_test "0.8: am --help returns success" \
+	"/usr/local/bin/am --help" \
+	"success"
+
+echo ""
+echo "========================================"
 echo "Scenario 1: Standard HOME (/home/user)"
 echo "========================================"
 

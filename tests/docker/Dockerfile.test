@@ -45,7 +45,11 @@ RUN mkdir -p build && \
     make -j$(nproc)
 
 RUN cp build/bin/ai-mirror /usr/local/bin/am && \
-    chmod +x /usr/local/bin/am
+    chmod +x /usr/local/bin/am && \
+    ln -sf /usr/local/bin/am /usr/local/bin/ai-mirror-bin
+
+# Run install.sh to deploy profile, completion, etc.
+RUN bash install.sh
 
 RUN mkdir -p /home/testuser/.ssh && \
     ssh-keygen -t ed25519 -f /home/testuser/.ssh/testkey -N "" -C "test" && \

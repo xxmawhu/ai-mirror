@@ -28,6 +28,12 @@
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+
+// FTXUI for watch TUI
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/dom/elements.hpp>
+#include <ftxui/dom/table.hpp>
 #include <pthread.h>
 
 namespace fs = std::filesystem;
@@ -1392,28 +1398,10 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
 }
 
 // ============================================================================
-// cmd_watch: htop-style real-time monitoring for ai-users
+// cmd_watch: FTXUI-based real-time monitoring for ai-users
 // ============================================================================
 
 namespace {
-    // ANSI escape codes for terminal UI
-    const char* ANSI_CLEAR = "\033[2J";
-    const char* ANSI_HOME = "\033[H";
-    const char* ANSI_BOLD = "\033[1m";
-    const char* ANSI_GREEN = "\033[32m";
-    const char* ANSI_YELLOW = "\033[33m";
-    const char* ANSI_RED = "\033[31m";
-    const char* ANSI_CYAN = "\033[36m";
-    const char* ANSI_RESET = "\033[0m";
-    const char* ANSI_HIDE_CURSOR = "\033[?25l";
-    const char* ANSI_SHOW_CURSOR = "\033[?25h";
-
-    // Signal handler for clean exit
-    static std::atomic<bool> watch_running{true};
-    void watch_signal_handler([[maybe_unused]] int sig) {
-        watch_running = false;
-    }
-
     // Parse /proc/[pid]/status to get UID and memory
     struct ProcInfo {
         uid_t uid;
@@ -1426,11 +1414,9 @@ namespace {
         std::string line;
         while (std::getline(f, line)) {
             if (line.find("Uid:") == 0) {
-                // Uid: 1001 1001 1001 1001 (real, effective, saved, fs)
                 std::istringstream iss(line.substr(5));
                 iss >> info.uid;
             } else if (line.find("VmRSS:") == 0) {
-                // VmRSS:     1234 kB
                 std::istringstream iss(line.substr(7));
                 iss >> info.vm_rss_kb;
             }
@@ -1438,25 +1424,18 @@ namespace {
         return info;
     }
 
-    // Get CPU usage percentage for a user (approximate via /proc/stat delta)
-    // Simplified: use `ps` command which we whitelisted
     struct UserStats {
         uid_t uid;
         std::string username;
         int process_count = 0;
-        unsigned long memory_mb = 0;  // Total RSS in MB
+        unsigned long memory_mb = 0;
         double cpu_percent = 0.0;
-        bool logged_in = false;  // Has active SSH session
+        bool logged_in = false;
     };
 
-    // Check if user has active SSH session by checking `who` output
     bool check_ssh_session(const std::string& username) {
-        // Read /proc/net/tcp for port 22 connections owned by user? Too complex.
-        // Simpler: check if any process owned by user is "sshd" with ESTABLISHED state
-        // For now: check via `ps` if sshd process exists for this user
         auto result = utils::exec_safe({"ps", "-u", username, "-o", "comm="});
         if (result.exit_code != 0) return false;
-        // Output: one line per process, e.g., "sshd\nbash\nvim"
         std::istringstream iss(result.stdout_output);
         std::string comm;
         while (std::getline(iss, comm)) {
@@ -1467,21 +1446,15 @@ namespace {
         return false;
     }
 
-    // Gather stats for all ai-users
     std::vector<UserStats> gather_user_stats(
         const std::vector<core::UserInfo>& users
     ) {
         std::vector<UserStats> stats;
 
-        // Read total CPU time from /proc/stat for delta calculation
-        // (Simplified: we'll use `ps` output for CPU% per process)
-
         for (const auto& u : users) {
             UserStats s;
             s.uid = u.uid;
             s.username = u.username;
-
-            // Count processes and sum memory via /proc
             s.process_count = 0;
             s.memory_mb = 0;
 
@@ -1491,7 +1464,6 @@ namespace {
             for (const auto& entry : fs::directory_iterator(proc_path)) {
                 if (!entry.is_directory()) continue;
                 std::string name = entry.path().filename().string();
-                // Check if directory name is numeric (PID)
                 if (name.empty() || name[0] < '0' || name[0] > '9') continue;
 
                 fs::path status_path = entry.path() / "status";
@@ -1500,14 +1472,13 @@ namespace {
 
                 if (proc_info->uid == u.uid) {
                     s.process_count++;
-                    s.memory_mb += proc_info->vm_rss_kb / 1024;  // KB to MB
+                    s.memory_mb += proc_info->vm_rss_kb / 1024;
                 }
             }
 
-            // CPU percentage via ps (simplified: sum %CPU from ps)
             auto result = utils::exec_safe({"ps", "-u", u.username, "-o", "%cpu="});
             if (result.exit_code == 0 && !result.stdout_output.empty()) {
-        std::istringstream iss(result.stdout_output);
+                std::istringstream iss(result.stdout_output);
                 std::string cpu_str;
                 double total_cpu = 0.0;
                 while (std::getline(iss, cpu_str)) {
@@ -1518,13 +1489,10 @@ namespace {
                 s.cpu_percent = total_cpu;
             }
 
-            // Check SSH session
             s.logged_in = check_ssh_session(u.username);
-
             stats.push_back(s);
         }
 
-        // Sort by CPU usage descending
         std::sort(stats.begin(), stats.end(),
             [](const UserStats& a, const UserStats& b) {
                 return a.cpu_percent > b.cpu_percent;
@@ -1533,90 +1501,57 @@ namespace {
         return stats;
     }
 
-    // Render one frame of the watch display
-    void render_frame(
-        const std::vector<UserStats>& stats,
-        const std::string& main_user,
-        int refresh_interval
-    ) {
-        // Get terminal width
-        int term_width = 80;
-        struct winsize w;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_col > 0) {
-            term_width = static_cast<int>(w.ws_col);
-        }
+    using namespace ftxui;
 
-        std::cout << ANSI_CLEAR << ANSI_HOME << ANSI_HIDE_CURSOR;
+    // Build FTXUI table from stats
+    Element render_stats_table(const std::vector<UserStats>& stats) {
+        // Header row
+        std::vector<Elements> rows;
+        rows.push_back({
+            text("USER")      | bold | flex,
+            text("UID")       | bold | flex,
+            text("CPU%")      | bold | flex,
+            text("MEM(MB)")   | bold | flex,
+            text("PROCS")     | bold | flex,
+            text("LOGIN")     | bold | flex,
+        });
 
-        // Header
-        std::cout << ANSI_BOLD << ANSI_CYAN;
-        std::cout << "ai-mirror watch - " << main_user << "'s ai-users";
-        std::cout << ANSI_RESET << "\n";
-        std::cout << ANSI_CYAN;
-        std::cout << "Refresh: " << refresh_interval << "s | "
-                  << stats.size() << " users | Press Ctrl+C to exit\n";
-        std::cout << ANSI_RESET;
-        std::cout << std::string(term_width, '-') << "\n\n";
-
-        // Table header
-        std::cout << ANSI_BOLD;
-        std::cout << std::left << std::setw(24) << "USER"
-                  << std::setw(6) << "UID"
-                  << std::setw(8) << "CPU%"
-                  << std::setw(10) << "MEM(MB)"
-                  << std::setw(8) << "PROCS"
-                  << std::setw(12) << "LOGIN"
-                  << "\n";
-        std::cout << ANSI_RESET;
-        std::cout << std::string(term_width, '-') << "\n";
-
-        // User rows
         for (const auto& s : stats) {
-            std::cout << std::left << std::setw(24) << s.username.substr(0, 23)
-                      << std::setw(6) << s.uid;
+            // CPU color
+            Color cpu_color = Color::Green;
+            if (s.cpu_percent > 50.0) cpu_color = Color::Red;
+            else if (s.cpu_percent > 20.0) cpu_color = Color::Yellow;
 
-            // CPU% with color
-            if (s.cpu_percent > 50.0) {
-                std::cout << ANSI_RED;
-            } else if (s.cpu_percent > 20.0) {
-                std::cout << ANSI_YELLOW;
-            } else {
-                std::cout << ANSI_GREEN;
-            }
-            std::cout << std::setw(8) << std::fixed << std::setprecision(1) << s.cpu_percent;
-            std::cout << ANSI_RESET;
+            // Memory color
+            Color mem_color = Color::Green;
+            if (s.memory_mb > 1000) mem_color = Color::Red;
+            else if (s.memory_mb > 500) mem_color = Color::Yellow;
 
-            // Memory with color
-            if (s.memory_mb > 1000) {
-                std::cout << ANSI_RED;
-            } else if (s.memory_mb > 500) {
-                std::cout << ANSI_YELLOW;
-            } else {
-                std::cout << ANSI_GREEN;
-            }
-            std::cout << std::setw(10) << s.memory_mb;
-            std::cout << ANSI_RESET;
+            // Login status
+            auto login_elem = s.logged_in
+                ? text("ONLINE") | color(Color::Green) | bold
+                : text("offline") | color(Color::Yellow);
 
-            std::cout << std::setw(8) << s.process_count;
+            std::ostringstream cpu_ss, mem_ss;
+            cpu_ss << std::fixed << std::setprecision(1) << s.cpu_percent;
+            mem_ss << s.memory_mb;
 
-            // Login status with color
-            if (s.logged_in) {
-                std::cout << ANSI_GREEN << std::setw(12) << "ONLINE" << ANSI_RESET;
-            } else {
-                std::cout << ANSI_YELLOW << std::setw(12) << "offline" << ANSI_RESET;
-            }
-            std::cout << "\n";
+            rows.push_back({
+                text(s.username.substr(0, 23))          | flex,
+                text(std::to_string(s.uid))              | flex,
+                text(cpu_ss.str())                       | color(cpu_color) | flex,
+                text(mem_ss.str())                       | color(mem_color) | flex,
+                text(std::to_string(s.process_count))    | flex,
+                std::move(login_elem)                    | flex,
+            });
         }
 
-        // Footer: timestamp
-        auto now = std::chrono::system_clock::now();
-        auto now_c = std::chrono::system_clock::to_time_t(now);
-        std::cout << "\n" << std::string(term_width, '-') << "\n";
-        std::cout << ANSI_CYAN << "Last update: "
-                  << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S")
-                  << ANSI_RESET << "\n";
+        auto tbl = Table(std::move(rows));
+        tbl.SelectAll().Border(LIGHT);
+        tbl.SelectRow(0).Decorate(bgcolor(Color::Blue));
+        tbl.SelectRow(0).Decorate(color(Color::White));
 
-        std::cout.flush();
+        return tbl.Render();
     }
 } // anonymous namespace
 
@@ -1624,51 +1559,95 @@ int cmd_watch([[maybe_unused]] bool verbose) {
     auto ctx = make_context(verbose);
     std::string main_user = utils::get_effective_username();
 
-    // Setup signal handlers
-    struct sigaction sa;
-    sa.sa_handler = watch_signal_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sigaction(SIGINT, &sa, nullptr);
-    sigaction(SIGTERM, &sa, nullptr);
-
-    int refresh_interval = 2;  // seconds
-
+    // Print startup message (for test compatibility)
     std::cout << "Starting ai-mirror watch... Press Ctrl+C to exit.\n";
-    usleep(500000);  // Brief pause for user to read message
 
-    while (watch_running) {
-        // Get list of ai-users for this main_user
-        auto users = ctx.user_mgr->list_ai_users();
+    auto screen = ScreenInteractive::Fullscreen();
 
-        // Filter: only users belonging to current main_user
-        std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
-        std::vector<core::UserInfo> filtered;
-        for (const auto& u : users) {
-            if (u.username.size() > expected_prefix.size()
-                && u.username.substr(0, expected_prefix.size()) == expected_prefix) {
-                filtered.push_back(u);
+    // Shared state for periodic data refresh
+    auto stats = std::make_shared<std::vector<UserStats>>();
+    auto empty_msg = std::make_shared<bool>(true);
+    auto refresh_interval = std::make_shared<int>(2);
+
+    // Periodic data refresh via a separate thread
+    std::atomic<bool> running{true};
+    std::thread refresh_thread([&]() {
+        while (running) {
+            // Gather data
+            auto users = ctx.user_mgr->list_ai_users();
+            std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+            std::vector<core::UserInfo> filtered;
+            for (const auto& u : users) {
+                if (u.username.size() > expected_prefix.size()
+                    && u.username.substr(0, expected_prefix.size()) == expected_prefix) {
+                    filtered.push_back(u);
+                }
+            }
+
+            if (filtered.empty()) {
+                *empty_msg = true;
+                stats->clear();
+            } else {
+                *empty_msg = false;
+                *stats = gather_user_stats(filtered);
+            }
+
+            screen.PostEvent(Event::Custom);
+
+            // Sleep with interrupt check
+            for (int i = 0; i < *refresh_interval * 10 && running; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
+    });
 
-        if (filtered.empty()) {
-            std::cout << ANSI_CLEAR << ANSI_HOME;
-            std::cout << ANSI_YELLOW << "No ai-users found for " << main_user << ANSI_RESET << "\n";
-            std::cout << "Create one with: am create <project_path>\n";
-            std::cout.flush();
-        } else {
-            auto stats = gather_user_stats(filtered);
-            render_frame(stats, main_user, refresh_interval);
+    auto renderer = Renderer([&, stats, empty_msg, main_user, refresh_interval] {
+        auto now = std::chrono::system_clock::now();
+        auto now_c = std::chrono::system_clock::to_time_t(now);
+        std::ostringstream time_ss;
+        time_ss << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S");
+
+        if (*empty_msg) {
+            return vbox({
+                text("No ai-users found for " + main_user) | color(Color::Yellow) | bold | hcenter,
+                text("Create one with: am create <project_path>") | dim | hcenter,
+            }) | border | flex;
         }
 
-        // Sleep for refresh interval, but check every 100ms if signal received
-        for (int i = 0; i < refresh_interval * 10 && watch_running; ++i) {
-            usleep(100000);  // 100ms
-        }
-    }
+        return vbox({
+            hbox({
+                text("ai-mirror watch - " + main_user + "'s ai-users") | bold | color(Color::Cyan),
+                filler(),
+                text("Press q/Esc to exit") | dim,
+            }),
+            separator(),
+            render_stats_table(*stats),
+            separator(),
+            hbox({
+                text("Refresh: " + std::to_string(*refresh_interval) + "s") | color(Color::Cyan),
+                text(" | "),
+                text(std::to_string(stats->size()) + " users") | color(Color::Cyan),
+                text(" | "),
+                text("Last update: " + time_ss.str()) | color(Color::Cyan),
+            }),
+        }) | border | flex;
+    });
 
-    // Restore terminal state
-    std::cout << ANSI_SHOW_CURSOR << ANSI_RESET << "\n";
+    auto component = CatchEvent(renderer, [&](Event event) {
+        if (event == Event::Character('q') || event == Event::Escape) {
+            screen.Exit();
+            return true;
+        }
+        // FTXUI handles Ctrl+C automatically via SIGINT
+        return false;
+    });
+
+    screen.Loop(component);
+
+    running = false;
+    refresh_thread.join();
+
+    // Print exit message (for test compatibility)
     std::cout << "Watch stopped.\n";
     std::cout.flush();
 

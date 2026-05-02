@@ -80,6 +80,13 @@ FetchContent_Declare(nlohmann_json
 FetchContent_MakeAvailable(nlohmann_json)
 target_link_libraries(ai-mirror PRIVATE nlohmann_json::nlohmann_json)
 
+FetchContent_Declare(ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/ftxui
+    GIT_TAG v6.1.9
+)
+FetchContent_MakeAvailable(ftxui)
+target_link_libraries(ai-mirror PRIVATE ftxui::component)
+
 target_link_libraries(ai-mirror PRIVATE pthread)
 
 find_package(OpenSSL REQUIRED)

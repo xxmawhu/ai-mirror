@@ -390,6 +390,7 @@ src/
 | toml11 | v4.2.0 | TOML 配置 |
 | spdlog | v1.15.0 | 日志 |
 | nlohmann_json | v3.11.3 | JSON 处理 |
+| FTXUI | v6.1.9 | watch TUI 渲染 |
 
 ## 安全设计
 

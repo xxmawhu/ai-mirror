@@ -219,6 +219,17 @@ phase_install() {
 		warn "  profile/am.sh not found, skipping profile function install"
 	fi
 
+	# Install bash completion
+	log "Installing bash completion..."
+	local completion_src="${SCRIPT_DIR}/completions/am-completion.bash"
+	if [[ -f "$completion_src" ]]; then
+		sudo install -d /etc/bash_completion.d
+		sudo install -m 0644 "$completion_src" /etc/bash_completion.d/am
+		log "  /etc/bash_completion.d/am"
+	else
+		warn "  completions/am-completion.bash not found, skipping bash completion install"
+	fi
+
 	log "Setting up data directory ${DATA_DIR}/..."
 	sudo install -d "${DATA_DIR}"
 	sudo chmod 0755 "${DATA_DIR}"
@@ -282,6 +293,7 @@ phase_summary() {
 	log ""
 	log "Installed:"
 	log "  /etc/profile.d/am.sh       (bash function, sourced on login)"
+	log "  /etc/bash_completion.d/am  (bash completion, sourced on login)"
 	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  (actual binary)"
 	log ""
 	log "Data directory:"
@@ -319,6 +331,11 @@ phase_clean() {
 	if sudo test -f /etc/profile.d/am.sh; then
 		sudo rm -f /etc/profile.d/am.sh
 		log "  Removed /etc/profile.d/am.sh"
+	fi
+
+	if sudo test -f /etc/bash_completion.d/am; then
+		sudo rm -f /etc/bash_completion.d/am
+		log "  Removed /etc/bash_completion.d/am"
 	fi
 
 	if sudo test -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then

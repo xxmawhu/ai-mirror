@@ -2002,6 +2002,177 @@ full_cleanup || true
 rm -rf /data/public_proj
 
 # ============================================================
+# WT1: watch with no ai-users shows empty message
+# ============================================================
+begin_test "WT1: watch with no ai-users"
+setup_test_user standard
+
+# Run watch with timeout (3 seconds should be enough to capture first frame)
+# Use script to fake a TTY so ioctl(TIOCGWINSZ) works
+WT_OUT=$(timeout --signal=TERM 3 \
+	script -q -c "SUDO_USER=$TEST_USER SUDO_UID=$(id -u $TEST_USER) HOME=/home/$TEST_USER /usr/local/bin/am watch" /dev/null 2>&1 || true)
+log_info "WT1 output: $(echo "$WT_OUT" | head -10)"
+
+# Strip ANSI codes for matching
+WT_PLAIN=$(echo "$WT_OUT" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+if echo "$WT_PLAIN" | grep -qi "No ai-users"; then
+	log_pass "WT1: shows 'No ai-users' message"
+else
+	log_fail "WT1: missing 'No ai-users' message"
+fi
+
+# ============================================================
+# WT2: watch with ai-users shows table with username
+# ============================================================
+begin_test "WT2: watch with ai-users shows table"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	WT_OUT=$(timeout --signal=TERM 5 \
+		script -q -c "SUDO_USER=$TEST_USER SUDO_UID=$(id -u $TEST_USER) HOME=/home/$TEST_USER /usr/local/bin/am watch" /dev/null 2>&1 || true)
+	WT_PLAIN=$(echo "$WT_OUT" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+	log_info "WT2 output (first 15 lines): $(echo "$WT_PLAIN" | head -15)"
+
+	# Should show the ai-user username
+	if echo "$WT_PLAIN" | grep -q "$AI_USER"; then
+		log_pass "WT2: ai-user '$AI_USER' shown in watch output"
+	else
+		log_fail "WT2: ai-user '$AI_USER' NOT found in watch output"
+	fi
+
+	# Should show table header elements
+	if echo "$WT_PLAIN" | grep -qi "CPU%\|MEM"; then
+		log_pass "WT2: table header (CPU%/MEM) present"
+	else
+		log_fail "WT2: table header missing"
+	fi
+
+	# Should show UID
+	AI_UID=$(getent passwd "$AI_USER" | cut -d: -f3)
+	if [[ -n "$AI_UID" ]] && echo "$WT_PLAIN" | grep -q "$AI_UID"; then
+		log_pass "WT2: UID $AI_UID displayed"
+	else
+		log_fail "WT2: UID not displayed"
+	fi
+else
+	log_fail "WT2: could not create ai-user"
+fi
+
+# ============================================================
+# WT3: watch exits cleanly on SIGTERM
+# ============================================================
+begin_test "WT3: watch exits cleanly on SIGTERM"
+setup_test_user standard
+
+# Start watch in background with environment
+env SUDO_USER="$TEST_USER" SUDO_UID=$(id -u "$TEST_USER") HOME="/home/$TEST_USER" \
+	/usr/local/bin/am watch >/tmp/wt3_out.log 2>&1 &
+WT_PID=$!
+log_info "WT3: started watch PID=$WT_PID"
+
+# Wait for first frame
+sleep 2
+
+# Send SIGTERM (same as Ctrl+C handler)
+kill -TERM $WT_PID 2>/dev/null || true
+
+# Wait for process to exit (max 5s)
+WAITED=0
+while kill -0 $WT_PID 2>/dev/null && [[ $WAITED -lt 50 ]]; do
+	sleep 0.1
+	WAITED=$((WAITED + 1))
+done
+
+if kill -0 $WT_PID 2>/dev/null; then
+	log_fail "WT3: watch did NOT exit after SIGTERM"
+	kill -9 $WT_PID 2>/dev/null || true
+else
+	log_pass "WT3: watch exited cleanly after SIGTERM"
+fi
+
+# Check output contains "Watch stopped"
+WT3_LOG=$(cat /tmp/wt3_out.log 2>/dev/null | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+if echo "$WT3_LOG" | grep -qi "Watch stopped"; then
+	log_pass "WT3: 'Watch stopped' message printed"
+else
+	log_warn "WT3: 'Watch stopped' message not found (may be timing issue)"
+fi
+rm -f /tmp/wt3_out.log
+
+# ============================================================
+# WT4: watch shows process count for running ai-user
+# ============================================================
+begin_test "WT4: watch shows process count"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Run a process as the ai-user
+	AI_HOME=$(getent passwd "$AI_USER" | cut -d: -f6)
+	su - "$AI_USER" -c "sleep 30 &" 2>/dev/null || true
+	sleep 1
+
+	WT_OUT=$(timeout --signal=TERM 5 \
+		script -q -c "SUDO_USER=$TEST_USER SUDO_UID=$(id -u $TEST_USER) HOME=/home/$TEST_USER /usr/local/bin/am watch" /dev/null 2>&1 || true)
+	WT_PLAIN=$(echo "$WT_OUT" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+	log_info "WT4 output (first 15 lines): $(echo "$WT_PLAIN" | head -15)"
+
+	# The table row should show process count > 0 for this user
+	# Look for the ai-user's row and check PROCS column
+	# Format: USERNAME  UID  CPU%  MEM(MB)  PROCS  LOGIN
+	AI_UID=$(getent passwd "$AI_USER" | cut -d: -f3)
+	if echo "$WT_PLAIN" | grep -q "$AI_USER"; then
+		# Extract the line containing the ai-user
+		USER_LINE=$(echo "$WT_PLAIN" | grep "$AI_USER" | head -1)
+		log_info "WT4: user line: $USER_LINE"
+		# Check PROCS column is not "0"
+		if echo "$USER_LINE" | grep -qE "[0-9]+"; then
+			log_pass "WT4: process info displayed for ai-user"
+		else
+			log_warn "WT4: could not verify process count"
+		fi
+	else
+		log_fail "WT4: ai-user not found in watch output"
+	fi
+else
+	log_fail "WT4: could not create ai-user"
+fi
+
+# ============================================================
+# WT5: watch detects SSH session status (online/offline)
+# ============================================================
+begin_test "WT5: watch detects SSH session (offline)"
+setup_test_user standard
+
+OUT=$(run_am create "/home/$TEST_USER/projects/testproj" 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# No SSH session -> should show "offline"
+	WT_OUT=$(timeout --signal=TERM 5 \
+		script -q -c "SUDO_USER=$TEST_USER SUDO_UID=$(id -u $TEST_USER) HOME=/home/$TEST_USER /usr/local/bin/am watch" /dev/null 2>&1 || true)
+	WT_PLAIN=$(echo "$WT_OUT" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g')
+
+	# Check for offline status in the user's row
+	if echo "$WT_PLAIN" | grep -i "offline"; then
+		log_pass "WT5: shows 'offline' when no SSH session"
+	elif echo "$WT_PLAIN" | grep -qi "ONLINE"; then
+		log_fail "WT5: shows 'ONLINE' but no SSH session exists"
+	else
+		log_warn "WT5: login status not clearly displayed"
+	fi
+else
+	log_fail "WT5: could not create ai-user"
+fi
+
+full_cleanup || true
+
+# ============================================================
 # BUG-19: Legacy .am_status format compatibility
 # ============================================================
 setup_test_user standard

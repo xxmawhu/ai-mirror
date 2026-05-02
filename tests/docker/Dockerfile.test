@@ -22,14 +22,18 @@ RUN mkdir /var/run/sshd
 RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
 RUN sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
-RUN useradd -m -s /bin/bash testuser && \
+RUN groupadd ai-mirror && \
+    usermod -aG ai-mirror root && \
+    useradd -m -s /bin/bash testuser && \
     echo "testuser:testpassword" | chpasswd && \
-    usermod -aG sudo testuser
+    usermod -aG sudo testuser && \
+    usermod -aG ai-mirror testuser
 
 RUN mkdir -p /data/home && \
     useradd -m -d /data/home/datauser -s /bin/bash datauser && \
     echo "datauser:testpassword" | chpasswd && \
-    usermod -aG sudo datauser
+    usermod -aG sudo datauser && \
+    usermod -aG ai-mirror datauser
 
 WORKDIR /app
 

@@ -7,7 +7,7 @@
 # Features:
 #   - Dynamic subcommand and option completion
 #   - Context-aware argument completion (projects, ai-users, files, dirs)
-#   - Graceful degradation when am is not in PATH
+#   - Works without bash-completion package (uses compgen directly)
 #   - Debug mode: _AM_COMP_DEBUG=1 for troubleshooting
 
 # ===========================================================================
@@ -28,30 +28,12 @@ declare -A _am_cmd_opts=(
 	[cd]="-h --help"
 	[list]="-h --help"
 	[health]="-h --help"
-	[force-destroy]="-h --help"
+	[force - destroy]="-h --help"
 	[rm]="-h --help"
 	[config]="-h --help"
 	[status]="-h --help"
 	[update]="-h --help"
 	[watch]="-h --help"
-)
-
-# Per-subcommand: number of positional arguments expected
-declare -A _am_cmd_nargs=(
-	[create]=1
-	[mkdir]=2
-	[cp]=2
-	[mv]=2
-	[touch]=2
-	[cd]=1
-	[list]=0
-	[health]=0
-	[force-destroy]=1
-	[rm]=1
-	[config]=0
-	[status]=0
-	[update]=1
-	[watch]=0
 )
 
 # ===========================================================================
@@ -195,17 +177,40 @@ _am_get_projects() {
 }
 
 # ===========================================================================
-#  Helper: complete with words (safe for unusual characters)
+#  Helper: complete words from newline-separated list
+#  Converts newline-separated list to space-separated for compgen -W
 # ===========================================================================
 
 _am_comp_words() {
-	local words="$1"
+	local wordlist="$1"
 	local cur="$2"
-	local w
-	while IFS= read -r w; do
-		[[ -z "$w" ]] && continue
-		COMPREPLY+=("$(compgen -W "$w" -- "$cur")")
-	done <<<"$words"
+
+	# Build a temp file to safely pass word list to compgen -W
+	# (avoids xargs splitting words on spaces)
+	local tmpfile
+	tmpfile=$(mktemp -t am-comp.XXXXXX) || return
+	trap 'rm -f "$tmpfile"' RETURN
+
+	printf '%s\n' $wordlist >"$tmpfile" 2>/dev/null
+	COMPREPLY+=($(compgen -W "$(cat "$tmpfile")" -- "$cur"))
+}
+
+# ===========================================================================
+#  Helper: complete files (no dependency on _filedir)
+# ===========================================================================
+
+_am_comp_files() {
+	local cur="$1"
+	COMPREPLY+=($(compgen -f -- "$cur"))
+}
+
+# ===========================================================================
+#  Helper: complete directories only (no dependency on _filedir)
+# ===========================================================================
+
+_am_comp_dirs() {
+	local cur="$1"
+	COMPREPLY+=($(compgen -d -- "$cur"))
 }
 
 # ===========================================================================
@@ -213,12 +218,12 @@ _am_comp_words() {
 # ===========================================================================
 
 _am_count_positionals() {
-	local -n _words="${1:-COMP_WORDS}"
+	local words_arr=("${!1}")
 	local cmd_idx="$2"
 	local count=0
 	local i
-	for ((i = cmd_idx + 1; i < ${#_words[@]}; i++)); do
-		if [[ "${_words[$i]}" != -* ]]; then
+	for ((i = cmd_idx + 1; i < ${#words_arr[@]}; i++)); do
+		if [[ "${words_arr[$i]}" != -* ]]; then
 			((count++))
 		fi
 	done
@@ -230,8 +235,11 @@ _am_count_positionals() {
 # ===========================================================================
 
 _am_completion() {
-	local cur prev words cword
-	_init_completion -n = || return
+	# Directly use COMP_WORDS and COMP_CWORD (no dependency on _init_completion)
+	local cur="${COMP_WORDS[COMP_CWORD]}"
+	local prev="${COMP_WORDS[COMP_CWORD - 1]}"
+	local words=("${COMP_WORDS[@]}")
+	local cword="${COMP_CWORD}"
 
 	local cmd=""
 	local cmd_idx=-1
@@ -272,7 +280,7 @@ _am_completion() {
 	#  Level 2: positional argument completion (context-aware)
 	# -----------------------------------------------------------------------
 	local n_positionals
-	n_positionals=$(_am_count_positionals COMP_WORDS "$cmd_idx")
+	n_positionals=$(_am_count_positionals words "$cmd_idx")
 	_am_debug "cmd=$cmd n_positionals=$n_positionals"
 
 	case "$cmd" in
@@ -282,15 +290,15 @@ _am_completion() {
 			local projects
 			projects=$(_am_get_projects "$cur")
 			_am_comp_words "$projects" "$cur"
-			_filedir -d
+			_am_comp_dirs "$cur"
 		fi
 		;;
 
 	mkdir)
 		# mkdir <path> <ai_user>
-		if [[ $n_positionals -eq 1 ]]; then
-			_filedir -d
-		elif [[ $n_positionals -eq 2 ]]; then
+		if [[ $n_positionals -le 1 ]]; then
+			_am_comp_dirs "$cur"
+		elif [[ $n_positionals -le 2 ]]; then
 			local users
 			users=$(_am_get_users)
 			_am_comp_words "$users" "$cur"
@@ -299,9 +307,9 @@ _am_completion() {
 
 	touch)
 		# touch <path> <ai_user>
-		if [[ $n_positionals -eq 1 ]]; then
-			_filedir
-		elif [[ $n_positionals -eq 2 ]]; then
+		if [[ $n_positionals -le 1 ]]; then
+			_am_comp_files "$cur"
+		elif [[ $n_positionals -le 2 ]]; then
 			local users
 			users=$(_am_get_users)
 			_am_comp_words "$users" "$cur"
@@ -310,12 +318,15 @@ _am_completion() {
 
 	cp | mv)
 		# cp/mv <src> <dst>
-		_filedir
+		_am_comp_files "$cur"
 		;;
 
 	cd)
 		# cd <path>
-		_filedir -d
+		local projects
+		projects=$(_am_get_projects "$cur")
+		_am_comp_words "$projects" "$cur"
+		_am_comp_dirs "$cur"
 		;;
 
 	rm | update)
@@ -326,7 +337,7 @@ _am_completion() {
 			users=$(_am_get_users)
 			_am_comp_words "$projects" "$cur"
 			_am_comp_words "$users" "$cur"
-			_filedir -d
+			_am_comp_dirs "$cur"
 		fi
 		;;
 
@@ -338,7 +349,7 @@ _am_completion() {
 			projects=$(_am_get_projects "$cur")
 			_am_comp_words "$users" "$cur"
 			_am_comp_words "$projects" "$cur"
-			_filedir -d
+			_am_comp_dirs "$cur"
 		fi
 		;;
 
@@ -350,7 +361,7 @@ _am_completion() {
 			projects=$(_am_get_projects "$cur")
 			_am_comp_words "$users" "$cur"
 			_am_comp_words "$projects" "$cur"
-			_filedir -d
+			_am_comp_dirs "$cur"
 		fi
 		;;
 
@@ -360,7 +371,7 @@ _am_completion() {
 
 	*)
 		# Unknown subcommand — fallback to file completion
-		_filedir
+		_am_comp_files "$cur"
 		;;
 	esac
 

@@ -347,48 +347,82 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         }
     }
 
-    // Third pass: fix ownership of ALL entries in home_dir (except .am_status which should be root:root)
+    // Third pass: recursively fix ownership of ALL entries in home_dir
+    // Skip .am_status (root:root by design) and bind mount targets (read-only)
     {
         fs::path am_status_path = fs::path(home_dir) / ".am_status";
-        std::error_code iter_ec;
-        for (const auto& entry : fs::directory_iterator(home_dir, iter_ec)) {
-            if (iter_ec) break;
 
-            if (entry.path() == am_status_path) continue;
+        // Collect all bind mount target paths to skip during recursion
+        std::set<std::string> mount_targets;
+        auto all_mounts = ctx.graft->list_mounts(username);
+        for (const auto& m : all_mounts) {
+            mount_targets.insert(m.target.string());
+        }
 
-            struct stat st;
-            if (lstat(entry.path().c_str(), &st) != 0) continue;
+        // Recursive helper: chown all entries under a directory, skipping mount targets
+        // Returns number of fixes applied
+        std::function<int(const fs::path&, int)> recursive_chown = [&](const fs::path& dir_path, int depth) -> int {
+            constexpr int max_depth = 256;
+            if (depth > max_depth) {
+                utils::get_logger()->warn("Third pass: max depth {} exceeded at {}", max_depth, dir_path.string());
+                return 0;
+            }
+            int local_fixes = 0;
+            std::error_code iter_ec;
+            for (const auto& entry : fs::directory_iterator(dir_path, iter_ec)) {
+                if (iter_ec) break;
+                auto ep = entry.path();
 
-            if (st.st_uid != state.uid || st.st_gid != state.gid) {
+                // Skip .am_status
+                if (ep == am_status_path) continue;
+
+                struct stat st;
+                if (lstat(ep.c_str(), &st) != 0) continue;
+
+                // Skip bind mount targets — don't chown or recurse into them
+                if (mount_targets.count(ep.string())) continue;
+
                 if (S_ISLNK(st.st_mode)) {
-                    if (lchown(entry.path().c_str(), state.uid, state.gid) != 0) {
-                        utils::get_logger()->warn("Failed to fix symlink ownership: {}", entry.path().string());
-                    } else {
-                        utils::get_logger()->info("Fixed symlink ownership: {} -> {}:{}", entry.path().string(), state.uid, state.gid);
-                        fixes++;
+                    if ((st.st_uid != state.uid || st.st_gid != state.gid)) {
+                        if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
+                            utils::get_logger()->info("Third pass: fixed symlink {} -> {}:{}", ep.string(), state.uid, state.gid);
+                            local_fixes++;
+                        } else {
+                            utils::get_logger()->warn("Third pass: failed to fix symlink {}", ep.string());
+                        }
                     }
-                } else {
-                    int fd = open(entry.path().c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-                    if (fd < 0) {
-                        fd = open(entry.path().c_str(), O_RDONLY | O_NOFOLLOW);
-                    }
+                    // Don't recurse into symlinks
+                    continue;
+                }
+
+                bool needs_chown = (st.st_uid != state.uid || st.st_gid != state.gid);
+                if (needs_chown) {
+                    int fd = open(ep.c_str(), O_RDONLY | (S_ISDIR(st.st_mode) ? O_DIRECTORY : 0) | O_NOFOLLOW);
                     if (fd >= 0) {
                         if (fchown(fd, state.uid, state.gid) == 0) {
-                            utils::get_logger()->info("Fixed ownership: {} -> {}:{}", entry.path().string(), state.uid, state.gid);
-                            fixes++;
+                            utils::get_logger()->info("Third pass: fixed {} -> {}:{}", ep.string(), state.uid, state.gid);
+                            local_fixes++;
                         } else {
-                            utils::get_logger()->warn("Failed to fix ownership: {}", entry.path().string());
+                            utils::get_logger()->warn("Third pass: failed to fix {}", ep.string());
                         }
                         close(fd);
                     } else if (errno == ELOOP) {
-                        if (lchown(entry.path().c_str(), state.uid, state.gid) == 0) {
-                            utils::get_logger()->info("Fixed symlink ownership: {} -> {}:{}", entry.path().string(), state.uid, state.gid);
-                            fixes++;
+                        if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
+                            utils::get_logger()->info("Third pass: fixed symlink {} -> {}:{}", ep.string(), state.uid, state.gid);
+                            local_fixes++;
                         }
                     }
                 }
+
+                // Recurse into sub-directories
+                if (S_ISDIR(st.st_mode)) {
+                    local_fixes += recursive_chown(ep, depth + 1);
+                }
             }
-        }
+            return local_fixes;
+        };
+
+        fixes += recursive_chown(fs::path(home_dir), 0);
     }
 
     if (mount_failures > 0) {

@@ -1803,4 +1803,119 @@ int cmd_watch([[maybe_unused]] bool verbose) {
     return 0;
 }
 
+// cmd_init: Initialize user environment for am command
+// Ensures am command works in all shell contexts (login, non-login, tmux, screen)
+int cmd_init([[maybe_unused]] bool verbose) {
+    std::string user = utils::get_effective_username();
+    std::string home = utils::get_home_dir(user);
+    std::string bashrc = home + "/.bashrc";
+    std::string config_file = home + "/.ai-mirror.toml";
+
+    std::cout << "=== ai-mirror 初始化检查 ===\n\n";
+
+    // 1. Check ai-mirror group membership
+    bool in_group = utils::is_group_member("ai-mirror");
+    std::cout << "1. ai-mirror 组成员身份: ";
+    if (in_group) {
+        std::cout << "✓ 已在组中\n";
+    } else {
+        std::cout << "✗ 未在组中\n";
+        std::cout << "   修复命令: sudo usermod -aG ai-mirror " << user << "\n";
+        std::cout << "   修复后需重新登录生效\n";
+    }
+
+    // 2. Check config file exists
+    std::cout << "\n2. 用户配置文件 ~/.ai-mirror.toml: ";
+    bool config_exists = fs::exists(config_file);
+    if (config_exists) {
+        std::cout << "✓ 已存在\n";
+    } else {
+        std::cout << "○ 不存在（将使用默认配置）\n";
+        // Create minimal config
+        std::ofstream ofs(config_file);
+        if (ofs.is_open()) {
+            ofs << "# ai-mirror 用户配置\n";
+            ofs << "# 首次运行自动创建，覆盖默认值\n\n";
+            ofs << "[mount]\n";
+            ofs << "paths = [\n";
+            ofs << "    \"~/.bashrc\",\n";
+            ofs << "    \"~/.config\",\n";
+            ofs << "    \"~/.local/bin\",\n";
+            ofs << "]\n\n";
+            ofs << "[ssh]\n";
+            ofs << "key_type = \"ed25519\"\n";
+            ofs.close();
+            std::cout << "   → 已创建默认配置文件\n";
+        } else {
+            std::cout << "   → 创建失败（权限问题）\n";
+        }
+    }
+
+    // 3. Check if ~/.bashrc sources am.sh (critical for tmux)
+    std::cout << "\n3. ~/.bashrc 中 am.sh 加载: ";
+    bool bashrc_has_source = false;
+    std::ifstream bashrc_in(bashrc);
+    if (bashrc_in.is_open()) {
+        std::string line;
+        while (std::getline(bashrc_in, line)) {
+            // Check for various forms of sourcing am.sh
+            if (line.find("source /etc/profile.d/am.sh") != std::string::npos ||
+                line.find(". /etc/profile.d/am.sh") != std::string::npos ||
+                line.find("source ~/.local/share/bash-completion/completions/am") != std::string::npos) {
+                bashrc_has_source = true;
+                break;
+            }
+        }
+        bashrc_in.close();
+    }
+
+    if (bashrc_has_source) {
+        std::cout << "✓ 已配置\n";
+    } else {
+        std::cout << "○ 未配置（tmux/screen 等非登录 shell 可能无法使用 am）\n";
+
+        // Append source line to ~/.bashrc
+        std::ofstream bashrc_out(bashrc, std::ios::app);
+        if (bashrc_out.is_open()) {
+            bashrc_out << "\n# ai-mirror: 确保 am 命令在 tmux/screen 等非登录 shell 中可用\n";
+            bashrc_out << "if [[ -f /etc/profile.d/am.sh ]]; then\n";
+            bashrc_out << "    source /etc/profile.d/am.sh\n";
+            bashrc_out << "fi\n";
+            bashrc_out.close();
+            std::cout << "   → 已追加配置到 ~/.bashrc\n";
+        } else {
+            std::cout << "   → 写入失败（请手动添加）\n";
+        }
+    }
+
+    // 4. Check bash completion
+    std::cout << "\n4. Bash 补齐: ";
+    bool completion_installed = fs::exists("/etc/bash_completion.d/am");
+    if (completion_installed) {
+        std::cout << "✓ 已安装 (/etc/bash_completion.d/am)\n";
+    } else {
+        std::cout << "○ 未安装系统级补齐\n";
+        std::cout << "   修复命令: sudo cp completions/am-completion.bash /etc/bash_completion.d/am\n";
+    }
+
+    // 5. Summary
+    std::cout << "\n=== 总结 ===\n";
+    if (in_group && bashrc_has_source) {
+        std::cout << "环境已完整配置。\n";
+        std::cout << "新终端/tmux 窗口可直接使用 am 命令。\n";
+    } else {
+        std::cout << "部分配置缺失，请按上述提示修复。\n";
+        if (!in_group) {
+            std::cout << "关键: 请先加入 ai-mirror 组并重新登录。\n";
+        }
+        if (!bashrc_has_source) {
+            std::cout << "提示: ~/.bashrc 已更新，新终端自动生效。\n";
+        }
+    }
+
+    std::cout << "\n如需立即生效，执行: source ~/.bashrc\n";
+
+    return (in_group && bashrc_has_source) ? 0 : 1;
+}
+
 }

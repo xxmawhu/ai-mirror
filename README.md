@@ -144,6 +144,29 @@ cp completions/am-completion.bash ~/.local/share/bash-completion/completions/am
 
 ---
 
+### `init` — 初始化用户环境
+
+```bash
+am init
+```
+
+确保当前用户环境正确配置 am 命令，一键完成所有前置设置。
+
+**执行流程**:
+1. 检查 `ai-mirror` 组成员身份（不在组则提示加入命令）
+2. 创建用户配置文件 `~/.ai-mirror.toml`（不存在时）
+3. 在 `~/.bashrc` 中添加 `source /etc/profile.d/am.sh`（tmux 兼容）
+4. 加载 bash 补齐
+
+> **tmux 兼容**: `/etc/profile.d/am.sh` 仅登录 shell 加载，tmux 新窗口是非登录 shell。`init` 通过在 `~/.bashrc` 追加 source 解决此问题。
+
+**适用场景**:
+- 新用户首次使用 ai-mirror
+- tmux 环境下 `am` 命令不可用
+- 环境配置丢失后快速恢复
+
+---
+
 ### `create` — 创建项目用户
 
 ```bash

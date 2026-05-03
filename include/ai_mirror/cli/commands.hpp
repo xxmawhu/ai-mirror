@@ -29,5 +29,6 @@ int cmd_config(bool verbose);
 int cmd_status(bool verbose);
 int cmd_update(const std::string& project_path, bool verbose);
 int cmd_watch(bool verbose);
+int cmd_init(bool verbose);
 
 }

@@ -14,7 +14,7 @@
 #  Subcommand and option definitions (kept in sync with src/cli/parser.cpp)
 # ===========================================================================
 
-_am_subcommands="create mkdir cp mv touch cd list health force-destroy rm config status update watch"
+_am_subcommands="create mkdir cp mv touch cd list health force-destroy rm config status update watch init"
 
 _am_global_opts="-h --help -v --verbose"
 
@@ -34,6 +34,7 @@ declare -A _am_cmd_opts=(
 	[status]="-h --help"
 	[update]="-h --help"
 	[watch]="-h --help"
+	[init]="-h --help"
 )
 
 # ===========================================================================
@@ -365,7 +366,7 @@ _am_completion() {
 		fi
 		;;
 
-	list | config | health | watch)
+	list | config | health | watch | init)
 		# No positional arguments
 		;;
 

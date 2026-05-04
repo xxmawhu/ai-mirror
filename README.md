@@ -485,8 +485,6 @@ PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE、NX
 
 测试通过率: 92/92 (100%)
 
-> 详细 API 返回值规范参见 [docs/api-return-values.md](docs/api-return-values.md)
-
 ## 适合谁？
 
 - **独立开发者**：同时让多个 AI Agent 在不同项目上工作，互不干扰

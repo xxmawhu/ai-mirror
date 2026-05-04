@@ -29,6 +29,10 @@ struct Config {
         fs::path ai_default_key;
     } ssh;
 
+    struct AiUserConfig {
+        std::vector<std::string> groups;  // supplementary groups for ai-user (e.g. "docker")
+    } ai_user;
+
     fs::path config_path;
     bool loaded = false;
     std::string load_error;

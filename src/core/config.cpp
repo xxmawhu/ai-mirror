@@ -198,6 +198,35 @@ Config ConfigParser::load(const fs::path& config_path) {
             }
         }
 
+        if (data.as_table().contains("ai-user")) {
+            try {
+                auto& ai_user = data["ai-user"];
+                if (ai_user.as_table().contains("groups")) {
+                    auto groups = toml::get<std::vector<std::string>>(ai_user["groups"]);
+                    for (const auto& g : groups) {
+                        // Security: filter out invalid group names
+                        if (g.empty() || g.find("ai-mirror") != std::string::npos) {
+                            utils::get_logger()->warn("Ignoring invalid/ai-mirror group in config: {}", g);
+                            continue;
+                        }
+                        config.ai_user.groups.push_back(g);
+                    }
+                    if (!config.ai_user.groups.empty()) {
+                        std::string group_list;
+                        for (size_t i = 0; i < config.ai_user.groups.size(); ++i) {
+                            if (i > 0) group_list += ", ";
+                            group_list += config.ai_user.groups[i];
+                        }
+                        utils::get_logger()->info("Loaded ai-user supplementary groups: {}", group_list);
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::string field_err = std::string("ai-user: ") + e.what();
+                config.load_error += (config.load_error.empty() ? "" : "; ") + field_err;
+                utils::get_logger()->warn("Config field error: {}", field_err);
+            }
+        }
+
         config.loaded = true;
     } catch (const std::exception& e) {
         config.load_error = std::string("TOML parse error: ") + e.what();
@@ -296,6 +325,10 @@ Config ConfigParser::create_default_config(const fs::path& config_path) {
     // ai_default_key: Public key path for authorizing additional key to ai user
     config.ssh.ai_default_key = fs::path("~/.ssh/id_ed25519.pub");
 
+    // Default supplementary groups for ai-user
+    // "docker" allows ai-user to use Docker without sudo
+    config.ai_user.groups = {"docker"};
+
     return config;
 }
 
@@ -357,6 +390,16 @@ bool ConfigParser::save(const Config& config, const fs::path& config_path) {
         oss << "key_path = \"" << toml_escape(config.ssh.key_path.string()) << "\"\n";
     }
     oss << "ai_default_key = \"" << toml_escape(config.ssh.ai_default_key.string()) << "\"\n";
+
+    // [ai-user] section
+    if (!config.ai_user.groups.empty()) {
+        oss << "\n[ai-user]\n"
+            << "groups = [\n";
+        for (const auto& g : config.ai_user.groups) {
+            oss << "    \"" << toml_escape(g) << "\",\n";
+        }
+        oss << "]\n";
+    }
 
     std::string content = oss.str();
     ssize_t written = ::write(ufd.get(), content.c_str(), content.size());

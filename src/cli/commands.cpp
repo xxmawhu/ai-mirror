@@ -170,6 +170,94 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         utils::get_logger()->warn("Failed to add {} to {} group: {}", main_user, username, grp_result2.stderr_output);
     }
 
+    // Supplementary groups from [ai-user] config
+    // Security rules:
+    //   1. ai-mirror group is ALWAYS rejected (ai-user must never be in ai-mirror)
+    //   2. If main_user is not a member of the requested group, reject (no privilege escalation)
+    //   3. If the group does not exist on the system, warn and skip
+    for (const auto& group_name : ctx.config.ai_user.groups) {
+        // Rule 1: Never allow ai-mirror group
+        if (group_name == "ai-mirror") {
+            std::cerr << "SECURITY: refusing to add ai-user to 'ai-mirror' group" << std::endl;
+            continue;
+        }
+
+        // Check group exists
+        struct group* grp = getgrnam(group_name.c_str());
+        if (!grp) {
+            std::cerr << "WARNING: group '" << group_name << "' does not exist, skipping" << std::endl;
+            continue;
+        }
+
+        // Rule 2: main_user must be a member of the group
+        struct passwd* main_pw = getpwnam(main_user.c_str());
+        if (!main_pw) {
+            std::cerr << "WARNING: cannot resolve main user '" << main_user << "' for group check" << std::endl;
+            continue;
+        }
+
+        bool main_in_group = false;
+        // Check primary group
+        if (main_pw->pw_gid == grp->gr_gid) {
+            main_in_group = true;
+        }
+        // Check supplementary groups
+        if (!main_in_group) {
+            int ngroups = 0;
+            getgrouplist(main_user.c_str(), main_pw->pw_gid, nullptr, &ngroups);
+            if (ngroups > 0) {
+                std::vector<gid_t> groups(ngroups);
+                if (getgrouplist(main_user.c_str(), main_pw->pw_gid, groups.data(), &ngroups) >= 0) {
+                    for (int i = 0; i < ngroups; ++i) {
+                        if (groups[i] == grp->gr_gid) {
+                            main_in_group = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!main_in_group) {
+            std::cerr << "SECURITY: refusing to add ai-user to '" << group_name
+                      << "' group (main user '" << main_user << "' is not a member)" << std::endl;
+            continue;
+        }
+
+        // Check if ai-user is already in the group
+        bool ai_in_group = false;
+        struct passwd* ai_pw = getpwnam(username.c_str());
+        if (ai_pw) {
+            int ai_ngroups = 0;
+            getgrouplist(username.c_str(), ai_pw->pw_gid, nullptr, &ai_ngroups);
+            if (ai_ngroups > 0) {
+                std::vector<gid_t> ai_groups(ai_ngroups);
+                if (getgrouplist(username.c_str(), ai_pw->pw_gid, ai_groups.data(), &ai_ngroups) >= 0) {
+                    for (int i = 0; i < ai_ngroups; ++i) {
+                        if (ai_groups[i] == grp->gr_gid) {
+                            ai_in_group = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (ai_in_group) {
+            utils::get_logger()->info("ai-user '{}' already in group '{}'", username, group_name);
+            continue;
+        }
+
+        auto supp_result = utils::exec_safe({"usermod", "-aG", group_name, username});
+        if (supp_result.exit_code == 0) {
+            fixes++;
+            utils::get_logger()->info("Added ai-user '{}' to supplementary group '{}'", username, group_name);
+        } else {
+            std::cerr << "WARNING: failed to add ai-user to '" << group_name << "' group: "
+                      << supp_result.stderr_output << std::endl;
+        }
+    }
+
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 

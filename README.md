@@ -377,6 +377,21 @@ paths = [
 key_type = "ed25519"
 # key_path = "~/.ssh/ai-mirror"  # 可选，不配置则自动检测现有 SSH key
 ai_default_key = "~/.ssh/id_ed25519.pub"
+
+# [ai-user] ai-user 补充组配置
+# groups: 将 ai-user 加入指定的系统补充组列表
+#   安全规则：
+#   1. "ai-mirror" 组始终被拒绝（ai-user 不能加入 ai-mirror 组）
+#   2. 主用户不在的组会被拒绝（防止权限提升）
+#   3. 系统中不存在的组会跳过并警告
+#   4. ai-user 已在的组不会重复添加
+#
+# 默认值: ["docker"] — 让 ai-user 可以使用 Docker
+# `am update` 会自动检查并补充缺失的组成员身份
+#
+# 示例：自定义组列表
+# [ai-user]
+# groups = ["docker", "render"]
 ```
 
 ## 架构

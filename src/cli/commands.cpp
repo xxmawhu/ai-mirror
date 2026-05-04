@@ -352,14 +352,14 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
     {
         fs::path am_status_path = fs::path(home_dir) / ".am_status";
 
-        // Collect all bind mount target paths to skip during recursion
-        std::set<std::string> mount_targets;
-        auto all_mounts = ctx.graft->list_mounts(username);
-        for (const auto& m : all_mounts) {
-            mount_targets.insert(m.target.string());
+        // Get device number of home_dir for mount boundary detection
+        struct stat home_st;
+        dev_t home_dev = 0;
+        if (stat(home_dir.c_str(), &home_st) == 0) {
+            home_dev = home_st.st_dev;
         }
 
-        // Recursive helper: chown all entries under a directory, skipping mount targets
+        // Recursive helper: chown all entries under a directory, skipping mount points
         // Returns number of fixes applied
         std::function<int(const fs::path&, int)> recursive_chown = [&](const fs::path& dir_path, int depth) -> int {
             constexpr int max_depth = 256;
@@ -379,9 +379,7 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
                 struct stat st;
                 if (lstat(ep.c_str(), &st) != 0) continue;
 
-                // Skip bind mount targets — don't chown or recurse into them
-                if (mount_targets.count(ep.string())) continue;
-
+                // Skip symlinks — only fix symlink ownership, don't recurse
                 if (S_ISLNK(st.st_mode)) {
                     if ((st.st_uid != state.uid || st.st_gid != state.gid)) {
                         if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
@@ -391,7 +389,25 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
                             utils::get_logger()->warn("Third pass: failed to fix symlink {}", ep.string());
                         }
                     }
-                    // Don't recurse into symlinks
+                    continue;
+                }
+
+                // Check if this is a mount point by comparing device numbers
+                // Bind mounts on same filesystem have same dev, so also check is_mounted()
+                bool is_mount_point = false;
+                if (S_ISDIR(st.st_mode)) {
+                    // Device number changed = crossed a mount boundary
+                    if (home_dev != 0 && st.st_dev != home_dev) {
+                        is_mount_point = true;
+                    }
+                    // Also check via mount table (catches same-filesystem bind mounts)
+                    if (!is_mount_point && ctx.graft->is_mounted_live(ep)) {
+                        is_mount_point = true;
+                    }
+                }
+
+                if (is_mount_point) {
+                    // Don't chown or recurse into mount points (read-only bind mounts)
                     continue;
                 }
 
@@ -414,7 +430,7 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
                     }
                 }
 
-                // Recurse into sub-directories
+                // Recurse into sub-directories (non-mount, non-symlink)
                 if (S_ISDIR(st.st_mode)) {
                     local_fixes += recursive_chown(ep, depth + 1);
                 }

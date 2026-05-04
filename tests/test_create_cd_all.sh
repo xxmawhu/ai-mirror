@@ -2243,6 +2243,72 @@ fi
 full_cleanup || true
 
 # ============================================================
+# BM1: Third pass skips bind mount subtree
+# ============================================================
+# Issue: Third pass tried to chown files inside bind mount target,
+#        which failed because bind mounts are read-only.
+# Fix: Check both exact mount target match AND prefix match to skip
+#      entire subtree under mount target.
+# ============================================================
+begin_test "BM1: Third pass skips bind mount subtree"
+setup_test_user standard
+
+# Create project directory
+mkdir -p /data/bm1_test
+chown $TEST_USER:$TEST_GID /data/bm1_test
+chmod 755 /data/bm1_test
+
+# Create mount source in main user's home
+mkdir -p /home/$TEST_USER/quant/crypto_module/model_tool
+touch /home/$TEST_USER/quant/crypto_module/model_tool/am_pi_col.py
+chown -R $TEST_USER:$TEST_GID /home/$TEST_USER/quant/crypto_module
+
+# Create custom config that mounts the problematic path
+mkdir -p /home/$TEST_USER/.config
+cat >/home/$TEST_USER/.ai-mirror.toml <<'TOML'
+[mount]
+paths = [
+    "~/.bashrc",
+    "~/.config",
+    "~/quant/crypto_module"
+]
+
+[ssh]
+key_type = "ed25519"
+TOML
+chown $TEST_USER:$TEST_GID /home/$TEST_USER/.ai-mirror.toml
+
+# Run am create - capture logs
+OUT=$(run_am create /data/bm1_test 2>&1)
+AI_USER=$(echo "$OUT" | tail -1 | tr -d '[:space:]')
+
+if [[ -n "$AI_USER" ]]; then
+	# Check for Third pass warning about files inside bind mount
+	if echo "$OUT" | grep -q "Third pass: failed to fix.*am_pi_col.py"; then
+		log_fail "BM1: Third pass tried to chown bind mount content (bug not fixed)"
+		log_info "Output: $OUT"
+	elif echo "$OUT" | grep -q "Third pass: failed to fix"; then
+		log_warn "BM1: Third pass warning for other files (may be expected)"
+		log_info "Output: $OUT"
+	else
+		log_pass "BM1: Third pass correctly skipped bind mount subtree"
+	fi
+
+	# Verify mount exists
+	if mountpoint -q /data/bm1_test/quant/crypto_module 2>/dev/null; then
+		log_pass "BM1: bind mount exists"
+	else
+		log_warn "BM1: bind mount not found (may need mount check)"
+	fi
+else
+	log_fail "BM1: failed to create ai-user"
+	log_info "Create output: $OUT"
+fi
+
+full_cleanup || true
+rm -rf /data/bm1_test /home/$TEST_USER/quant
+
+# ============================================================
 # BUG-19: Legacy .am_status format compatibility
 # ============================================================
 setup_test_user standard

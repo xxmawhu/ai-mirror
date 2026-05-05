@@ -124,6 +124,9 @@ phase_build() {
 	if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
 		log "  No CMake cache found, running full configure..."
+	elif [[ ! -f "${BUILD_DIR}/Makefile" ]]; then
+		need_configure=true
+		log "  CMake cache exists but Makefile missing, reconfiguring..."
 	elif [[ "${SCRIPT_DIR}/CMakeLists.txt" -nt "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
 		log "  CMakeLists.txt changed, reconfiguring..."
@@ -193,6 +196,7 @@ phase_install() {
 		sudo install -d /etc/profile.d
 
 		# Build expected content with search paths updated
+		# The profile now searches multiple paths, ensure PREFIX/bin is first non-empty entry
 		local expected_content
 		expected_content=$(sed -E '/^_AM_SEARCH_PATHS=\(/,/\)/c\_AM_SEARCH_PATHS=("'"${PREFIX}/bin/${REAL_BIN_NAME}"'" "${AI_MIRROR_BIN:-}" "${HOME:-}/.local/bin/ai-mirror-bin")' "$profile_src")
 

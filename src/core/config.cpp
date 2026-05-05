@@ -182,7 +182,7 @@ Config ConfigParser::load(const fs::path& config_path) {
                     fs::path detected = detect_existing_ssh_key(ssh_dir);
                     if (!detected.empty()) {
                         config.ssh.key_path = detected;
-                        utils::get_logger()->info("Auto-detected SSH key: {}", detected.string());
+                        utils::get_logger()->debug("Auto-detected SSH key: {}", detected.string());
                     } else {
                         config.ssh.key_path = ssh_dir / "ai-mirror";
                         utils::get_logger()->info("No standard SSH key found, will use: {}", config.ssh.key_path.string());

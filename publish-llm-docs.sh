@@ -41,10 +41,15 @@ done
 # 检查隐私信息
 info "检查隐私信息..."
 for f in "$LLM_DOCS_SRC"/*.md; do
-	# 检查邮箱
+	# 检查邮箱（排除 SSH 密钥类型 xxx@openssh.com 等）
 	if grep -qE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' "$f" 2>/dev/null; then
-		error "发现邮箱地址: $f"
-		exit 1
+		# 排除已知的安全 @ 模式
+		false_positives=$(grep -oE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' "$f" | grep -cE '@openssh\.com$' || true)
+		all_matches=$(grep -oE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' "$f" | wc -l || true)
+		if [[ "$all_matches" -gt "$false_positives" ]]; then
+			error "发现邮箱地址: $f"
+			exit 1
+		fi
 	fi
 	# 检查 git 仓库地址
 	if grep -qE 'git@[a-zA-Z0-9.-]+:[a-zA-Z0-9._/-]+' "$f" 2>/dev/null; then

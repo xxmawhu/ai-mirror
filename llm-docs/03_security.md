@@ -238,3 +238,54 @@ validate_config_file_security();
 2. **AI 用户验证**：`_am_validate_ai_user()` 检查用户名格式 `i{main_user}_*`
 3. **输出解析**：验证 action、user、path 非空
 4. **SSH 密钥**：检查密钥文件存在
+
+## mv/cp 所有权模型
+
+### 双向 ai-user 检测
+
+`cmd_mv` 和 `cmd_cp` 使用双向检测策略确定文件归属：
+
+```
+源路径检测:
+  1. detect_ai_user_from_path(src_path)   # 路径组件检测
+  2. detect_ai_user_from_path(parent)     # 父目录路径检测
+  3. detect_owner_user(src_path)          # stat uid → username
+
+目标路径检测:
+  1. detect_ai_user_from_path(dst_path)   # 路径组件检测
+  2. detect_owner_user(dst_path)          # stat 目录 owner（dst 为目录时）
+```
+
+### 5 种场景矩阵
+
+| 场景 | src 归属 | dst 归属 | 行为 |
+|------|----------|----------|------|
+| A. main→ai | main-user | ai-user-A | chown 到 ai-user-A |
+| B. ai→ai(同main) | ai-user-A | ai-user-B | chown 到 ai-user-B |
+| C. ai→main | ai-user-A | main-user | chown 回 main-user |
+| D. 跨 main-user | ai-user-A(main1) | ai-user-B(main2) | **拒绝** |
+| E. main→main | main-user | main-user | 普通 mv，无 chown |
+
+### 安全校验流程
+
+```
+1. src ai-user 安全检查:
+   validate_ai_user_ownership(src_ai_user, main_user, prefix)
+   → 失败: "Source belongs to ai-user 'xxx' which does not belong to you"
+
+2. dst ai-user 安全检查:
+   validate_ai_user_ownership(dst_ai_user, main_user, prefix)
+   → 失败: "Destination ai-user 'xxx' does not belong to user 'yyy'"
+
+3. 确定目标 owner:
+   dst 有 ai-user → chown_user = dst_ai_user
+   src 有 ai-user 且 dst 无 → chown_user = main_user (回收到主用户)
+   两边都无 → 不 chown
+```
+
+### stat fallback 机制
+
+当路径组件中无法检测到 ai-user（如 `~/sim_match/` 不包含 ai-user 名），使用 `detect_owner_user()` 通过 `stat()` 获取目录的 uid，再通过 `getpwuid()` 解析为用户名。此方法适用于：
+
+- 目标目录由 `am mkdir` 创建（owner 为 ai-user）
+- 目标目录在 ai-user home 下但路径不含 ai-user 名组件

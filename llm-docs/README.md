@@ -5,7 +5,7 @@
 ai-mirror 是 C++20 Linux 用户隔离工具，为每个 AI 项目创建独立的 Linux 用户，使用原生 OS 权限模型（bind mount、SSH 密钥、组访问控制）实现沙箱隔离。
 
 **版本**：0.1.0  
-**项目路径**：`/mnt/beegfs_data/usr/maxx/ai/ai-mirror/`  
+**项目路径**：`~/ai/ai-mirror/`  
 **维护者**：maxx  
 **更新日期**：2026-05-03
 
@@ -96,5 +96,5 @@ am list
 
 ## 相关链接
 
-- 项目 README：`/mnt/beegfs_data/usr/maxx/ai/ai-mirror/README.md`
-- API 返回值：`/mnt/beegfs_data/usr/maxx/ai/ai-mirror/docs/api-return-values.md`
+- 项目 README：`~/ai/ai-mirror/README.md`
+- API 返回值：`~/ai/ai-mirror/docs/api-return-values.md`

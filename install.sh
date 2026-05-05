@@ -124,6 +124,9 @@ phase_build() {
 	if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
 		log "  No CMake cache found, running full configure..."
+	elif [[ ! -f "${BUILD_DIR}/Makefile" ]]; then
+		need_configure=true
+		log "  CMake cache exists but Makefile missing, reconfiguring..."
 	elif [[ "${SCRIPT_DIR}/CMakeLists.txt" -nt "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
 		log "  CMakeLists.txt changed, reconfiguring..."

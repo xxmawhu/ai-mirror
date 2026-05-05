@@ -90,7 +90,7 @@ bool Graft::execute_mount(const fs::path& source, const fs::path& target, bool r
                     chown_path_chain(parent, boundary, owner_uid, owner_gid);
                 }
             }
-            utils::unique_fd ufd(open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600));
+            utils::unique_fd ufd(open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644));
             if (!ufd) {
                 utils::get_logger()->error("execute_mount: create target file failed: {} ({})", target.string(), strerror(errno));
                 return false;

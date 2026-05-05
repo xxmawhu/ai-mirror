@@ -4,3 +4,6 @@
 [submodule "github-ai-mirror"]
 	path = github-ai-mirror
 	url = git@github.com:xxmawhu/ai-mirror.git
+[submodule "gitee-ai-mirror"]
+	path = gitee-ai-mirror
+	url = git@gitee.com:neotrino/ai-mirror.git

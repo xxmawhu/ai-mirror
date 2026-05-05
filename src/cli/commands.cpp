@@ -1059,26 +1059,57 @@ int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
         return 1;
     }
 
-    std::string ai_user = core::PathResolver::detect_ai_user_from_path(dst_path, main_user, ctx.config.user.prefix);
-    if (ai_user.empty()) {
-        std::cerr << "Warning: destination '" << dst_path.string()
-                  << "' is not under any ai-user directory. Ownership will not be set."
-                  << std::endl;
-        std::cerr << "Consider using the regular 'cp' command for non-ai-user destinations." << std::endl;
-        auto cp_result = utils::exec_safe({"cp", "-rP", "--no-preserve=mode", src_path.string(), dst_path.string()});
-        if (cp_result.exit_code != 0) {
-            std::cerr << "Copy failed: " << cp_result.stderr_output << std::endl;
-            return 1;
+    // --- Dual ai-user detection ---
+    // Detect ai-user from source path (file itself and its parent directory)
+    std::string src_ai_user = core::PathResolver::detect_ai_user_from_path(src_path, main_user, ctx.config.user.prefix);
+    if (src_ai_user.empty()) {
+        src_ai_user = core::PathResolver::detect_ai_user_from_path(src_path.parent_path(), main_user, ctx.config.user.prefix);
+    }
+    if (src_ai_user.empty()) {
+        std::string src_owner = core::PathResolver::detect_owner_user(src_path);
+        if (!src_owner.empty() && validate_ai_user_ownership(src_owner, main_user, ctx.config.user.prefix)) {
+            src_ai_user = src_owner;
         }
-        if (verbose) {
-            std::cout << "Copied: " << src_path.string() << " -> " << dst_path.string() << std::endl;
-        }
-        return 0;
     }
 
-    if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
-        std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
-        return 1;
+    // Detect ai-user from destination path (path components first, then stat-based)
+    std::string dst_ai_user = core::PathResolver::detect_ai_user_from_path(dst_path, main_user, ctx.config.user.prefix);
+    if (dst_ai_user.empty() && fs::is_directory(dst_path)) {
+        std::string dir_owner = core::PathResolver::detect_owner_user(dst_path);
+        if (!dir_owner.empty() && validate_ai_user_ownership(dir_owner, main_user, ctx.config.user.prefix)) {
+            dst_ai_user = dir_owner;
+        }
+    }
+
+    // --- Source ai-user security check ---
+    if (!src_ai_user.empty()) {
+        if (!validate_ai_user_ownership(src_ai_user, main_user, ctx.config.user.prefix)) {
+            std::cerr << "Source belongs to ai-user '" << src_ai_user
+                      << "' which does not belong to user '" << main_user << "'" << std::endl;
+            return 1;
+        }
+    }
+
+    // --- Destination ai-user security check ---
+    if (!dst_ai_user.empty()) {
+        if (!validate_ai_user_ownership(dst_ai_user, main_user, ctx.config.user.prefix)) {
+            std::cerr << "Destination ai-user '" << dst_ai_user
+                      << "' does not belong to user '" << main_user << "'" << std::endl;
+            return 1;
+        }
+    }
+
+    // --- Determine chown target ---
+    // Same logic as cmd_mv: A=dst_ai, B=dst_ai, C=main_user, D=rejected, E=none
+    bool need_chown = false;
+    std::string chown_user;
+
+    if (!dst_ai_user.empty()) {
+        need_chown = true;
+        chown_user = dst_ai_user;
+    } else if (!src_ai_user.empty()) {
+        need_chown = true;
+        chown_user = main_user;
     }
 
     mode_t old_umask = umask(0077);
@@ -1089,16 +1120,22 @@ int cmd_cp(const std::string& src, const std::string& dst, bool verbose) {
         return 1;
     }
 
-    fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-    if (!safe_chown_path(chown_target, ai_user)) {
-        umask(old_umask);
-        std::cerr << "Failed to set ownership for " << ai_user << std::endl;
-        return 1;
+    if (need_chown) {
+        fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
+        if (!safe_chown_path(chown_target, chown_user)) {
+            umask(old_umask);
+            std::cerr << "Failed to set ownership for " << chown_user << std::endl;
+            return 1;
+        }
     }
     umask(old_umask);
 
     if (verbose) {
-        std::cout << "Copied: " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+        if (need_chown) {
+            std::cout << "Copied: " << src_path.string() << " -> " << dst_path.string() << " (owner: " << chown_user << ")" << std::endl;
+        } else {
+            std::cout << "Copied: " << src_path.string() << " -> " << dst_path.string() << std::endl;
+        }
     }
     return 0;
 }
@@ -1137,15 +1174,75 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
         return 1;
     }
 
-    std::string ai_user = core::PathResolver::detect_ai_user_from_path(dst_path, main_user, ctx.config.user.prefix);
-    bool need_chown = !ai_user.empty();
+    // --- Dual ai-user detection ---
+    // Detect ai-user from source path (file itself and its parent directory)
+    std::string src_ai_user = core::PathResolver::detect_ai_user_from_path(src_path, main_user, ctx.config.user.prefix);
+    if (src_ai_user.empty()) {
+        src_ai_user = core::PathResolver::detect_ai_user_from_path(src_path.parent_path(), main_user, ctx.config.user.prefix);
+    }
+    // If still empty, try stat-based owner detection
+    if (src_ai_user.empty()) {
+        std::string src_owner = core::PathResolver::detect_owner_user(src_path);
+        if (!src_owner.empty() && validate_ai_user_ownership(src_owner, main_user, ctx.config.user.prefix)) {
+            src_ai_user = src_owner;
+        }
+    }
 
-    if (need_chown) {
-        if (!validate_ai_user_ownership(ai_user, main_user, ctx.config.user.prefix)) {
-            std::cerr << "ai_user '" << ai_user << "' does not belong to user '" << main_user << "'" << std::endl;
+    // Detect ai-user from destination path (path components first)
+    std::string dst_ai_user = core::PathResolver::detect_ai_user_from_path(dst_path, main_user, ctx.config.user.prefix);
+    // If dst is a directory, the file will be placed inside it — check directory owner via stat
+    if (dst_ai_user.empty() && fs::is_directory(dst_path)) {
+        std::string dir_owner = core::PathResolver::detect_owner_user(dst_path);
+        if (!dir_owner.empty() && validate_ai_user_ownership(dir_owner, main_user, ctx.config.user.prefix)) {
+            dst_ai_user = dir_owner;
+        }
+    }
+
+    // --- Source ai-user security check ---
+    // If src belongs to an ai-user, verify it belongs to the current main-user
+    if (!src_ai_user.empty()) {
+        if (!validate_ai_user_ownership(src_ai_user, main_user, ctx.config.user.prefix)) {
+            std::cerr << "Source belongs to ai-user '" << src_ai_user
+                      << "' which does not belong to user '" << main_user << "'" << std::endl;
             return 1;
         }
     }
+
+    // --- Destination ai-user security check ---
+    if (!dst_ai_user.empty()) {
+        if (!validate_ai_user_ownership(dst_ai_user, main_user, ctx.config.user.prefix)) {
+            std::cerr << "Destination ai-user '" << dst_ai_user
+                      << "' does not belong to user '" << main_user << "'" << std::endl;
+            return 1;
+        }
+    }
+
+    // --- Cross main-user leak prevention (Scenario D) ---
+    // If src is ai-user and dst is a different ai-user, ensure both belong to same main-user
+    if (!src_ai_user.empty() && !dst_ai_user.empty() && src_ai_user != dst_ai_user) {
+        // Both have already passed validate_ai_user_ownership against main_user,
+        // so they belong to the same main-user. This is safe (Scenario B).
+    }
+
+    // --- Determine chown target ---
+    // Scenario A: main→ai → chown to dst_ai_user
+    // Scenario B: ai→ai (same main) → chown to dst_ai_user
+    // Scenario C: ai→main → chown back to main_user
+    // Scenario D: cross-main → already rejected above
+    // Scenario E: main→main → no chown needed
+    bool need_chown = false;
+    std::string chown_user;
+
+    if (!dst_ai_user.empty()) {
+        // Scenarios A/B: destination is ai-user territory
+        need_chown = true;
+        chown_user = dst_ai_user;
+    } else if (!src_ai_user.empty()) {
+        // Scenario C: moving from ai-user to main-user territory
+        need_chown = true;
+        chown_user = main_user;
+    }
+    // else: Scenario E, no chown needed
 
     std::error_code ec;
     fs::rename(src_path, dst_path, ec);
@@ -1158,7 +1255,7 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
 
         if (need_chown) {
             fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-            if (!safe_chown_path(chown_target, ai_user)) {
+            if (!safe_chown_path(chown_target, chown_user)) {
                 std::cerr << "Failed to set ownership after copy" << std::endl;
                 return 1;
             }
@@ -1197,7 +1294,7 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
 
         if (verbose) {
             if (need_chown) {
-                std::cout << "Moved (copy+delete): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+                std::cout << "Moved (copy+delete): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << chown_user << ")" << std::endl;
             } else {
                 std::cout << "Moved (copy+delete): " << src_path.string() << " -> " << dst_path.string() << std::endl;
             }
@@ -1207,7 +1304,7 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
 
     if (need_chown) {
         fs::path chown_target = fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-        if (!safe_chown_path(chown_target, ai_user)) {
+        if (!safe_chown_path(chown_target, chown_user)) {
             utils::get_logger()->error("Rename succeeded but chown failed for {}, attempting rollback", chown_target.string());
             std::error_code rollback_ec;
             for (int retry = 0; retry < 3; ++retry) {
@@ -1224,7 +1321,7 @@ int cmd_mv(const std::string& src, const std::string& dst, bool verbose) {
 
     if (verbose) {
         if (need_chown) {
-            std::cout << "Moved (atomic): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << ai_user << ")" << std::endl;
+            std::cout << "Moved (atomic): " << src_path.string() << " -> " << dst_path.string() << " (owner: " << chown_user << ")" << std::endl;
         } else {
             std::cout << "Moved (atomic): " << src_path.string() << " -> " << dst_path.string() << std::endl;
         }

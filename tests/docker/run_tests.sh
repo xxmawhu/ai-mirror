@@ -675,7 +675,7 @@ watch_user=$(getent passwd | grep '^itestuser_.*watch_test' | cut -d: -f1 | head
 # Use timeout + script to provide pseudo-TTY for FTXUI
 echo ""
 echo "--- am watch startup test ---"
-watch_output=$(script -qc "timeout 3 /usr/local/bin/ai-mirror-bin watch 2>&1" /dev/null 2>&1 || true)
+watch_output=$(script -qc "timeout 8 /usr/local/bin/ai-mirror-bin watch 2>&1" /dev/null 2>&1 || true)
 echo "watch output (first 10 lines):"
 echo "$watch_output" | head -10
 

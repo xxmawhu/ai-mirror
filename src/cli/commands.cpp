@@ -1843,37 +1843,56 @@ int cmd_watch([[maybe_unused]] bool verbose) {
     // Shared state for periodic data refresh
     auto stats = std::make_shared<std::vector<daemon::UserStats>>();
     auto empty_msg = std::make_shared<bool>(true);
-    auto refresh_interval = std::make_shared<int>(2);
+    auto refresh_interval = std::make_shared<int>(5);  // Default 5 seconds
+
+    // Cached user list — only refresh every 30s to avoid re-reading /etc/passwd
+    constexpr auto user_list_ttl = std::chrono::seconds(30);
+    auto cached_usernames = std::make_shared<std::vector<std::string>>();
+    auto cached_uids = std::make_shared<std::vector<uid_t>>();
+    auto last_user_refresh = std::make_shared<std::chrono::steady_clock::time_point>();
 
     // Periodic data refresh via a separate thread
     std::atomic<bool> running{true};
     std::thread refresh_thread([&]() {
         while (running) {
-            // Gather data
-            auto users = ctx.user_mgr->list_ai_users();
-            std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
-            std::vector<std::string> usernames;
-            std::vector<uid_t> uids;
+            auto now = std::chrono::steady_clock::now();
 
-            for (const auto& u : users) {
-                if (u.username.size() > expected_prefix.size()
-                    && u.username.substr(0, expected_prefix.size()) == expected_prefix) {
-                    usernames.push_back(u.username);
-                    uids.push_back(u.uid);
+            // Refresh user list only every 30 seconds
+            bool need_user_refresh = !last_user_refresh
+                || (now - *last_user_refresh) >= user_list_ttl;
+
+            if (need_user_refresh) {
+                auto users = ctx.user_mgr->list_ai_users();
+                std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+                std::vector<std::string> usernames;
+                std::vector<uid_t> uids;
+
+                for (const auto& u : users) {
+                    if (u.username.size() > expected_prefix.size()
+                        && u.username.substr(0, expected_prefix.size()) == expected_prefix) {
+                        usernames.push_back(u.username);
+                        uids.push_back(u.uid);
+                    }
                 }
+
+                *cached_usernames = std::move(usernames);
+                *cached_uids = std::move(uids);
+                *last_user_refresh = now;
             }
 
-            if (usernames.empty()) {
+            if (cached_usernames->empty()) {
                 *empty_msg = true;
                 stats->clear();
             } else {
                 *empty_msg = false;
-                *stats = daemon::gather_user_stats(usernames, uids);
+                // Single /proc scan + single ps call for all users
+                auto uid_stats = daemon::gather_all_uid_stats();
+                *stats = daemon::build_user_stats(*cached_usernames, *cached_uids, uid_stats);
             }
 
             screen.PostEvent(Event::Custom);
 
-            // Sleep with interrupt check
+            // Sleep with interrupt check (100ms granularity)
             for (int i = 0; i < *refresh_interval * 10 && running; ++i) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }

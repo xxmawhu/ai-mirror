@@ -474,7 +474,8 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
                             utils::get_logger()->info("Third pass: fixed symlink {} -> {}:{}", ep.string(), state.uid, state.gid);
                             local_fixes++;
                         } else {
-                            utils::get_logger()->warn("Third pass: failed to fix symlink {}", ep.string());
+                            // Expected for read-only bind mounts or permission issues
+                            utils::get_logger()->debug("Third pass: failed to fix symlink {}", ep.string());
                         }
                     }
                     continue;
@@ -492,6 +493,11 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
                     if (!is_mount_point && ctx.graft->is_mounted_live(ep)) {
                         is_mount_point = true;
                     }
+                } else if (S_ISREG(st.st_mode)) {
+                    // Regular files can also be bind-mounted (e.g. dotfile mounts on beegfs)
+                    if (ctx.graft->is_mounted_live(ep)) {
+                        is_mount_point = true;
+                    }
                 }
 
                 if (is_mount_point) {
@@ -507,7 +513,8 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
                             utils::get_logger()->info("Third pass: fixed {} -> {}:{}", ep.string(), state.uid, state.gid);
                             local_fixes++;
                         } else {
-                            utils::get_logger()->warn("Third pass: failed to fix {}", ep.string());
+                            // Expected for read-only bind mounts; these are caught by mount detection above
+                            utils::get_logger()->debug("Third pass: failed to fix {}", ep.string());
                         }
                         close(fd);
                     } else if (errno == ELOOP) {

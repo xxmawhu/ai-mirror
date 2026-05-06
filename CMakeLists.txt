@@ -27,6 +27,7 @@ set(AI_MIRROR_SOURCES
     src/daemon/health_check.cpp
     src/daemon/auth_monitor.cpp
     src/daemon/mount_cleaner.cpp
+    src/daemon/watch_stats.cpp
     src/utils/shell.cpp
     src/utils/logger.cpp
 )
@@ -94,17 +95,32 @@ target_link_libraries(ai-mirror PRIVATE OpenSSL::Crypto)
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     enable_testing()
-    set(TEST_SOURCES "")
     set(COMMON_SOURCES ${AI_MIRROR_SOURCES})
     list(FILTER COMMON_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
 
-    foreach(test_file ${TEST_SOURCES})
-        get_filename_component(test_name ${test_file} NAME_WE)
-        add_executable(${test_name} ${test_file} ${COMMON_SOURCES})
-        target_include_directories(${test_name} PRIVATE ${CMAKE_SOURCE_DIR}/include)
-        target_link_libraries(${test_name} PRIVATE CLI11::CLI11 toml11::toml11 spdlog::spdlog nlohmann_json::nlohmann_json pthread)
-        target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic -Werror -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2)
-        target_link_options(${test_name} PRIVATE -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
-        add_test(NAME ${test_name} COMMAND ${test_name})
-    endforeach()
+    # Unit tests for watch_stats (standalone binary, no main.cpp)
+    add_executable(test_watch_stats tests/unit/test_watch_stats.cpp
+        src/daemon/watch_stats.cpp
+        src/utils/shell.cpp
+        src/utils/logger.cpp
+        src/security/path_validator.cpp
+    )
+    target_include_directories(test_watch_stats PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(test_watch_stats PRIVATE
+        CLI11::CLI11
+        toml11::toml11
+        spdlog::spdlog
+        nlohmann_json::nlohmann_json
+        pthread
+    )
+    target_compile_options(test_watch_stats PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+        -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+    )
+    target_link_options(test_watch_stats PRIVATE
+        -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+    )
+    add_test(NAME test_watch_stats COMMAND test_watch_stats)
+
+    # Additional tests can be added here following the same pattern
 endif()

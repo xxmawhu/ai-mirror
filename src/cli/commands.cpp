@@ -1659,19 +1659,37 @@ int cmd_rm(const std::string& project_path, bool verbose) {
 
 int cmd_config([[maybe_unused]] bool verbose) {
     auto config = core::ConfigParser::load_default();
+
     std::cout << "Config file: " << config.config_path.string() << std::endl;
-    std::cout << "User prefix: " << config.user.prefix << " (system-level)" << std::endl;
+    std::cout << "User prefix: " << config.user.prefix << " (default)" << std::endl;
+
+    if (!config.user.allowed_bases.empty()) {
+        std::cout << "Allowed bases:" << std::endl;
+        for (const auto& b : config.user.allowed_bases) {
+            std::cout << "  - " << b.string() << std::endl;
+        }
+    }
+
     std::cout << "SSH key type: " << config.ssh.key_type << std::endl;
     std::cout << "SSH key path: " << config.ssh.key_path.string() << std::endl;
-    std::cout << "AI default key: " << config.ssh.ai_default_key.string() << std::endl;
+    std::cout << "SSH default key: " << config.ssh.ai_default_key.string() << std::endl;
+
     std::cout << "Mount paths:" << std::endl;
     for (const auto& p : config.mount.paths) {
         std::cout << "  - " << p.string() << std::endl;
     }
+
+    if (!config.ai_user.groups.empty()) {
+        std::cout << "AI-user groups:" << std::endl;
+        for (const auto& g : config.ai_user.groups) {
+            std::cout << "  - " << g << std::endl;
+        }
+    }
+
     std::cout << "Loaded: " << (config.loaded ? "yes" : "no (using defaults)") << std::endl;
+
     return 0;
 }
-
 int cmd_status([[maybe_unused]] bool verbose) {
     auto ctx = make_context(verbose);
     auto users = ctx.user_mgr->list_ai_users();

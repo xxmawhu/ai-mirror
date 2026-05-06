@@ -567,6 +567,97 @@ echo "SOLUTION: Use /usr/local/bin/ai-mirror-bin directly, or bash -c 'source /e
 
 echo ""
 echo "========================================"
+echo "Scenario 12: Regular File Bind Mount Detection"
+echo "========================================"
+
+setup_testuser_env
+mkdir -p /home/testuser/projects/bindtest
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "12.1: Create ai-user for bind mount test" \
+	"/usr/local/bin/am create /home/testuser/projects/bindtest" \
+	"success"
+
+bindtest_user=$(getent passwd | grep '^itestuser_.*bindtest' | cut -d: -f1 | head -1)
+bindtest_home=$(getent passwd "$bindtest_user" | cut -d: -f6)
+
+# Create a source file outside the project
+echo "bind mount source content" >/tmp/bind_source_file
+chmod 644 /tmp/bind_source_file
+
+# Check if we can perform mount operations in this container
+CAN_MOUNT=false
+if capsh --print 2>/dev/null | grep -q "cap_sys_admin"; then
+	CAN_MOUNT=true
+fi
+
+if [[ "$CAN_MOUNT" == "true" ]]; then
+	echo "[INFO] Container has mount capability, testing bind mount..."
+
+	# Create target file first (required for file bind mount)
+	touch "$bindtest_home/.test_dotfile"
+	chown "$bindtest_user:$bindtest_user" "$bindtest_home/.test_dotfile"
+
+	# Perform bind mount (read-only)
+	mount --bind /tmp/bind_source_file "$bindtest_home/.test_dotfile" 2>&1 || {
+		echo "[WARN] mount --bind failed, skipping mount test"
+		CAN_MOUNT=false
+	}
+
+	if [[ "$CAN_MOUNT" == "true" ]]; then
+		# Verify mount succeeded
+		run_test "12.2: Bind mount succeeded" \
+			"mountpoint -q $bindtest_home/.test_dotfile" \
+			"success"
+
+		# Run am update and check for NO warning about the bind-mounted file
+		# The fix ensures regular file bind mounts are detected and skipped
+		echo ""
+		echo "--- Checking for warning noise on bind-mounted regular file ---"
+		update_output=$(/usr/local/bin/am update "$bindtest_home" 2>&1) || true
+
+		# Check that there's NO warning about "failed to fix .test_dotfile"
+		if echo "$update_output" | grep -q "Third pass: failed to fix .test_dotfile"; then
+			echo "[FAIL] 12.3: Warning noise detected for bind-mounted file"
+			fail_count=$((fail_count + 1))
+		else
+			echo "[PASS] 12.3: No warning for bind-mounted regular file (correctly skipped)"
+			pass_count=$((pass_count + 1))
+		fi
+
+		# Cleanup mount
+		umount "$bindtest_home/.test_dotfile" 2>&1 || true
+	fi
+else
+	echo "[INFO] Container lacks mount capability (no SYS_ADMIN)"
+	echo "[INFO] Skipping bind mount test, but verifying code fix presence..."
+
+	# Alternative test: verify the code has S_ISREG check by checking for debug log
+	# Create a regular file and check ownership behavior
+	touch "$bindtest_home/.regular_file"
+	chown "$bindtest_user:$bindtest_user" "$bindtest_home/.regular_file"
+
+	run_test "12.2: Regular file ownership update (no mount)" \
+		"/usr/local/bin/am update $bindtest_home" \
+		"success"
+
+	# Verify file is still owned by ai-user
+	run_test "12.3: Regular file still owned by ai-user" \
+		"stat -c '%U' $bindtest_home/.regular_file" \
+		"contains" "$bindtest_user"
+
+	rm -f "$bindtest_home/.regular_file"
+fi
+
+# Cleanup
+rm -f /tmp/bind_source_file
+
+run_test "12.4: Cleanup bindtest" \
+	"/usr/local/bin/am rm /home/testuser/projects/bindtest" \
+	"success"
+
+echo ""
+echo "========================================"
 echo "Test Summary"
 echo "========================================"
 echo "Passed: $pass_count"

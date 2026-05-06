@@ -6,6 +6,7 @@
 #include "ai_mirror/core/path_resolver.hpp"
 #include "ai_mirror/daemon/health_check.hpp"
 #include "ai_mirror/daemon/mount_cleaner.hpp"
+#include "ai_mirror/daemon/watch_stats.hpp"
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/logger.hpp"
@@ -1777,140 +1778,40 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
 // ============================================================================
 
 namespace {
-    // Parse /proc/[pid]/status to get UID and memory
-    struct ProcInfo {
-        uid_t uid;
-        unsigned long vm_rss_kb;  // Resident Set Size in KB
-    };
-    std::optional<ProcInfo> read_proc_status(const fs::path& status_path) {
-        std::ifstream f(status_path);
-        if (!f.is_open()) return std::nullopt;
-        ProcInfo info{};
-        std::string line;
-        while (std::getline(f, line)) {
-            if (line.find("Uid:") == 0) {
-                std::istringstream iss(line.substr(5));
-                iss >> info.uid;
-            } else if (line.find("VmRSS:") == 0) {
-                std::istringstream iss(line.substr(7));
-                iss >> info.vm_rss_kb;
-            }
-        }
-        return info;
-    }
-
-    struct UserStats {
-        uid_t uid;
-        std::string username;
-        int process_count = 0;
-        unsigned long memory_mb = 0;
-        double cpu_percent = 0.0;
-        bool logged_in = false;
-    };
-
-    bool check_ssh_session(const std::string& username) {
-        auto result = utils::exec_safe({"ps", "-u", username, "-o", "comm="});
-        if (result.exit_code != 0) return false;
-        std::istringstream iss(result.stdout_output);
-        std::string comm;
-        while (std::getline(iss, comm)) {
-            if (comm.find("sshd") != std::string::npos) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    std::vector<UserStats> gather_user_stats(
-        const std::vector<core::UserInfo>& users
-    ) {
-        std::vector<UserStats> stats;
-
-        for (const auto& u : users) {
-            UserStats s;
-            s.uid = u.uid;
-            s.username = u.username;
-            s.process_count = 0;
-            s.memory_mb = 0;
-
-            fs::path proc_path("/proc");
-            if (!fs::exists(proc_path)) continue;
-
-            for (const auto& entry : fs::directory_iterator(proc_path)) {
-                if (!entry.is_directory()) continue;
-                std::string name = entry.path().filename().string();
-                if (name.empty() || name[0] < '0' || name[0] > '9') continue;
-
-                fs::path status_path = entry.path() / "status";
-                auto proc_info = read_proc_status(status_path);
-                if (!proc_info) continue;
-
-                if (proc_info->uid == u.uid) {
-                    s.process_count++;
-                    s.memory_mb += proc_info->vm_rss_kb / 1024;
-                }
-            }
-
-            auto result = utils::exec_safe({"ps", "-u", u.username, "-o", "%cpu="});
-            if (result.exit_code == 0 && !result.stdout_output.empty()) {
-                std::istringstream iss(result.stdout_output);
-                std::string cpu_str;
-                double total_cpu = 0.0;
-                while (std::getline(iss, cpu_str)) {
-                    try {
-                        total_cpu += std::stod(cpu_str);
-                    } catch (...) {}
-                }
-                s.cpu_percent = total_cpu;
-            }
-
-            s.logged_in = check_ssh_session(u.username);
-            stats.push_back(s);
-        }
-
-        std::sort(stats.begin(), stats.end(),
-            [](const UserStats& a, const UserStats& b) {
-                return a.cpu_percent > b.cpu_percent;
-            });
-
-        return stats;
-    }
-
     using namespace ftxui;
 
     // Build FTXUI table from stats
-    Element render_stats_table(const std::vector<UserStats>& stats) {
-        // Header row
-        std::vector<Elements> rows;
-        rows.push_back({
-            text("USER")      | bold | flex,
-            text("UID")       | bold | flex,
-            text("CPU%")      | bold | flex,
-            text("MEM(MB)")   | bold | flex,
-            text("PROCS")     | bold | flex,
-            text("LOGIN")     | bold | flex,
+    Element render_stats_table(const std::vector<daemon::UserStats>& stats) {
+        auto header = hbox({
+            text("Username")      | bold | flex,
+            text("UID")           | bold | flex,
+            text("CPU%")          | bold | flex,
+            text("Mem(MB)")       | bold | flex,
+            text("Procs")         | bold | flex,
+            text("SSH")           | bold | flex,
         });
 
+        std::vector<Elements> rows;
+        rows.push_back({header});
+
         for (const auto& s : stats) {
-            // CPU color
-            Color cpu_color = Color::Green;
-            if (s.cpu_percent > 50.0) cpu_color = Color::Red;
-            else if (s.cpu_percent > 20.0) cpu_color = Color::Yellow;
-
-            // Memory color
-            Color mem_color = Color::Green;
-            if (s.memory_mb > 1000) mem_color = Color::Red;
-            else if (s.memory_mb > 500) mem_color = Color::Yellow;
-
-            // Login status
-            auto login_elem = s.logged_in
-                ? text("ONLINE") | color(Color::Green) | bold
-                : text("offline") | color(Color::Yellow);
-
             std::ostringstream cpu_ss, mem_ss;
             cpu_ss << std::fixed << std::setprecision(1) << s.cpu_percent;
             mem_ss << s.memory_mb;
 
+            Color cpu_color = s.cpu_percent > 80 ? Color::Red
+                            : s.cpu_percent > 40 ? Color::Yellow
+                            : Color::Green;
+
+            Color mem_color = s.memory_mb > 1024 ? Color::Red
+                            : s.memory_mb > 512  ? Color::Yellow
+                            : Color::Green;
+
+            auto login_elem = s.logged_in
+                ? text("active") | color(Color::Green)
+                : text("no")     | dim;
+
+            // Truncate long usernames for display
             rows.push_back({
                 text(s.username.substr(0, 23))          | flex,
                 text(std::to_string(s.uid))              | flex,
@@ -1940,7 +1841,7 @@ int cmd_watch([[maybe_unused]] bool verbose) {
     auto screen = ScreenInteractive::Fullscreen();
 
     // Shared state for periodic data refresh
-    auto stats = std::make_shared<std::vector<UserStats>>();
+    auto stats = std::make_shared<std::vector<daemon::UserStats>>();
     auto empty_msg = std::make_shared<bool>(true);
     auto refresh_interval = std::make_shared<int>(2);
 
@@ -1951,20 +1852,23 @@ int cmd_watch([[maybe_unused]] bool verbose) {
             // Gather data
             auto users = ctx.user_mgr->list_ai_users();
             std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
-            std::vector<core::UserInfo> filtered;
+            std::vector<std::string> usernames;
+            std::vector<uid_t> uids;
+
             for (const auto& u : users) {
                 if (u.username.size() > expected_prefix.size()
                     && u.username.substr(0, expected_prefix.size()) == expected_prefix) {
-                    filtered.push_back(u);
+                    usernames.push_back(u.username);
+                    uids.push_back(u.uid);
                 }
             }
 
-            if (filtered.empty()) {
+            if (usernames.empty()) {
                 *empty_msg = true;
                 stats->clear();
             } else {
                 *empty_msg = false;
-                *stats = gather_user_stats(filtered);
+                *stats = daemon::gather_user_stats(usernames, uids);
             }
 
             screen.PostEvent(Event::Custom);

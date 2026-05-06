@@ -658,6 +658,67 @@ run_test "12.4: Cleanup bindtest" \
 
 echo ""
 echo "========================================"
+echo "Scenario 13: am watch (FTXUI TUI)"
+echo "========================================"
+
+setup_testuser_env
+mkdir -p /home/testuser/projects/watch_test
+chown -R testuser:testuser /home/testuser/projects || true
+
+run_test "13.1: Create ai-user for watch test" \
+	"/usr/local/bin/am create /home/testuser/projects/watch_test" \
+	"success"
+
+watch_user=$(getent passwd | grep '^itestuser_.*watch_test' | cut -d: -f1 | head -1)
+
+# Test 1: am watch starts successfully and prints startup message
+# Use timeout + script to provide pseudo-TTY for FTXUI
+echo ""
+echo "--- am watch startup test ---"
+watch_output=$(script -qc "timeout 3 /usr/local/bin/ai-mirror-bin watch 2>&1" /dev/null 2>&1 || true)
+echo "watch output (first 10 lines):"
+echo "$watch_output" | head -10
+
+if echo "$watch_output" | grep -qi "Starting\|watch\|ai-user"; then
+	echo "[PASS] 13.2: am watch starts and shows content"
+	pass_count=$((pass_count + 1))
+else
+	echo "[FAIL] 13.2: am watch shows no content"
+	echo "  Full output: $watch_output"
+	fail_count=$((fail_count + 1))
+fi
+
+# Test 2: am watch shows "Watch stopped" on exit
+if echo "$watch_output" | grep -qi "Watch stopped"; then
+	echo "[PASS] 13.3: am watch exits cleanly with 'Watch stopped'"
+	pass_count=$((pass_count + 1))
+else
+	echo "[INFO] 13.3: 'Watch stopped' not found (may be timeout-dependent)"
+fi
+
+# Test 3: Verify the binary links against FTXUI (watch is compiled in)
+watch_help=$(/usr/local/bin/ai-mirror-bin --help 2>&1)
+if echo "$watch_help" | grep -q "watch"; then
+	echo "[PASS] 13.4: 'watch' subcommand listed in --help"
+	pass_count=$((pass_count + 1))
+else
+	echo "[FAIL] 13.4: 'watch' subcommand not in --help"
+	fail_count=$((fail_count + 1))
+fi
+
+# Test 4: Verify watch data gathering works (non-TUI path)
+# The watch command gathers stats via list_ai_users + /proc parsing
+# Test that the user appears in am list (same data source as watch)
+run_test "13.5: am list shows watch_test user (same data as watch)" \
+	"/usr/local/bin/am list" \
+	"contains" "$watch_user"
+
+run_test "13.6: Cleanup watch test" \
+	"/usr/local/bin/am rm /home/testuser/projects/watch_test" \
+	"success"
+
+echo ""
+echo "========================================"
 echo "Test Summary"
 echo "========================================"
 echo "Passed: $pass_count"

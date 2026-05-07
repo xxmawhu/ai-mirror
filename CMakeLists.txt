@@ -99,28 +99,30 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     list(FILTER COMMON_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
 
     # Unit tests for watch_stats (standalone binary, no main.cpp)
-    add_executable(test_watch_stats tests/unit/test_watch_stats.cpp
-        src/daemon/watch_stats.cpp
-        src/utils/shell.cpp
-        src/utils/logger.cpp
-        src/security/path_validator.cpp
-    )
-    target_include_directories(test_watch_stats PRIVATE ${CMAKE_SOURCE_DIR}/include)
-    target_link_libraries(test_watch_stats PRIVATE
-        CLI11::CLI11
-        toml11::toml11
-        spdlog::spdlog
-        nlohmann_json::nlohmann_json
-        pthread
-    )
-    target_compile_options(test_watch_stats PRIVATE
-        -Wall -Wextra -Wpedantic -Werror
-        -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
-    )
-    target_link_options(test_watch_stats PRIVATE
-        -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
-    )
-    add_test(NAME test_watch_stats COMMAND test_watch_stats)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_watch_stats.cpp")
+        add_executable(test_watch_stats tests/unit/test_watch_stats.cpp
+            src/daemon/watch_stats.cpp
+            src/utils/shell.cpp
+            src/utils/logger.cpp
+            src/security/path_validator.cpp
+        )
+        target_include_directories(test_watch_stats PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        target_link_libraries(test_watch_stats PRIVATE
+            CLI11::CLI11
+            toml11::toml11
+            spdlog::spdlog
+            nlohmann_json::nlohmann_json
+            pthread
+        )
+        target_compile_options(test_watch_stats PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+        )
+        target_link_options(test_watch_stats PRIVATE
+            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+        )
+        add_test(NAME test_watch_stats COMMAND test_watch_stats)
+    endif()
 
     # Additional tests can be added here following the same pattern
 endif()

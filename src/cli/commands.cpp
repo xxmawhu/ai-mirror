@@ -1832,27 +1832,36 @@ namespace {
 
             Color cpu_color = s.cpu_percent > 80 ? Color::Red
                             : s.cpu_percent > 40 ? Color::Yellow
-                            : Color::Green;
+                            : s.cpu_percent > 5  ? Color::Green
+                            : Color::GrayLight;
 
             Element ssh_elem = s.logged_in
-                ? text(pad_col("active", 8)) | color(Color::Green)
+                ? text(pad_col("active", 8)) | color(Color::GreenLight) | bold
                 : text(pad_col("no", 8)) | dim;
 
-            // Zebra striping: alternate row backgrounds for better readability
-            auto row_decorator = (row_idx % 2 == 0)
-                ? bgcolor(Color::Default)
-                : bgcolor(Color::Black);
+            // Color scheme: active users get highlighted row, inactive get zebra
+            Color fg_base, bg_row;
+            if (s.logged_in) {
+                fg_base = Color::White;
+                bg_row = Color::Blue;        // active: dark blue background
+            } else if (row_idx % 2 == 0) {
+                fg_base = Color::GrayLight;
+                bg_row = Color::Default;      // even: default bg
+            } else {
+                fg_base = Color::GrayLight;
+                bg_row = Color::GrayDark;     // odd: dark gray bg
+            }
 
             rows.push_back(hbox({
-                text(pad_col(s.username, 24)) | row_decorator,
+                text(pad_col(s.username, 24)) | color(fg_base) | bgcolor(bg_row),
                 separator(),
-                text(pad_col(cpu_ss.str(), 8)) | color(cpu_color) | row_decorator,
+                text(pad_col(cpu_ss.str(), 8)) | color(cpu_color) | bgcolor(bg_row),
                 separator(),
-                text(pad_col(format_memory(s.memory_mb), 10)) | row_decorator,
+                text(pad_col(format_memory(s.memory_mb), 10)) | color(fg_base) | bgcolor(bg_row),
                 separator(),
-                text(pad_col(std::to_string(s.process_count), 6)) | row_decorator,
+                text(pad_col(std::to_string(s.process_count), 6)) | color(fg_base) | bgcolor(bg_row),
                 separator(),
-                std::move(ssh_elem) | row_decorator,
+                std::move(ssh_elem) | bgcolor(bg_row),
             }));
             row_idx++;
 

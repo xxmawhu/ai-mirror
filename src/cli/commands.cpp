@@ -1825,6 +1825,7 @@ namespace {
         std::vector<Element> rows;
         rows.push_back(header);
 
+        size_t row_idx = 0;
         for (const auto& s : stats) {
             std::ostringstream cpu_ss;
             cpu_ss << std::fixed << std::setprecision(1) << s.cpu_percent;
@@ -1837,17 +1838,28 @@ namespace {
                 ? text(pad_col("active", 8)) | color(Color::Green)
                 : text(pad_col("no", 8)) | dim;
 
+            // Zebra striping: alternate row backgrounds for better readability
+            auto row_decorator = (row_idx % 2 == 0)
+                ? bgcolor(Color::Default)
+                : bgcolor(Color::Black);
+
             rows.push_back(hbox({
-                text(pad_col(s.username, 24)),
+                text(pad_col(s.username, 24)) | row_decorator,
                 separator(),
-                text(pad_col(cpu_ss.str(), 8)) | color(cpu_color),
+                text(pad_col(cpu_ss.str(), 8)) | color(cpu_color) | row_decorator,
                 separator(),
-                text(pad_col(format_memory(s.memory_mb), 10)),
+                text(pad_col(format_memory(s.memory_mb), 10)) | row_decorator,
                 separator(),
-                text(pad_col(std::to_string(s.process_count), 6)),
+                text(pad_col(std::to_string(s.process_count), 6)) | row_decorator,
                 separator(),
-                std::move(ssh_elem),
+                std::move(ssh_elem) | row_decorator,
             }));
+            row_idx++;
+
+            // Add separator every 5 rows for visual grouping
+            if (row_idx % 5 == 0 && row_idx < stats.size()) {
+                rows.push_back(separator());
+            }
         }
 
         return vbox(rows) | border;

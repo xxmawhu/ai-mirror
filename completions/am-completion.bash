@@ -366,7 +366,23 @@ _am_completion() {
 		fi
 		;;
 
-	list | config | health | watch | init)
+	watch)
+		# watch [project_path] [ai_user]
+		if [[ $n_positionals -le 1 ]]; then
+			local projects users
+			projects=$(_am_get_projects "$cur")
+			users=$(_am_get_users)
+			_am_comp_words "$projects" "$cur"
+			_am_comp_words "$users" "$cur"
+			_am_comp_dirs "$cur"
+		elif [[ $n_positionals -le 2 ]]; then
+			local users
+			users=$(_am_get_users)
+			_am_comp_words "$users" "$cur"
+		fi
+		;;
+
+	list | config | health | init)
 		# No positional arguments
 		;;
 

@@ -139,9 +139,13 @@ int parse_and_run(int argc, char** argv) {
     update_cmd->add_option("project_path", update_path, "项目目录路径")->required();
 
     // watch
-    app.add_subcommand("watch",
+    std::string watch_path, watch_user;
+    auto* watch_cmd = app.add_subcommand("watch",
         "实时监控\n"
-        "  以 htop 风格实时监控所有 ai-user 的状态");
+        "  以 htop 风格实时监控所有 ai-user 的状态\n"
+        "  可选参数：指定项目路径和/或用户名进行过滤");
+    watch_cmd->add_option("project_path", watch_path, "项目目录路径（可选，用于过滤）");
+    watch_cmd->add_option("ai_user", watch_user, "AI 用户名（可选，用于过滤）");
 
     // init
     auto* init_cmd = app.add_subcommand("init",
@@ -202,8 +206,8 @@ int parse_and_run(int argc, char** argv) {
         return cmd_status(verbose);
     } else if (update_cmd->parsed()) {
         return cmd_update(update_path, verbose);
-    } else if (app.got_subcommand("watch")) {
-        return cmd_watch(verbose);
+    } else if (watch_cmd->parsed()) {
+        return cmd_watch(watch_path, watch_user, verbose);
     }
 
     return 1;

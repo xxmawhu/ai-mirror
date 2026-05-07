@@ -1780,60 +1780,94 @@ int cmd_update(const std::string& path, [[maybe_unused]] bool verbose) {
 namespace {
     using namespace ftxui;
 
-    // Build FTXUI table from stats
-    Element render_stats_table(const std::vector<daemon::UserStats>& stats) {
+    // Format memory with auto unit selection
+    std::string format_memory(unsigned long mb) {
+        unsigned long kb = mb * 1024;
+        std::ostringstream ss;
+        if (kb < 1024) {
+            ss << kb << "K";
+        } else if (kb < 1024 * 1024) {
+            ss << std::fixed << std::setprecision(1) << (kb / 1024.0) << "M";
+        } else {
+            ss << std::fixed << std::setprecision(2) << (kb / (1024.0 * 1024.0)) << "G";
+        }
+        return ss.str();
+    }
+
+    // Pad string to fixed width (truncate if too long)
+    std::string pad_col(const std::string& s, size_t width) {
+        if (s.size() >= width) return s.substr(0, width);
+        return s + std::string(width - s.size(), ' ');
+    }
+
+    // Build FTXUI table from stats (sorted: active users first)
+    Element render_stats_table(std::vector<daemon::UserStats> stats) {
+        // Sort: logged_in users first, then by CPU%
+        std::stable_sort(stats.begin(), stats.end(),
+            [](const daemon::UserStats& a, const daemon::UserStats& b) {
+                if (a.logged_in != b.logged_in) return a.logged_in > b.logged_in;
+                return a.cpu_percent > b.cpu_percent;
+            });
+
+        // Column widths: Username=24, CPU%=8, Mem=10, Procs=6, SSH=8
         auto header = hbox({
-            text("Username")      | bold | flex,
-            text("UID")           | bold | flex,
-            text("CPU%")          | bold | flex,
-            text("Mem(MB)")       | bold | flex,
-            text("Procs")         | bold | flex,
-            text("SSH")           | bold | flex,
+            text(pad_col("Username", 24)) | bold,
+            separator(),
+            text(pad_col("CPU%", 8)) | bold,
+            separator(),
+            text(pad_col("Mem", 10)) | bold,
+            separator(),
+            text(pad_col("Procs", 6)) | bold,
+            separator(),
+            text(pad_col("SSH", 8)) | bold,
         });
 
-        std::vector<Elements> rows;
-        rows.push_back({header});
+        std::vector<Element> rows;
+        rows.push_back(header);
 
         for (const auto& s : stats) {
-            std::ostringstream cpu_ss, mem_ss;
+            std::ostringstream cpu_ss;
             cpu_ss << std::fixed << std::setprecision(1) << s.cpu_percent;
-            mem_ss << s.memory_mb;
 
             Color cpu_color = s.cpu_percent > 80 ? Color::Red
                             : s.cpu_percent > 40 ? Color::Yellow
                             : Color::Green;
 
-            Color mem_color = s.memory_mb > 1024 ? Color::Red
-                            : s.memory_mb > 512  ? Color::Yellow
-                            : Color::Green;
+            Element ssh_elem = s.logged_in
+                ? text(pad_col("active", 8)) | color(Color::Green)
+                : text(pad_col("no", 8)) | dim;
 
-            auto login_elem = s.logged_in
-                ? text("active") | color(Color::Green)
-                : text("no")     | dim;
-
-            // Truncate long usernames for display
-            rows.push_back({
-                text(s.username.substr(0, 23))          | flex,
-                text(std::to_string(s.uid))              | flex,
-                text(cpu_ss.str())                       | color(cpu_color) | flex,
-                text(mem_ss.str())                       | color(mem_color) | flex,
-                text(std::to_string(s.process_count))    | flex,
-                std::move(login_elem)                    | flex,
-            });
+            rows.push_back(hbox({
+                text(pad_col(s.username, 24)),
+                separator(),
+                text(pad_col(cpu_ss.str(), 8)) | color(cpu_color),
+                separator(),
+                text(pad_col(format_memory(s.memory_mb), 10)),
+                separator(),
+                text(pad_col(std::to_string(s.process_count), 6)),
+                separator(),
+                std::move(ssh_elem),
+            }));
         }
 
-        auto tbl = Table(std::move(rows));
-        tbl.SelectAll().Border(LIGHT);
-        tbl.SelectRow(0).Decorate(bgcolor(Color::Blue));
-        tbl.SelectRow(0).Decorate(color(Color::White));
-
-        return tbl.Render();
+        return vbox(rows) | border;
     }
 } // anonymous namespace
 
-int cmd_watch([[maybe_unused]] bool verbose) {
+int cmd_watch(const std::string& watch_path, const std::string& watch_user, bool verbose) {
     auto ctx = make_context(verbose);
     std::string main_user = utils::get_effective_username();
+
+    // Resolve optional path filter
+    std::optional<std::string> path_filter;
+    if (!watch_path.empty()) {
+        auto resolved = core::PathResolver::resolve(watch_path);
+        if (!resolved) {
+            std::cerr << "Invalid path: " << watch_path << std::endl;
+            return 1;
+        }
+        path_filter = resolved->string();
+    }
 
     // Print startup message (for test compatibility)
     std::cout << "Starting ai-mirror watch... Press Ctrl+C to exit.\n";
@@ -1870,6 +1904,20 @@ int cmd_watch([[maybe_unused]] bool verbose) {
                 for (const auto& u : users) {
                     if (u.username.size() > expected_prefix.size()
                         && u.username.substr(0, expected_prefix.size()) == expected_prefix) {
+                        
+                        // Filter by user name if provided
+                        if (!watch_user.empty() && u.username != watch_user) {
+                            continue;
+                        }
+
+                        // Filter by project path if provided
+                        if (path_filter) {
+                            // User's home should match project path
+                            if (u.home_dir != *path_filter) {
+                                continue;
+                            }
+                        }
+
                         usernames.push_back(u.username);
                         uids.push_back(u.uid);
                     }

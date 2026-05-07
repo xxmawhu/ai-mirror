@@ -1812,62 +1812,52 @@ namespace {
         // Column widths: Username=24, CPU%=8, Mem=10, Procs=6, SSH=8
         auto header = hbox({
             text(pad_col("Username", 24)) | bold,
-            separator(),
             text(pad_col("CPU%", 8)) | bold,
-            separator(),
             text(pad_col("Mem", 10)) | bold,
-            separator(),
             text(pad_col("Procs", 6)) | bold,
-            separator(),
             text(pad_col("SSH", 8)) | bold,
         });
 
         std::vector<Element> rows;
         rows.push_back(header);
+        rows.push_back(text(std::string(56, '-')) | dim);  // underline below header
 
         size_t row_idx = 0;
         for (const auto& s : stats) {
             std::ostringstream cpu_ss;
             cpu_ss << std::fixed << std::setprecision(1) << s.cpu_percent;
 
-            Color cpu_color = s.cpu_percent > 80 ? Color::Red
-                            : s.cpu_percent > 40 ? Color::Yellow
-                            : s.cpu_percent > 5  ? Color::Green
-                            : Color::GrayLight;
+            // CPU color: gradient from gray → green → yellow → red
+            Color cpu_color;
+            if (s.cpu_percent > 80)      cpu_color = Color::Red;
+            else if (s.cpu_percent > 60) cpu_color = Color::OrangeRed1;
+            else if (s.cpu_percent > 40) cpu_color = Color::Yellow;
+            else if (s.cpu_percent > 20) cpu_color = Color::Green;
+            else if (s.cpu_percent > 5)  cpu_color = Color::GreenLight;
+            else                         cpu_color = Color::GrayLight;
 
+            // Username: bold if active
+            auto name_elem = s.logged_in
+                ? text(pad_col(s.username, 24)) | bold
+                : text(pad_col(s.username, 24));
+
+            // SSH: light green + bold if active
             Element ssh_elem = s.logged_in
                 ? text(pad_col("active", 8)) | color(Color::GreenLight) | bold
                 : text(pad_col("no", 8)) | dim;
 
-            // Color scheme: active users get highlighted row, inactive get zebra
-            Color fg_base, bg_row;
-            if (s.logged_in) {
-                fg_base = Color::White;
-                bg_row = Color::Blue;        // active: dark blue background
-            } else if (row_idx % 2 == 0) {
-                fg_base = Color::GrayLight;
-                bg_row = Color::Default;      // even: default bg
-            } else {
-                fg_base = Color::GrayLight;
-                bg_row = Color::GrayDark;     // odd: dark gray bg
-            }
-
             rows.push_back(hbox({
-                text(pad_col(s.username, 24)) | color(fg_base) | bgcolor(bg_row),
-                separator(),
-                text(pad_col(cpu_ss.str(), 8)) | color(cpu_color) | bgcolor(bg_row),
-                separator(),
-                text(pad_col(format_memory(s.memory_mb), 10)) | color(fg_base) | bgcolor(bg_row),
-                separator(),
-                text(pad_col(std::to_string(s.process_count), 6)) | color(fg_base) | bgcolor(bg_row),
-                separator(),
-                std::move(ssh_elem) | bgcolor(bg_row),
+                name_elem,
+                text(pad_col(cpu_ss.str(), 8)) | color(cpu_color),
+                text(pad_col(format_memory(s.memory_mb), 10)),
+                text(pad_col(std::to_string(s.process_count), 6)),
+                std::move(ssh_elem),
             }));
             row_idx++;
 
-            // Add separator every 5 rows for visual grouping
+            // Separator every 5 rows for visual grouping
             if (row_idx % 5 == 0 && row_idx < stats.size()) {
-                rows.push_back(separator());
+                rows.push_back(text(std::string(56, '-')) | dim);
             }
         }
 

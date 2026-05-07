@@ -996,7 +996,7 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
     }
     fs::path file_path = *file_path_opt;
 
-    if (!utils::is_path_allowed(file_path, main_user, ctx.config.user.allowed_bases)) {
+    if (!utils::is_path_allowed_no_system_check(file_path, main_user, ctx.config.user.allowed_bases)) {
         std::cerr << "Path not allowed: " << file_path.string() << std::endl;
         return 1;
     }
@@ -1005,7 +1005,7 @@ int cmd_touch(const std::string& path, const std::string& ai_user, bool verbose)
         std::error_code ec;
         fs::path parent = file_path.parent_path();
         if (!parent.empty() && !fs::exists(parent)) {
-            if (!utils::is_path_allowed(parent, main_user, ctx.config.user.allowed_bases)) {
+            if (!utils::is_path_allowed_no_system_check(parent, main_user, ctx.config.user.allowed_bases)) {
                 std::cerr << "Parent path not allowed: " << parent.string() << std::endl;
                 return 1;
             }

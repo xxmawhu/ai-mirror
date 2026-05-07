@@ -4,6 +4,7 @@
 #include <CLI/CLI.hpp>
 #include <iostream>
 #include <pwd.h>
+#include <vector>
 
 namespace ai_mirror::cli {
 
@@ -70,14 +71,14 @@ int parse_and_run(int argc, char** argv) {
     mv_cmd->add_option("dst", mv_dst, "目标路径")->required();
     mv_cmd->add_flag("-f,--force", "强制覆盖已存在的目标文件");
 
-    // touch
-    std::string touch_path, touch_user;
+    // touch: supports glob — shell expands *.py into multiple args, last arg is ai_user
+    std::vector<std::string> touch_args;
     auto* touch_cmd = app.add_subcommand("touch",
         "创建文件并授权\n"
         "  创建空文件并设置 ai-user 所有权。\n"
-        "  使用 O_NOFOLLOW + fchown 防符号链接攻击");
-    touch_cmd->add_option("path", touch_path, "文件路径")->required();
-    touch_cmd->add_option("ai_user", touch_user, "AI 用户名")->required();
+        "  使用 O_NOFOLLOW + fchown 防符号链接攻击\n"
+        "  支持通配符：am touch /path/*.py user（shell 自动展开 *）");
+    touch_cmd->add_option("paths...", touch_args, "文件路径（支持多个）+ AI 用户名（最后一个参数）")->required()->expected(2, -1);
 
     // cd
     std::string cd_path;
@@ -130,13 +131,14 @@ int parse_and_run(int argc, char** argv) {
         "  home、UID、mount 状态、SSH 密钥、authorized_keys 健康状态\n"
         "  （仅显示属于调用者的 ai-user）");
 
-    // update
-    std::string update_path;
+    // update: supports glob — shell expands * into multiple paths
+    std::vector<std::string> update_paths;
     auto* update_cmd = app.add_subcommand("update",
         "修复 SSH 和挂载\n"
         "  重新应用 SSH 密钥和 bind mount 配置，\n"
-        "  用于修复异常状态（如密钥丢失、挂载失效等）");
-    update_cmd->add_option("project_path", update_path, "项目目录路径")->required();
+        "  用于修复异常状态（如密钥丢失、挂载失效等）\n"
+        "  支持通配符：am update /projects/*（shell 自动展开 *）");
+    update_cmd->add_option("project_paths...", update_paths, "项目目录路径（支持多个）")->required()->expected(1, -1);
 
     // watch
     std::string watch_path, watch_user;
@@ -189,7 +191,18 @@ int parse_and_run(int argc, char** argv) {
     } else if (mv_cmd->parsed()) {
         return cmd_mv(mv_src, mv_dst, verbose);
     } else if (touch_cmd->parsed()) {
-        return cmd_touch(touch_path, touch_user, verbose);
+        // Last arg is ai_user, rest are paths
+        if (touch_args.size() < 2) {
+            std::cerr << "touch requires at least one path and one ai_user" << std::endl;
+            return 1;
+        }
+        std::string touch_user = touch_args.back();
+        touch_args.pop_back();
+        int ret = 0;
+        for (const auto& p : touch_args) {
+            if (cmd_touch(p, touch_user, verbose) != 0) ret = 1;
+        }
+        return ret;
     } else if (cd_cmd->parsed()) {
         return cmd_cd(cd_path, verbose);
     } else if (app.got_subcommand("list")) {
@@ -205,7 +218,11 @@ int parse_and_run(int argc, char** argv) {
     } else if (app.got_subcommand("status")) {
         return cmd_status(verbose);
     } else if (update_cmd->parsed()) {
-        return cmd_update(update_path, verbose);
+        int ret = 0;
+        for (const auto& p : update_paths) {
+            if (cmd_update(p, verbose) != 0) ret = 1;
+        }
+        return ret;
     } else if (watch_cmd->parsed()) {
         return cmd_watch(watch_path, watch_user, verbose);
     }

@@ -511,6 +511,79 @@ bool is_path_allowed_parent(const fs::path& p, const std::string& main_user,
     return is_path_allowed(parent, main_user, allowed_bases);
 }
 
+// Variant of is_path_allowed that skips SYSTEM_DIRS blacklist.
+// Touch command uses this: it only needs ownership validation,
+// allowing paths under /opt etc. as long as the path is owned by main_user.
+bool is_path_allowed_no_system_check(const fs::path& p,
+                                     [[maybe_unused]] const std::string& main_user,
+                                     const std::vector<fs::path>& /*allowed_bases*/) {
+    if (p.empty()) return false;
+
+    for (const auto& part : p) {
+        if (part == "..") return false;
+    }
+
+    uid_t login_uid = get_login_uid();
+    if (login_uid == 0) login_uid = geteuid();
+    if (login_uid == 0) {
+        utils::get_logger()->warn("Cannot determine real user UID for path validation");
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path canon = fs::canonical(p, ec);
+    if (!ec) {
+        // Path exists: check ownership
+        struct stat st;
+        if (stat(canon.c_str(), &st) != 0) return false;
+
+        if (st.st_uid == login_uid) return true;
+        if (is_managed_ai_user_home(canon, login_uid)) return true;
+        if (has_write_access(canon, login_uid)) return true;
+
+        // Check parent chain for ownership
+        fs::path parent = canon.parent_path();
+        int max_depth = 32;
+        while (!parent.empty() && parent != "/" && --max_depth > 0) {
+            if (stat(parent.c_str(), &st) == 0) {
+                if (st.st_uid == login_uid) return true;
+                if (is_managed_ai_user_home(parent, login_uid)) return true;
+                if (has_write_access(parent, login_uid)) return true;
+            }
+            parent = parent.parent_path();
+        }
+        return false;
+    }
+
+    // Path doesn't exist: check parent
+    fs::path parent = p.parent_path();
+    if (parent.empty()) return false;
+
+    fs::path canon_parent = fs::canonical(parent, ec);
+    if (ec) return false;
+
+    struct stat st;
+    if (stat(canon_parent.c_str(), &st) != 0) return false;
+
+    if (st.st_uid == login_uid) return true;
+    if (is_managed_ai_user_home(canon_parent, login_uid)) return true;
+    if (has_write_access(canon_parent, login_uid)) return true;
+
+    // Check parent chain
+    fs::path check = canon_parent;
+    int max_depth = 32;
+    while (!check.empty() && check != "/" && --max_depth > 0) {
+        struct stat pst;
+        if (stat(check.c_str(), &pst) == 0) {
+            if (pst.st_uid == login_uid) return true;
+            if (has_write_access(check, login_uid)) return true;
+        }
+        check = check.parent_path();
+    }
+
+    return false;
+}
+
 bool is_group_member(const std::string& group_name) {
     if (group_name.empty()) return false;
 

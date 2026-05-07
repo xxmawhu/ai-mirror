@@ -59,6 +59,11 @@ bool is_path_allowed(const fs::path& p, const std::string& main_user,
                      const std::vector<fs::path>& allowed_bases = {});
 bool is_path_allowed_parent(const fs::path& p, const std::string& main_user,
                              const std::vector<fs::path>& allowed_bases = {});
+
+// Same as is_path_allowed but skips SYSTEM_DIRS blacklist check.
+// Used by touch which only needs ownership validation, not path location restriction.
+bool is_path_allowed_no_system_check(const fs::path& p, const std::string& main_user,
+                                     const std::vector<fs::path>& allowed_bases = {});
 uid_t get_login_uid();
 
 // Check if the current effective user is a member of the specified group.

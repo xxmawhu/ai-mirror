@@ -190,6 +190,11 @@ am() {
 
 	# All other commands: pass through to ai-mirror-bin
 	if [[ "$(id -u)" -eq 0 ]]; then
+		# TUI commands (watch) need direct terminal access, not captured
+		if [[ "${1:-}" == "watch" ]]; then
+			"$_AM_BIN" "$@"
+			return $?
+		fi
 		local cmd_output
 		cmd_output=$("$_AM_BIN" "$@" 2>&1)
 		local cmd_ret=$?
@@ -202,6 +207,11 @@ am() {
 		fi
 		return $cmd_ret
 	else
+		# TUI commands (watch) need direct terminal access, not captured
+		if [[ "${1:-}" == "watch" ]]; then
+			sudo --preserve-env=HOME "$_AM_BIN" "$@"
+			return $?
+		fi
 		local cmd_output
 		cmd_output=$(sudo --preserve-env=HOME "$_AM_BIN" "$@" 2>&1)
 		local cmd_ret=$?

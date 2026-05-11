@@ -354,7 +354,54 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         if (!utils::is_path_allowed(source, main_user, ctx.config.user.allowed_bases)) continue;
 
         fs::path target = core::PathResolver::to_ai_user_path(source, username, main_user, home_dir);
-        if (ctx.graft->is_mounted(target)) {
+
+        // Check if target is mounted and whether it's stale
+        // A bind mount becomes stale when the source file is deleted and recreated (new inode)
+        // On beegfs: target becomes inaccessible (stat fails)
+        // On ext4/xfs: target is still accessible but inode/device mismatch with source
+        bool is_mounted = ctx.graft->is_mounted(target);
+
+        // Check for stale mount by comparing inode/device
+        bool is_stale = false;
+        struct stat source_st, target_st;
+        bool source_stat_ok = (stat(source.c_str(), &source_st) == 0);
+        bool target_stat_ok = (stat(target.c_str(), &target_st) == 0);
+
+        if (is_mounted) {
+            if (!target_stat_ok) {
+                // Case 1: Target inaccessible (beegfs scenario)
+                // Mount exists in /proc/mounts but stat() fails
+                is_stale = true;
+                utils::get_logger()->info("Stale mount detected (target inaccessible): {}", target.string());
+            } else if (source_stat_ok) {
+                // Case 2: Target accessible but inode/device mismatch (ext4/xfs scenario)
+                // This happens when source file was deleted and recreated (new inode)
+                if (source_st.st_ino != target_st.st_ino || source_st.st_dev != target_st.st_dev) {
+                    is_stale = true;
+                    utils::get_logger()->info("Stale mount detected (inode mismatch): source ino={} dev={}, target ino={} dev={}",
+                        source_st.st_ino, source_st.st_dev, target_st.st_ino, target_st.st_dev);
+                }
+            }
+        }
+
+        if (is_stale) {
+            // Unmount the stale mount and prepare for remount
+            auto umount_result = utils::exec_safe({"umount", "-l", target.string()});
+            if (umount_result.exit_code == 0) {
+                utils::get_logger()->info("Lazy unmounted stale mount: {}", target.string());
+                is_mounted = false;
+                // Remove the empty mount point file if it exists
+                std::error_code rm_ec;
+                fs::remove(target, rm_ec);
+                if (!rm_ec) {
+                    utils::get_logger()->info("Removed empty mount point: {}", target.string());
+                }
+            } else {
+                utils::get_logger()->warn("Failed to unmount stale mount {}: {}", target.string(), umount_result.stderr_output);
+            }
+        }
+
+        if (is_mounted) {
             // Already mounted — still fix ownership of intermediate dirs and target
             // This handles the case where dirs were created by root on first run
             if (state.uid != 0 || state.gid != 0) {
@@ -475,8 +522,8 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
 
                 if (is_stale_mount) {
                     // umount the stale bind mount
-                    utils::get_logger()->info("Cleaning stale bind mount: {}", ep_str);
-                    auto umount_result = utils::exec_safe({"umount", ep_str});
+                    utils::get_logger()->info("Lazy unmounting stale bind mount: {}", ep_str);
+                    auto umount_result = utils::exec_safe({"umount", "-l", ep_str});
                     if (umount_result.exit_code == 0) {
                         fixes++;
                         // Remove the empty mount point directory/file

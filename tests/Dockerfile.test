@@ -5,19 +5,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server openssh-client \
     mount util-linux \
     sudo \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash testuser && \
     echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-COPY build/bin/ai-mirror /usr/local/bin/ai-mirror-bin
+COPY build-test/bin/ai-mirror /usr/local/bin/ai-mirror-bin
 RUN ln -sf /usr/local/bin/ai-mirror-bin /usr/local/bin/am && \
     chmod +x /usr/local/bin/ai-mirror-bin
 
 RUN mkdir -p /etc/ai-mirror /var/lib/ai-mirror /home/testuser/projects/testproj && \
-    chown -R testuser:testuser /home/testuser
+    chown -R testuser:testuser /home/testuser && \
+    groupadd -f ai-mirror && \
+    usermod -aG ai-mirror root
 
-COPY tests/run_tests.sh /tmp/run_tests.sh
-RUN chmod +x /tmp/run_tests.sh
+COPY tests/run_tests.sh tests/test_stale_mount.sh /tmp/
+RUN chmod +x /tmp/run_tests.sh /tmp/test_stale_mount.sh
 
-CMD ["/tmp/run_tests.sh"]
+CMD ["/tmp/test_stale_mount.sh"]

@@ -31,6 +31,7 @@ setup() {
 	cat >/root/.ai-mirror.toml <<'EOF'
 [user]
 prefix = "ai_"
+allowed_bases = ["/root", "/home"]
 
 [ssh]
 key_path = "/root/.ssh/ai-mirror"
@@ -125,6 +126,57 @@ test_umount_recovery() {
 	findmnt "$MOUNT_TARGET" >/dev/null 2>&1 && ok "am update remounted .bashrc" || fail "am update did NOT remount .bashrc"
 }
 
+test_stale_mount_recovery() {
+	log "Test 3b: stale mount recovery via am update"
+
+	MOUNT_TARGET="$AI_HOME/.bashrc"
+
+	# Verify mount exists and is accessible
+	findmnt "$MOUNT_TARGET" >/dev/null 2>&1 && ok "Mount exists before stale test" || {
+		fail "Mount missing before stale test"
+		return
+	}
+	cat "$MOUNT_TARGET" >/dev/null 2>&1 && ok "Mount is accessible before stale test" || {
+		fail "Mount is already stale before test"
+		return
+	}
+
+	# Simulate a stale mount: delete the source file, then recreate it
+	# This makes the mount point show up in /proc/mounts but inaccessible via stat()
+	SOURCE_FILE="/root/.bashrc"
+	BACKUP_FILE="/tmp/.bashrc.stale_test_backup"
+
+	cp "$SOURCE_FILE" "$BACKUP_FILE"
+	rm -f "$SOURCE_FILE"
+
+	# Mount is now stale: findmnt shows it but stat/cat fails
+	if ! cat "$MOUNT_TARGET" >/dev/null 2>&1; then
+		ok "Mount became stale after source deletion"
+	else
+		warn "Mount did not become stale (FS may cache differently)"
+	fi
+
+	# Recreate source file
+	cp "$BACKUP_FILE" "$SOURCE_FILE"
+	rm -f "$BACKUP_FILE"
+	ok "Source file recreated"
+
+	# Mount should still be stale because the bind mount references the old inode
+	if ! cat "$MOUNT_TARGET" >/dev/null 2>&1; then
+		ok "Mount is still stale after source recreation"
+	else
+		warn "Mount is accessible after recreation (FS re-linked)"
+	fi
+
+	# Run am update — should detect stale mount, unmount, and remount
+	/usr/local/bin/am update /root/projects/testproj 2>&1 | tail -5
+
+	# Verify mount is now accessible
+	findmnt "$MOUNT_TARGET" >/dev/null 2>&1 && ok "Mount exists after am update" || fail "Mount missing after am update"
+	cat "$MOUNT_TARGET" >/dev/null 2>&1 && ok "Mount is accessible after am update" || fail "Mount is STILL stale after am update"
+	grep -q "test bashrc content" "$MOUNT_TARGET" && ok "Mount content correct after stale recovery" || fail "Mount content wrong after stale recovery"
+}
+
 test_status() {
 	log "Test 4: am status"
 
@@ -195,6 +247,7 @@ main() {
 	if [ -n "$AI_USER" ] && id "$AI_USER" >/dev/null 2>&1; then
 		MOUNT_TARGET=$(test_bind_mount)
 		test_umount_recovery
+		test_stale_mount_recovery
 		test_status
 		test_update_ssh
 		test_ssh_login

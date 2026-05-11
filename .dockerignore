@@ -1,7 +1,7 @@
 build-release/
-build-test/
+build-test/*
+!build-test/bin/
 build/*
-!build/bin/
 log/
 .plan/
 end_task/

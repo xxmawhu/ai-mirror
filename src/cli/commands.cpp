@@ -436,6 +436,43 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         }
     }
 
+    // Fix broken symlinks in home_dir (e.g., ~/.tmux.conf pointing to non-existent target)
+    // This prevents tools like lsd from printing "No such file or directory" errors
+    {
+        fs::path tmux_conf = fs::path(home_dir) / ".tmux.conf";
+        std::error_code ec;
+        // Check if it's a symlink and if the target doesn't exist (broken symlink)
+        if (fs::is_symlink(tmux_conf, ec) && !fs::exists(tmux_conf, ec) && !ec) {
+            // Get the broken target for logging
+            auto target = fs::read_symlink(tmux_conf, ec);
+            if (!ec) {
+                utils::get_logger()->info("Removing broken symlink: {} -> {}", tmux_conf.string(), target.string());
+                fs::remove(tmux_conf, ec);
+                if (!ec) {
+                    fixes++;
+                } else {
+                    utils::get_logger()->warn("Failed to remove broken symlink {}: {}", tmux_conf.string(), ec.message());
+                }
+            }
+        }
+
+        // Also check ~/.config/tmux/tmux.conf (modern tmux config location)
+        fs::path tmux_config_dir = fs::path(home_dir) / ".config" / "tmux";
+        fs::path tmux_config_file = tmux_config_dir / "tmux.conf";
+        if (fs::is_symlink(tmux_config_file, ec) && !fs::exists(tmux_config_file, ec) && !ec) {
+            auto target = fs::read_symlink(tmux_config_file, ec);
+            if (!ec) {
+                utils::get_logger()->info("Removing broken symlink: {} -> {}", tmux_config_file.string(), target.string());
+                fs::remove(tmux_config_file, ec);
+                if (!ec) {
+                    fixes++;
+                } else {
+                    utils::get_logger()->warn("Failed to remove broken symlink {}: {}", tmux_config_file.string(), ec.message());
+                }
+            }
+        }
+    }
+
     // Third pass: recursively fix ownership of ALL entries in home_dir
     // Skip .am_status (root:root by design) and bind mount targets (read-only)
     {
@@ -451,9 +488,9 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         // Recursive helper: chown all entries under a directory, skipping mount points
         // Returns number of fixes applied
         std::function<int(const fs::path&, int)> recursive_chown = [&](const fs::path& dir_path, int depth) -> int {
-            constexpr int max_depth = 256;
+            constexpr int max_depth = 3;
             if (depth > max_depth) {
-                utils::get_logger()->warn("Third pass: max depth {} exceeded at {}", max_depth, dir_path.string());
+                utils::get_logger()->debug("Third pass: skipping depth {} > {} at {}", depth, max_depth, dir_path.string());
                 return 0;
             }
             int local_fixes = 0;

@@ -217,7 +217,7 @@ Config ConfigParser::load(const fs::path& config_path) {
                             if (i > 0) group_list += ", ";
                             group_list += config.ai_user.groups[i];
                         }
-                        utils::get_logger()->info("Loaded ai-user supplementary groups: {}", group_list);
+                        utils::get_logger()->debug("Loaded ai-user supplementary groups: {}", group_list);
                     }
                 }
             } catch (const std::exception& e) {

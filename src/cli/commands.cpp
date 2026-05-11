@@ -436,38 +436,65 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         }
     }
 
-    // Fix broken symlinks in home_dir (e.g., ~/.tmux.conf pointing to non-existent target)
-    // This prevents tools like lsd from printing "No such file or directory" errors
+    // Clean up stale entries in home_dir that are not in current mount config.
+    // Handles two cases:
+    //   1. Broken symlinks (lstat ok but stat fails)
+    //   2. Stale bind mounts whose source no longer exists (findmnt shows //deleted)
+    // Both cause tools like lsd to print "No such file or directory" errors.
     {
-        fs::path tmux_conf = fs::path(home_dir) / ".tmux.conf";
-        std::error_code ec;
-        // Check if it's a symlink and if the target doesn't exist (broken symlink)
-        if (fs::is_symlink(tmux_conf, ec) && !fs::exists(tmux_conf, ec) && !ec) {
-            // Get the broken target for logging
-            auto target = fs::read_symlink(tmux_conf, ec);
-            if (!ec) {
-                utils::get_logger()->info("Removing broken symlink: {} -> {}", tmux_conf.string(), target.string());
-                fs::remove(tmux_conf, ec);
-                if (!ec) {
-                    fixes++;
-                } else {
-                    utils::get_logger()->warn("Failed to remove broken symlink {}: {}", tmux_conf.string(), ec.message());
-                }
-            }
+        // Build set of currently configured mount targets under home_dir
+        std::set<std::string> configured_mount_targets;
+        for (const auto& mount_path : ctx.config.mount.paths) {
+            auto source_opt = core::PathResolver::resolve(mount_path.string());
+            if (!source_opt) continue;
+            fs::path target = core::PathResolver::to_ai_user_path(*source_opt, username, main_user, home_dir);
+            configured_mount_targets.insert(target.string());
         }
 
-        // Also check ~/.config/tmux/tmux.conf (modern tmux config location)
-        fs::path tmux_config_dir = fs::path(home_dir) / ".config" / "tmux";
-        fs::path tmux_config_file = tmux_config_dir / "tmux.conf";
-        if (fs::is_symlink(tmux_config_file, ec) && !fs::exists(tmux_config_file, ec) && !ec) {
-            auto target = fs::read_symlink(tmux_config_file, ec);
-            if (!ec) {
-                utils::get_logger()->info("Removing broken symlink: {} -> {}", tmux_config_file.string(), target.string());
-                fs::remove(tmux_config_file, ec);
-                if (!ec) {
-                    fixes++;
-                } else {
-                    utils::get_logger()->warn("Failed to remove broken symlink {}: {}", tmux_config_file.string(), ec.message());
+        // Scan home_dir top-level entries for stale mounts/broken symlinks
+        std::error_code iter_ec;
+        for (const auto& entry : fs::directory_iterator(home_dir, iter_ec)) {
+            if (iter_ec) break;
+            auto ep = entry.path();
+            std::string ep_str = ep.string();
+
+            // Skip entries that are in current mount config (they are valid)
+            if (configured_mount_targets.count(ep_str)) continue;
+
+            // Skip .am_status
+            if (ep.filename() == ".am_status") continue;
+
+            // Check if stat() fails but lstat() succeeds → broken symlink or stale mount
+            struct stat st, lst;
+            bool stat_ok = (stat(ep.c_str(), &st) == 0);
+            bool lstat_ok = (lstat(ep.c_str(), &lst) == 0);
+
+            if (!stat_ok && lstat_ok) {
+                // Check if it's a stale bind mount (mount point with deleted source)
+                bool is_stale_mount = ctx.graft->is_mounted_live(ep);
+
+                if (is_stale_mount) {
+                    // umount the stale bind mount
+                    utils::get_logger()->info("Cleaning stale bind mount: {}", ep_str);
+                    auto umount_result = utils::exec_safe({"umount", ep_str});
+                    if (umount_result.exit_code == 0) {
+                        fixes++;
+                        // Remove the empty mount point directory/file
+                        std::error_code rm_ec;
+                        fs::remove(ep, rm_ec);
+                    } else {
+                        utils::get_logger()->warn("Failed to umount stale mount {}: {}", ep_str, umount_result.stderr_output);
+                    }
+                } else if (S_ISLNK(lst.st_mode)) {
+                    // Broken symlink — just remove it
+                    utils::get_logger()->info("Removing broken symlink: {}", ep_str);
+                    std::error_code rm_ec;
+                    fs::remove(ep, rm_ec);
+                    if (!rm_ec) {
+                        fixes++;
+                    } else {
+                        utils::get_logger()->warn("Failed to remove broken symlink {}: {}", ep_str, rm_ec.message());
+                    }
                 }
             }
         }

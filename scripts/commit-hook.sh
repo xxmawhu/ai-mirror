@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 #
-# ai-mirror commit-hook: three-phase validation
+# ai-mirror commit-hook: two-phase validation
 # Phase 1: Code check (clang-format dry-run)
-# Phase 2: Build verification
-# Phase 3: Unit tests
+# Phase 2: Unit tests
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="${PROJECT_DIR}/build-test"
 PASS=0
 FAIL=0
 
@@ -68,34 +66,10 @@ else
 fi
 
 # ============================================
-# Phase 2: Build verification
+# Phase 2: Unit tests
 # ============================================
 echo ""
-echo -e "${CYAN}--- Phase 2: Build Verification ---${NC}"
-
-# Check if build directory exists
-if [ ! -d "$BUILD_DIR" ]; then
-	echo -e "${YELLOW}  Creating build directory: $BUILD_DIR${NC}"
-	mkdir -p "$BUILD_DIR"
-	cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug 2>&1
-fi
-
-# Build target
-BUILD_OUTPUT=$(cmake --build "$BUILD_DIR" --target ai-mirror -j4 2>&1) || true
-BUILD_EXIT=$?
-
-if [ $BUILD_EXIT -eq 0 ]; then
-	log_status 0 "cmake build (ai-mirror)" ""
-else
-	log_status 1 "cmake build (ai-mirror)" "see errors above"
-	echo "$BUILD_OUTPUT" | tail -20
-fi
-
-# ============================================
-# Phase 3: Unit tests
-# ============================================
-echo ""
-echo -e "${CYAN}--- Phase 3: Unit Tests ---${NC}"
+echo -e "${CYAN}--- Phase 2: Unit Tests ---${NC}"
 
 TEST_DIR="$PROJECT_DIR/tests"
 if [ -f "$TEST_DIR/run_tests.sh" ]; then

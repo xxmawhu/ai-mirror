@@ -766,4 +766,115 @@ bool SSHManager::test_connection(const std::string& username) const {
     return result.exit_code == 0;
 }
 
+// Sync known_hosts from main_user to ai_user by ssh-keyscan.
+// Does NOT copy file - instead runs ssh-keyscan as ai-user for each host.
+bool SSHManager::sync_known_hosts(const std::string& main_user, const std::string& ai_user) {
+    if (!utils::validate_username(main_user) || !utils::validate_username(ai_user)) {
+        utils::get_logger()->error("Invalid username for sync_known_hosts");
+        return false;
+    }
+
+    // Get main_user's known_hosts path
+    struct passwd* main_pw = getpwnam(main_user.c_str());
+    if (!main_pw) {
+        utils::get_logger()->error("Cannot resolve main user '{}'", main_user);
+        return false;
+    }
+    fs::path main_known_hosts = fs::path(main_pw->pw_dir) / ".ssh" / "known_hosts";
+
+    // Check if main_user's known_hosts exists
+    std::error_code ec;
+    if (!fs::exists(main_known_hosts, ec)) {
+        utils::get_logger()->info("Main user {} has no known_hosts file, skipping sync", main_user);
+        return true;  // Not an error, just nothing to sync
+    }
+
+    // Parse known_hosts to extract host names
+    // Format: host1,host2 key-type key-data [comment]
+    // Hashed hosts: @hashed-host key-type key-data
+    std::ifstream ifs(main_known_hosts);
+    if (!ifs.is_open()) {
+        utils::get_logger()->error("Cannot open main user known_hosts: {}", main_known_hosts.string());
+        return false;
+    }
+
+    std::vector<std::string> hosts;
+    std::string line;
+    while (std::getline(ifs, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        // Extract host part (first field before space)
+        auto space_pos = line.find(' ');
+        if (space_pos == std::string::npos) continue;
+
+        std::string host_field = line.substr(0, space_pos);
+        // Handle multiple hosts separated by comma
+        auto comma_pos = host_field.find(',');
+        if (comma_pos != std::string::npos) {
+            // Multiple hosts - take the first one (usually the canonical name)
+            std::string first_host = host_field.substr(0, comma_pos);
+            if (!first_host.empty() && first_host[0] != '@') {
+                hosts.push_back(first_host);
+            }
+        } else if (!host_field.empty() && host_field[0] != '@') {
+            // Single host (non-hashed)
+            hosts.push_back(host_field);
+        }
+        // Hashed hosts (@hashed...) are skipped - cannot be scanned
+    }
+    ifs.close();
+
+    if (hosts.empty()) {
+        utils::get_logger()->info("No non-hashed hosts in main user known_hosts, skipping sync");
+        return true;
+    }
+
+    // Get ai_user info
+    struct passwd* ai_pw = getpwnam(ai_user.c_str());
+    if (!ai_pw) {
+        utils::get_logger()->error("Cannot resolve ai user '{}'", ai_user);
+        return false;
+    }
+    fs::path ai_ssh_dir = fs::path(ai_pw->pw_dir) / ".ssh";
+
+    // Ensure ai_user's .ssh directory exists
+    std::error_code dir_ec;
+    if (!fs::exists(ai_ssh_dir, dir_ec)) {
+        fs::create_directories(ai_ssh_dir, dir_ec);
+        if (dir_ec) {
+            utils::get_logger()->error("Cannot create .ssh dir for {}: {}", ai_user, dir_ec.message());
+            return false;
+        }
+        // Set ownership and permissions
+        auto chown_result = utils::exec_safe({"chown", ai_user + ":" + ai_user, ai_ssh_dir.string()});
+        if (chown_result.exit_code != 0) {
+            utils::get_logger()->warn("Failed to chown .ssh dir for {}", ai_user);
+        }
+        auto chmod_result = utils::exec_safe({"chmod", "700", ai_ssh_dir.string()});
+        if (chmod_result.exit_code != 0) {
+            utils::get_logger()->warn("Failed to chmod .ssh dir for {}", ai_user);
+        }
+    }
+
+    // Run ssh-keyscan as ai_user for each host
+    size_t success_count = 0;
+    for (const auto& host : hosts) {
+        // Use su to run ssh-keyscan as ai_user
+        // ssh-keyscan outputs to stdout, we append to ai_user's known_hosts
+        auto scan_result = utils::exec_safe(
+            {"su", "-", ai_user, "-c",
+             "ssh-keyscan -t rsa,ed25519,ecdsa " + host + " >> ~/.ssh/known_hosts 2>/dev/null || true"});
+
+        if (scan_result.exit_code == 0) {
+            success_count++;
+            utils::get_logger()->debug("Added host {} to ai-user {} known_hosts", host, ai_user);
+        } else {
+            utils::get_logger()->warn("Failed to scan host {} for ai-user {}: {}", host, ai_user, scan_result.stderr_output);
+        }
+    }
+
+    utils::get_logger()->info("Synced {} host(s) from {} to {} known_hosts", success_count, main_user, ai_user);
+    return success_count > 0;
+}
+
 }

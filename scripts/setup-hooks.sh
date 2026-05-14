@@ -121,11 +121,16 @@ echo ""
 echo -e "${CYAN}--- Step 5: post-merge hook ---${NC}"
 
 POST_MERGE="$PROJECT_DIR/.git/hooks/post-merge"
-if [ -f "$POST_MERGE" ]; then
-	log_ok ".git/hooks/post-merge exists"
+
+if [ "$CHECK_MODE" = "--check" ]; then
+	if [ -f "$POST_MERGE" ]; then
+		log_ok ".git/hooks/post-merge exists"
+	else
+		log_err ".git/hooks/post-merge not found"
+	fi
 else
-	if [ "$CHECK_MODE" != "--check" ]; then
-		cat >"$POST_MERGE" <<'POSTMERGE'
+	# Always create/update post-merge hook
+	cat >"$POST_MERGE" <<'POSTMERGE'
 #!/usr/bin/env bash
 # ai-mirror post-merge hook: deploy after merge/pull
 set -euo pipefail
@@ -135,14 +140,17 @@ PROJECT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
 echo "=== post-merge: deploying ai-mirror ==="
 cd "$PROJECT_DIR"
+
+# Self-update hooks from latest code
+if [ -f "scripts/setup-hooks.sh" ]; then
+	bash scripts/setup-hooks.sh 2>&1 || true
+fi
+
 bash install.sh 2>&1
 echo "=== deploy complete ==="
 POSTMERGE
-		chmod +x "$POST_MERGE"
-		log_ok "created .git/hooks/post-merge"
-	else
-		log_err ".git/hooks/post-merge not found"
-	fi
+	chmod +x "$POST_MERGE"
+	log_ok "updated .git/hooks/post-merge"
 fi
 
 # ============================================

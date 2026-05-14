@@ -63,7 +63,7 @@ PC_CONFIG="$PROJECT_DIR/.pre-commit-config.yaml"
 if [ -f "$PC_CONFIG" ]; then
 	log_ok ".pre-commit-config.yaml exists"
 else
-	log_err ".pre-commit-config.yaml not found"
+	log_err ".pre-commit-config.yaml not found (should be tracked in git)"
 fi
 
 # ============================================

@@ -314,6 +314,9 @@ static int do_configure(CommandContext& ctx, const core::UserInfo& state,
         ctx.ssh_mgr->setup_default_key_from_file(username, ctx.config.ssh.ai_default_key);
     }
 
+    // Sync known_hosts from main_user so AI user can SSH to known hosts
+    ctx.ssh_mgr->sync_known_hosts(main_user, username);
+
     ctx.graft->invalidate_cache();
     auto existing = ctx.graft->list_mounts(username);
 

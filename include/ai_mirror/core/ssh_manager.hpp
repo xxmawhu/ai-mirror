@@ -48,6 +48,11 @@ public:
     // Setup multiple default keys from SSHKeyEntry vector.
     KeySetupResult setup_default_keys(const std::string& ai_user, const std::vector<SSHKeyEntry>& default_keys);
 
+    // Sync known_hosts from main_user to ai_user by ssh-keyscan each host.
+    // Does NOT copy/link/bind-mount. Instead, runs ssh-keyscan as ai-user
+    // to populate ~/.ssh/known_hosts with same hosts as main_user.
+    bool sync_known_hosts(const std::string& main_user, const std::string& ai_user);
+
     fs::path get_public_key_path(const fs::path& key_path) const;
     bool test_connection(const std::string& username) const;
 

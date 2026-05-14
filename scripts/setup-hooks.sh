@@ -131,7 +131,7 @@ else
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
 echo "=== post-merge: deploying ai-mirror ==="
 cd "$PROJECT_DIR"

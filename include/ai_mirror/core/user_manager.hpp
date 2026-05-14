@@ -13,6 +13,8 @@ struct UserInfo {
   std::string username;
   std::string home_dir;
   std::string main_user;
+  std::string project_path; // canonical absolute path of the project
+  std::string path_hash;    // SHA256(project_path)[:6]
   uid_t uid;
   gid_t gid;
   bool exists;
@@ -43,6 +45,9 @@ public:
   std::vector<UserInfo> list_ai_users() const;
 
   static std::optional<UserInfo> read_state(const fs::path &project_dir);
+
+  // Compute path hash for a canonical path (first 6 hex chars of SHA256)
+  static std::string compute_path_hash(const fs::path &canonical_path);
 
   std::string get_prefix() const { return prefix_; }
 

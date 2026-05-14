@@ -2075,8 +2075,14 @@ int cmd_status([[maybe_unused]] bool verbose) {
     if (u.username.substr(0, expected_prefix.length()) != expected_prefix)
       continue;
     std::cout << "Project: " << u.username << std::endl;
-    std::cout << "  Home: " << u.home_dir << std::endl;
-    std::cout << "  UID:  " << u.uid << std::endl;
+    std::cout << "  Home:  " << u.home_dir << std::endl;
+    std::cout << "  UID:   " << u.uid << std::endl;
+    if (!u.project_path.empty()) {
+      std::cout << "  Path:  " << u.project_path << std::endl;
+    }
+    if (!u.path_hash.empty()) {
+      std::cout << "  Hash:  " << u.path_hash << std::endl;
+    }
 
     bool all_healthy = true;
 

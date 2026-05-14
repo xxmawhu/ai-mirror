@@ -120,10 +120,12 @@ am cd /path/to/project
 
 ```json
 {
-  "username": "imaxx_myproject",
+  "username": "i_maxx_a1b2c3",
   "uid": 10000001,
   "gid": 10000001,
   "home_dir": "/mnt/beegfs_data/usr/maxx/ai/myproject",
+  "project_path": "/mnt/beegfs_data/usr/maxx/projects/myproject",
+  "path_hash": "a1b2c3",
   "main_user": "maxx",
   "timestamp": 1700000000123456
 }
@@ -135,15 +137,15 @@ am cd /path/to/project
 ### 用户名生成规则
 
 ```
-格式: {prefix}_{main_user}_{sanitized_project_name}
-示例: i_maxx_myproject     (prefix=i, main_user=maxx)
-     i_maxx_ai-mirror     (项目名中的 - 保留)
+格式: {prefix}_{main_user}_{path_hash6}
+示例: i_maxx_a1b2c3        (prefix=i, main_user=maxx, hash=SHA256(path)[:6])
 ```
 
-- sanitized：仅保留 `[a-z0-9_-]`，其他字符替换为 `-`
+- `path_hash`: SHA256(canonical_project_path) 前 6 个字符（hex）
+- 碰撞检测：hash 冲突时直接报错终止，不做自动消解
 - 最大长度：32 字符（Linux 限制）
 - 首字符不能为数字
-- 下划线分隔符防止前缀碰撞（`alice` vs `alice_bob`）
+- 优势：同名项目不同路径生成不同用户名，避免目录名碰撞
 
 ### UID 分配公式
 

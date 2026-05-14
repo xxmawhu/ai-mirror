@@ -71,6 +71,12 @@ static std::string make_state_content(const UserInfo &info,
   base += "  \"main_user\": \"";
   base += main_user;
   base += "\",\n";
+  base += "  \"project_path\": \"";
+  base += info.project_path;
+  base += "\",\n";
+  base += "  \"path_hash\": \"";
+  base += info.path_hash;
+  base += "\",\n";
 
   auto now = std::chrono::system_clock::now();
   auto epoch = now.time_since_epoch();
@@ -168,8 +174,29 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
     info.gid = j.value("gid", 0);
     info.home_dir = j.value("home_dir", "");
     info.main_user = j.value("main_user", "");
+    info.project_path = j.value("project_path", "");
+    info.path_hash = j.value("path_hash", "");
     info.exists = true;
     info.error = "";
+
+    // Backward compatibility: if project_path/path_hash missing, derive from
+    // username Username format: {prefix}{user}_{hash6} → extract hash6 as
+    // path_hash
+    if (info.path_hash.empty() && !info.username.empty()) {
+      // Find last underscore and extract 6-char hash suffix
+      auto last_underscore = info.username.rfind('_');
+      if (last_underscore != std::string::npos &&
+          info.username.length() - last_underscore - 1 == 6) {
+        info.path_hash = info.username.substr(last_underscore + 1);
+        utils::get_logger()->debug(
+            "Derived path_hash '{}' from username '{}' (legacy format)",
+            info.path_hash, info.username);
+      }
+    }
+    // project_path defaults to home_dir if not stored
+    if (info.project_path.empty()) {
+      info.project_path = info.home_dir;
+    }
 
     // Verify ownership: project directory owner must match uid in state file
     struct stat st;
@@ -226,6 +253,10 @@ static unsigned int compute_next_seq(uid_t base_uid) {
   }
   endpwent();
   return max_seq + 1;
+}
+
+std::string UserManager::compute_path_hash(const fs::path &canonical_path) {
+  return sha256_hex(canonical_path.string()).substr(0, 6);
 }
 
 UserManager::UserManager(const std::string &prefix,
@@ -388,7 +419,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     std::string err = "Project path not allowed for user '" + main_user +
                       "': " + proj.string();
     utils::get_logger()->error("{}", err);
-    return {"", "", "", 0, 0, false, err};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   std::string main_home = utils::get_effective_home();
@@ -399,7 +430,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     std::string err =
         "Cannot determine home directory for user '" + main_user + "'";
     utils::get_logger()->error("{}", err);
-    return {"", "", "", 0, 0, false, err};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   std::error_code ec;
@@ -409,7 +440,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     if (ec) {
       std::string err = "Cannot resolve project path: " + proj.string();
       utils::get_logger()->error("{}", err);
-      return {"", "", "", 0, 0, false, err};
+      return {"", "", "", "", "", 0, 0, false, err};
     }
   }
 
@@ -423,7 +454,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
   if (main_home_canon.empty()) {
     std::string err = "Cannot canonicalize home directory: " + main_home;
     utils::get_logger()->error("{}", err);
-    return {"", "", "", 0, 0, false, err};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   std::string ps = abs_proj.string();
@@ -433,14 +464,14 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
   if (!utils::is_path_allowed(abs_proj, main_user, allowed_bases_)) {
     std::string err = "Project path not accessible by user: " + ps;
     utils::get_logger()->error("{}", err);
-    return {"", "", "", 0, 0, false, err};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   // Also check SYSTEM_DIRS blacklist
   if (!security::validate_path_allowed(abs_proj)) {
     std::string err = "Project path in system directory (not allowed): " + ps;
     utils::get_logger()->error("{}", err);
-    return {"", "", "", 0, 0, false, err};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   auto state = read_state_file(abs_proj);
@@ -476,18 +507,23 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
                       proj.string() +
                       "': directory name must contain only [a-z0-9_-], no "
                       "leading digit, max 32 chars";
-    return {"", "", "", 0, 0, false, err};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
   std::string username = std::move(*username_opt);
+  std::string path_hash = compute_path_hash(abs_proj);
+  std::string project_path_str = abs_proj.string();
 
   if (user_exists(username)) {
     auto info = get_user_info(username);
     if (!info) {
       utils::get_logger()->error("User '{}' exists but getpwnam failed",
                                  username);
-      return {username, proj.string(),           "", 0, 0,
+      return {username, proj.string(),           "", "", "", 0, 0,
               false,    "getpwnam lookup failed"};
     }
+    // Fill project_path and path_hash for existing user
+    info->project_path = project_path_str;
+    info->path_hash = path_hash;
     write_state_file(abs_proj, *info, main_user);
     utils::get_logger()->info(
         "User already exists: {} (uid={}), wrote state file", info->username,
@@ -507,12 +543,15 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     std::string err =
         "useradd failed for '" + username + "': see logs for details";
     utils::get_logger()->error("{}", err);
-    return {username, home_dir.string(), "", new_uid, new_gid, false, err};
+    return {username,  home_dir.string(), "",      project_path_str,
+            path_hash, new_uid,           new_gid, false,
+            err};
   }
 
   auto info = get_user_info(username);
   if (!info) {
-    UserInfo created{username, home_dir.string(), "", new_uid, new_gid, true,
+    UserInfo created{username,  home_dir.string(), "",      project_path_str,
+                     path_hash, new_uid,           new_gid, true,
                      ""};
     write_state_file(home_dir, created, main_user);
     utils::get_logger()->info("Created ai-user: {} (uid={})", username,
@@ -553,7 +592,8 @@ UserManager::get_user_info(const std::string &username) const {
   if (!pw) {
     return std::nullopt;
   }
-  return UserInfo{username, pw->pw_dir, "", pw->pw_uid, pw->pw_gid, true, {}};
+  return UserInfo{username,   pw->pw_dir, "",   "", "",
+                  pw->pw_uid, pw->pw_gid, true, {}};
 }
 
 bool UserManager::user_exists(const std::string &username) const {
@@ -569,7 +609,16 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
     std::string name(pw->pw_name);
     if (name.length() > prefix_str.length() &&
         name.substr(0, prefix_str.length()) == prefix_str) {
-      users.push_back({name, pw->pw_dir, "", pw->pw_uid, pw->pw_gid, true, ""});
+      UserInfo info{name,       pw->pw_dir, "",   "", "",
+                    pw->pw_uid, pw->pw_gid, true, ""};
+      // Try to read state file for project_path and path_hash
+      auto state = read_state_file(pw->pw_dir);
+      if (state) {
+        info.project_path = state->project_path;
+        info.path_hash = state->path_hash;
+        info.main_user = state->main_user;
+      }
+      users.push_back(info);
     }
   }
   endpwent();

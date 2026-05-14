@@ -9,7 +9,7 @@ ai-mirror 使用 Linux bind mount 将主用户的配置文件只读挂载到 AI 
 ```cpp
 fs::path PathResolver::to_ai_user_path(
     const fs::path& main_path,      // 主用户路径，如 ~/.bashrc
-    const std::string& ai_user,     // AI 用户名，如 imaxx_project
+    const std::string& ai_user,     // AI 用户名，如 i_maxx_a1b2c3
     const std::string& main_user,   // 主用户名，如 maxx
     const fs::path& ai_user_home    // AI 用户 home 目录
 );

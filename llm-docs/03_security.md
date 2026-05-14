@@ -194,7 +194,9 @@ sshd `StrictModes=yes` 要求：
 bool validate_username(const std::string& username);
 ```
 
-- 仅 `[a-z0-9_]`（无连字符，确保与 path_resolver 检测逻辑一致）
+- 格式：`{prefix}_{main_user}_{path_hash6}`
+- `path_hash6`: 6 位 hex 字符（`[a-f0-9]`）
+- 仅 `[a-z0-9_]`（无连字符）
 - 最大 32 字符
 - 首字符不能为数字
 

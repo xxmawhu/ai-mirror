@@ -88,8 +88,9 @@ am list
 
 ## 测试覆盖
 
-- C++ 单元测试：commands, config, graft, path_validator, user_manager
-- Shell 集成测试：create/cd, SSH, profile
+- C++ 单元测试：commands, config, graft, path_validator, user_manager, known_hosts (33项), watch_stats
+- Shell 单元测试：commit-hook.sh (11项), setup-hooks.sh (13项)
+- Shell 集成测试：create/cd, SSH, profile, mv ownership, popen
 - Docker CI：Ubuntu 22.04, 24.04
 - 安全审计：SEC-145 ~ SEC-157 已修复
 

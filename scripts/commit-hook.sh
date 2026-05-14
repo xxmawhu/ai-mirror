@@ -24,13 +24,13 @@ log_status() {
 	local detail=$3
 	if [ $exit_code -eq 0 ]; then
 		echo -e "${GREEN}  ✅ PASSED${NC}: ${name}"
-		((PASS++))
+		PASS=$((PASS + 1))
 	else
 		echo -e "${RED}  ❌ FAILED${NC}: ${name}"
 		if [ -n "$detail" ]; then
 			echo -e "${YELLOW}    ${detail}${NC}"
 		fi
-		((FAIL++))
+		FAIL=$((FAIL + 1))
 	fi
 }
 
@@ -74,8 +74,10 @@ echo -e "${CYAN}--- Phase 2: Unit Tests ---${NC}"
 TEST_DIR="$PROJECT_DIR/tests"
 if [ -f "$TEST_DIR/run_tests.sh" ]; then
 	cd "$TEST_DIR"
-	TEST_OUTPUT=$(bash run_tests.sh 2>&1) || true
+	set +e
+	TEST_OUTPUT=$(bash run_tests.sh 2>&1)
 	TEST_EXIT=$?
+	set -e
 	cd "$PROJECT_DIR"
 
 	if [ $TEST_EXIT -eq 0 ]; then

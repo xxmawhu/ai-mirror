@@ -24,7 +24,7 @@ ERRORS=0
 log_ok() { echo -e "${GREEN}  ✅ $1${NC}"; }
 log_err() {
 	echo -e "${RED}  ❌ $1${NC}"
-	((ERRORS++))
+	ERRORS=$((ERRORS + 1))
 }
 log_warn() { echo -e "${YELLOW}  ⚠️  $1${NC}"; }
 log_info() { echo -e "${CYAN}  ℹ️  $1${NC}"; }

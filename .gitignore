@@ -1,150 +1,63 @@
-# Byte-compiled / optimized / DLL files
+# Internal/dev-only files (not for public release)
+AGENTS.md
+issues/
+end_task/
+plan/
+memory/
+log/
+.cache/
+verification/
+pyproject.toml
+docker/
+tests/
+release.sh
+.dockerignore
+
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
+*.pyc
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+dist/
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# C/C++ build artifacts
+*.o
+*.so
+*.a
+build/
+build-release/
+build-test/
+build-test2/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-*.out
-tags
-*.html
-*.txt
-!CMakeLists.txt
-out
-catboost_info
+# IDE / editor
 .vscode/
-log
+tags
+*.out
+
+# Data / logs
 *.log
+*.h5
+*.parquet
+*.csv
 *.png
 *.s
 *.i
-*.h5
-miniconda.sh
 data/
-compressedLog
+compressedLog/
+log/
+
+# Environment
+.env
+.venv/
+env/
+
+# Tool state
 .opencode/
 .opencode_share/
 .sisyphus/
 history_log/
+miniconda.sh

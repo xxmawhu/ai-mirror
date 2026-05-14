@@ -23,15 +23,10 @@ repos:
         types_or: [c++, c]
         args: ['--style=file']
 
-  # CMake formatting (optional)
+  # CMake formatting
   - repo: https://github.com/cheshirekow/cmake-format-precommit
     rev: v0.6.13
     hooks:
       - id: cmake-format
         types: [file]
         files: \.(cmake|CMakeLists\.txt)$
-
-# Local hooks (via scripts/commit-hook.sh)
-# - clang-format check
-# - cmake build
-# - unit tests

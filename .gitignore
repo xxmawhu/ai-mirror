@@ -6,7 +6,6 @@ plan/
 memory/
 log/
 .cache/
-.pre-commit-config.yaml
 verification/
 pyproject.toml
 docker/

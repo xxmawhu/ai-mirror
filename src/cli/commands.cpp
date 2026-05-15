@@ -73,6 +73,9 @@ static CommandContext make_context(bool verbose) {
   return ctx;
 }
 
+// Forward declaration for use in do_configure's Third pass lambda
+static bool safe_chown_path(const fs::path &p, const std::string &owner);
+
 static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                         const fs::path &proj, const std::string &main_user) {
   std::string username = state.username;
@@ -745,7 +748,26 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
 
         // Recurse into sub-directories (non-mount, non-symlink)
         if (S_ISDIR(st.st_mode)) {
-          local_fixes += recursive_chown(ep, depth + 1);
+          // .git directories need full recursive chown regardless of depth
+          // limit because git internals (objects/pack/, refs/heads/feature/)
+          // can be 4-5+ levels deep, and incorrect ownership causes Permission
+          // denied on git ops.
+          if (ep.filename() == ".git") {
+            if (safe_chown_path(ep, username)) {
+              utils::get_logger()->info("Third pass: deep chown .git -> {}",
+                                        username);
+              local_fixes++;
+            } else {
+              // error: chown .git failed, git operations may fail with
+              // Permission denied downgrade to warn because ai-user can still
+              // function, only git ops affected
+              utils::get_logger()->warn(
+                  "Third pass: deep chown .git failed (git ops may fail): {}",
+                  ep.string());
+            }
+          } else {
+            local_fixes += recursive_chown(ep, depth + 1);
+          }
         }
       }
       return local_fixes;
@@ -1027,6 +1049,11 @@ static bool chown_recursive_fd(int dirfd, uid_t uid, gid_t gid, int depth = 0) {
     }
 
     if (S_ISDIR(st.st_mode)) {
+      // chown the directory itself before recursing into it
+      if (fchown(fd, uid, gid) != 0) {
+        utils::get_logger()->warn("safe_chown_path: fchown dir {} failed: {}",
+                                  entry->d_name, strerror(errno));
+      }
       if (!chown_recursive_fd(fd, uid, gid, depth + 1)) {
         closedir(d);
         return false;

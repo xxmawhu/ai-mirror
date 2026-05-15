@@ -20,7 +20,7 @@ RUN mkdir -p /etc/ai-mirror /var/lib/ai-mirror /home/testuser/projects/testproj 
     groupadd -f ai-mirror && \
     usermod -aG ai-mirror root
 
-COPY tests/run_tests.sh tests/test_stale_mount.sh /tmp/
-RUN chmod +x /tmp/run_tests.sh /tmp/test_stale_mount.sh
+COPY tests/run_tests.sh tests/test_stale_mount.sh tests/test_git_chown.sh /tmp/
+RUN chmod +x /tmp/run_tests.sh /tmp/test_stale_mount.sh /tmp/test_git_chown.sh
 
-CMD ["/tmp/test_stale_mount.sh"]
+CMD ["/tmp/test_git_chown.sh"]

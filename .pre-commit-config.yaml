@@ -30,3 +30,13 @@ repos:
       - id: cmake-format
         types: [file]
         files: \.(cmake|CMakeLists\.txt)$
+
+  # Post-merge hook: auto-install after git pull
+  - repo: local
+    hooks:
+      - id: post-merge-install
+        name: post-merge install dependencies
+        entry: scripts/post-merge-hook.sh
+        language: script
+        stages: [post-merge]
+        always_run: true

@@ -31,8 +31,11 @@ NC='\033[0m'
 
 # ---- Helpers ----
 _log() {
-	echo -e "$1"
-	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$1" >>"$INSTALL_LOG"
+	local ts
+	ts=$(date '+%Y-%m-%d %H:%M:%S')
+	local msg="${ts} $1"
+	echo -e "$msg"
+	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$msg" >>"$INSTALL_LOG"
 }
 
 log() { _log "${GREEN}[install]${NC} $*"; }

@@ -885,8 +885,9 @@ bool SSHManager::test_connection(const std::string &username) const {
   return result.exit_code == 0;
 }
 
-// Sync known_hosts from main_user to ai_user by ssh-keyscan.
-// Does NOT copy file - instead runs ssh-keyscan as ai-user for each host.
+// Sync known_hosts from main_user to ai_user by file copy.
+// Copies main_user's known_hosts to ai_user's .ssh/ directory.
+// Handles hashed entries (| prefix) that ssh-keyscan cannot process.
 bool SSHManager::sync_known_hosts(const std::string &main_user,
                                   const std::string &ai_user) {
   if (!utils::validate_username(main_user) ||
@@ -912,30 +913,6 @@ bool SSHManager::sync_known_hosts(const std::string &main_user,
     return true; // Not an error, just nothing to sync
   }
 
-  // Parse known_hosts to extract host names
-  // Format: host1,host2 key-type key-data [comment]
-  // Hashed hosts: @hashed-host key-type key-data
-  std::ifstream ifs(main_known_hosts);
-  if (!ifs.is_open()) {
-    utils::get_logger()->error("Cannot open main user known_hosts: {}",
-                               main_known_hosts.string());
-    return false;
-  }
-
-  std::vector<std::string> hosts;
-  std::string line;
-  while (std::getline(ifs, line)) {
-    auto parsed = parse_known_hosts_hosts(line);
-    hosts.insert(hosts.end(), parsed.begin(), parsed.end());
-  }
-  ifs.close();
-
-  if (hosts.empty()) {
-    utils::get_logger()->info(
-        "No non-hashed hosts in main user known_hosts, skipping sync");
-    return true;
-  }
-
   // Get ai_user info
   struct passwd *ai_pw = getpwnam(ai_user.c_str());
   if (!ai_pw) {
@@ -943,6 +920,7 @@ bool SSHManager::sync_known_hosts(const std::string &main_user,
     return false;
   }
   fs::path ai_ssh_dir = fs::path(ai_pw->pw_dir) / ".ssh";
+  fs::path ai_known_hosts = ai_ssh_dir / "known_hosts";
 
   // Ensure ai_user's .ssh directory exists
   std::error_code dir_ec;
@@ -953,41 +931,54 @@ bool SSHManager::sync_known_hosts(const std::string &main_user,
                                  dir_ec.message());
       return false;
     }
-    // Set ownership and permissions
-    auto chown_result = utils::exec_safe(
-        {"chown", ai_user + ":" + ai_user, ai_ssh_dir.string()});
-    if (chown_result.exit_code != 0) {
-      utils::get_logger()->warn("Failed to chown .ssh dir for {}", ai_user);
-    }
-    auto chmod_result = utils::exec_safe({"chmod", "700", ai_ssh_dir.string()});
-    if (chmod_result.exit_code != 0) {
-      utils::get_logger()->warn("Failed to chmod .ssh dir for {}", ai_user);
-    }
   }
 
-  // Run ssh-keyscan as ai_user for each host
-  size_t success_count = 0;
-  for (const auto &host : hosts) {
-    // Use su to run ssh-keyscan as ai_user
-    // ssh-keyscan outputs to stdout, we append to ai_user's known_hosts
-    auto scan_result =
-        utils::exec_safe({"su", "-", ai_user, "-c",
-                          "ssh-keyscan -t rsa,ed25519,ecdsa " + host +
-                              " >> ~/.ssh/known_hosts 2>/dev/null || true"});
-
-    if (scan_result.exit_code == 0) {
-      success_count++;
-      utils::get_logger()->debug("Added host {} to ai-user {} known_hosts",
-                                 host, ai_user);
-    } else {
-      utils::get_logger()->warn("Failed to scan host {} for ai-user {}: {}",
-                                host, ai_user, scan_result.stderr_output);
-    }
+  // Copy known_hosts file (overwrite if exists)
+  std::error_code copy_ec;
+  fs::copy_file(main_known_hosts, ai_known_hosts,
+                fs::copy_options::overwrite_existing, copy_ec);
+  if (copy_ec) {
+    utils::get_logger()->error("Failed to copy known_hosts from {} to {}: {}",
+                               main_known_hosts.string(),
+                               ai_known_hosts.string(), copy_ec.message());
+    return false;
   }
 
-  utils::get_logger()->info("Synced {} host(s) from {} to {} known_hosts",
-                            success_count, main_user, ai_user);
-  return success_count > 0;
+  // Set ownership to ai_user (critical: without this ai_user cannot read the
+  // file)
+  auto chown_result = utils::exec_safe(
+      {"chown", ai_user + ":" + ai_user, ai_known_hosts.string()});
+  if (chown_result.exit_code != 0) {
+    utils::get_logger()->error("Failed to chown known_hosts for {}", ai_user);
+    return false;
+  }
+
+  // Set permissions (600: owner read/write only, no group/other access)
+  auto chmod_result =
+      utils::exec_safe({"chmod", "600", ai_known_hosts.string()});
+  if (chmod_result.exit_code != 0) {
+    utils::get_logger()->error("Failed to chmod known_hosts for {}", ai_user);
+    return false;
+  }
+
+  // Ensure .ssh directory ownership and permissions are correct
+  // (covers both newly created and pre-existing directories)
+  auto dir_chown =
+      utils::exec_safe({"chown", ai_user + ":" + ai_user, ai_ssh_dir.string()});
+  if (dir_chown.exit_code != 0) {
+    utils::get_logger()->error("Failed to chown .ssh dir for {}", ai_user);
+    return false;
+  }
+  auto dir_chmod = utils::exec_safe({"chmod", "700", ai_ssh_dir.string()});
+  if (dir_chmod.exit_code != 0) {
+    utils::get_logger()->error("Failed to chmod .ssh dir for {}", ai_user);
+    return false;
+  }
+
+  utils::get_logger()->info(
+      "Synced known_hosts from {} to {} (file copy, includes hashed entries)",
+      main_user, ai_user);
+  return true;
 }
 
 } // namespace ai_mirror::core

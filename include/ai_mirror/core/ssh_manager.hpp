@@ -84,9 +84,10 @@ public:
   setup_default_keys(const std::string &ai_user,
                      const std::vector<SSHKeyEntry> &default_keys);
 
-  // Sync known_hosts from main_user to ai_user by ssh-keyscan each host.
-  // Does NOT copy/link/bind-mount. Instead, runs ssh-keyscan as ai-user
-  // to populate ~/.ssh/known_hosts with same hosts as main_user.
+  // Sync known_hosts from main_user to ai_user by file copy.
+  // Copies main_user's ~/.ssh/known_hosts to ai_user's ~/.ssh/known_hosts.
+  // Handles hashed entries (| prefix) that ssh-keyscan cannot process.
+  // After copy, chown/chmod ensures proper ownership (ai_user:ai_user, 600).
   bool sync_known_hosts(const std::string &main_user,
                         const std::string &ai_user);
 

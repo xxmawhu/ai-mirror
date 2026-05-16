@@ -99,24 +99,31 @@ static std::string make_state_content(const UserInfo &info,
 
 static bool verify_state_content(const std::string &content) {
   // PoW verification: md5 of content must start with "000"
-  // Supports both formats:
-  //   - New format: no "hash" field → md5(content) starts with "000"
-  //   - Legacy format: has "hash" field → stored hash is the PoW proof,
-  //     verify it starts with "000" (attackers cannot forge valid PoW)
+  // Supports three formats:
+  //   - Legacy hash format: has "hash" field → stored hash starts with "000"
+  //   - New PoW format: has "project_path"/"path_hash" → md5(content) starts
+  //   with "000"
+  //   - Old format: no "hash" AND no "project_path"/"path_hash" → trust
+  //   directly (pre-PoW)
   auto j = nlohmann::json::parse(content, nullptr, false);
   if (j.is_discarded())
     return false;
 
-  if (!j.contains("hash")) {
-    // New format: verify as-is
+  // Legacy hash format: verify stored hash starts with "000"
+  if (j.contains("hash")) {
+    std::string stored_hash = j["hash"].get<std::string>();
+    return stored_hash.substr(0, 3) == "000";
+  }
+
+  // New PoW format: has project_path and path_hash fields
+  if (j.contains("project_path") || j.contains("path_hash")) {
     return md5_hex(content).substr(0, 3) == "000";
   }
 
-  // Legacy format: the stored hash field IS the PoW proof.
-  // If hash starts with "000", the original content passed PoW validation.
-  // We don't need to recompute MD5 - attackers cannot forge a valid PoW hash.
-  std::string stored_hash = j["hash"].get<std::string>();
-  return stored_hash.substr(0, 3) == "000";
+  // Old format (pre-PoW): trust directly - these files were created before PoW
+  // was introduced, they only have
+  // username/uid/gid/home_dir/main_user/timestamp
+  return true;
 }
 
 static bool write_state_file(const fs::path &home_dir, const UserInfo &info,

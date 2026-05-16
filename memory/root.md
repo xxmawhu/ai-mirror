@@ -21,8 +21,9 @@
 - 正常流程使用 info/debug
 
 ## 5. 文件操作
-- 不复制/不链接/不 bind mount 敏感文件（如 known_hosts）
-- 使用 ssh-keyscan 等工具独立获取信息
+- 不复制/不链接/不 bind mount 敏感文件（例外：known_hosts 可复制到 AI user 的 .ssh 目录）
+- SSH known_hosts 复制仅限：同主用户创建的 AI user，复制后 chown/chmod 确保权限正确
+- 其他敏感文件（如私钥、证书）禁止复制
 - 所有路径操作使用 fs::path，不硬编码
 
 ## 6. BeeGFS 兼容性

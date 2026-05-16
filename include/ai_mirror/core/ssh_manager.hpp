@@ -9,10 +9,39 @@ namespace fs = std::filesystem;
 
 namespace ai_mirror::core {
 
+// Parse known_hosts line and extract hostnames.
+// Returns empty vector for comment lines, empty lines, or hashed entries.
+// Hashed entries are recognized by @ or | prefix and cannot be scanned.
+// Multiple hosts (comma-separated) return only the first hostname.
+// Defined in header for testability without heavy link dependencies.
+inline std::vector<std::string>
+parse_known_hosts_hosts(const std::string &line) {
+  std::vector<std::string> hosts;
+  if (line.empty() || line[0] == '#')
+    return hosts;
+
+  auto space_pos = line.find(' ');
+  if (space_pos == std::string::npos)
+    return hosts;
+
+  std::string host_field = line.substr(0, space_pos);
+  auto comma_pos = host_field.find(',');
+  if (comma_pos != std::string::npos) {
+    std::string first_host = host_field.substr(0, comma_pos);
+    if (!first_host.empty() && first_host[0] != '@' && first_host[0] != '|') {
+      hosts.push_back(first_host);
+    }
+  } else if (!host_field.empty() && host_field[0] != '@' &&
+             host_field[0] != '|') {
+    hosts.push_back(host_field);
+  }
+  return hosts;
+}
+
 struct KeySetupResult {
-    bool success = false;
-    size_t authorized_count = 0;
-    size_t total_count = 0;
+  bool success = false;
+  size_t authorized_count = 0;
+  size_t total_count = 0;
 };
 
 // SSH key management for passwordless access from main user to ai-user.
@@ -22,47 +51,56 @@ struct KeySetupResult {
 // prediction-based symlink placement attacks.
 class SSHManager {
 public:
-    SSHManager();
+  SSHManager();
 
-    // Generate SSH key pair at specified path. Uses ssh-keygen with
-    // specified key type (ed25519, rsa, ecdsa).
-    bool generate_key_pair(const fs::path& key_path, const std::string& key_type = "ed25519");
+  // Generate SSH key pair at specified path. Uses ssh-keygen with
+  // specified key type (ed25519, rsa, ecdsa).
+  bool generate_key_pair(const fs::path &key_path,
+                         const std::string &key_type = "ed25519");
 
-    // Authorize a public key from file for the specified ai-user.
-    // Public key file is validated with validate_ssh_public_key() and
-    // read safely using lstat + O_NOFOLLOW to prevent symlink attacks.
-    // Existing authorized_keys content is preserved and deduplicated.
-    bool authorize_key(const std::string& username, const fs::path& public_key_path);
+  // Authorize a public key from file for the specified ai-user.
+  // Public key file is validated with validate_ssh_public_key() and
+  // read safely using lstat + O_NOFOLLOW to prevent symlink attacks.
+  // Existing authorized_keys content is preserved and deduplicated.
+  bool authorize_key(const std::string &username,
+                     const fs::path &public_key_path);
 
-    // Authorize a public key string directly for the specified ai-user.
-    // Key format validated before writing. Tempfile created with
-    // O_EXCL|O_NOFOLLOW, then atomically renamed to final location.
-    bool authorize_public_key_string(const std::string& username, const std::string& public_key);
+  // Authorize a public key string directly for the specified ai-user.
+  // Key format validated before writing. Tempfile created with
+  // O_EXCL|O_NOFOLLOW, then atomically renamed to final location.
+  bool authorize_public_key_string(const std::string &username,
+                                   const std::string &public_key);
 
-    // Setup passwordless SSH from main_user to ai_user.
-    bool setup_passwordless(const std::string& main_user, const std::string& ai_user);
+  // Setup passwordless SSH from main_user to ai_user.
+  bool setup_passwordless(const std::string &main_user,
+                          const std::string &ai_user);
 
-    // Setup default key from configured ai_default_key file path.
-    bool setup_default_key_from_file(const std::string& ai_user, const fs::path& public_key_path);
+  // Setup default key from configured ai_default_key file path.
+  bool setup_default_key_from_file(const std::string &ai_user,
+                                   const fs::path &public_key_path);
 
-    // Setup multiple default keys from SSHKeyEntry vector.
-    KeySetupResult setup_default_keys(const std::string& ai_user, const std::vector<SSHKeyEntry>& default_keys);
+  // Setup multiple default keys from SSHKeyEntry vector.
+  KeySetupResult
+  setup_default_keys(const std::string &ai_user,
+                     const std::vector<SSHKeyEntry> &default_keys);
 
-    // Sync known_hosts from main_user to ai_user by ssh-keyscan each host.
-    // Does NOT copy/link/bind-mount. Instead, runs ssh-keyscan as ai-user
-    // to populate ~/.ssh/known_hosts with same hosts as main_user.
-    bool sync_known_hosts(const std::string& main_user, const std::string& ai_user);
+  // Sync known_hosts from main_user to ai_user by file copy.
+  // Copies main_user's ~/.ssh/known_hosts to ai_user's ~/.ssh/known_hosts.
+  // Handles hashed entries (| prefix) that ssh-keyscan cannot process.
+  // After copy, chown/chmod ensures proper ownership (ai_user:ai_user, 600).
+  bool sync_known_hosts(const std::string &main_user,
+                        const std::string &ai_user);
 
-    fs::path get_public_key_path(const fs::path& key_path) const;
-    bool test_connection(const std::string& username) const;
+  fs::path get_public_key_path(const fs::path &key_path) const;
+  bool test_connection(const std::string &username) const;
 
-    void set_key_type(const std::string& type) { key_type_ = type; }
-    void set_key_path(const fs::path& path);
+  void set_key_type(const std::string &type) { key_type_ = type; }
+  void set_key_path(const fs::path &path);
 
 private:
-    std::string key_type_ = "ed25519";
-    fs::path key_path_;
-    bool ensure_ssh_dir(const std::string& username);
+  std::string key_type_ = "ed25519";
+  fs::path key_path_;
+  bool ensure_ssh_dir(const std::string &username);
 };
 
-}
+} // namespace ai_mirror::core

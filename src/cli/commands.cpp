@@ -1918,13 +1918,26 @@ int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
 
   std::string username = project_or_user;
   if (!utils::validate_username(username)) {
-    auto derived = ctx.user_mgr->derive_username(project_or_user);
-    if (!derived) {
-      std::cerr << "Cannot derive valid username for: " << project_or_user
-                << std::endl;
-      return 1;
+    // Try reading from .am_status first (backward compatibility)
+    auto proj_opt = core::PathResolver::resolve(project_or_user);
+    if (proj_opt) {
+      auto state = core::UserManager::read_state(*proj_opt);
+      if (state && !state->username.empty()) {
+        username = state->username;
+        utils::get_logger()->info(
+            "cmd_force_destroy: using username '{}' from .am_status", username);
+      }
     }
-    username = std::move(*derived);
+    // If still not valid, derive from path hash
+    if (!utils::validate_username(username)) {
+      auto derived = ctx.user_mgr->derive_username(project_or_user);
+      if (!derived) {
+        std::cerr << "Cannot derive valid username for: " << project_or_user
+                  << std::endl;
+        return 1;
+      }
+      username = std::move(*derived);
+    }
   }
   if (!ctx.user_mgr->user_exists(username)) {
     std::cerr << "User not found: " << username << std::endl;
@@ -1976,15 +1989,33 @@ int cmd_rm(const std::string &project_path, bool verbose) {
   }
   fs::path proj = *proj_opt;
 
-  auto derived = ctx.user_mgr->derive_username(proj.string());
-  if (!derived) {
-    std::cerr << "Username collision: cannot derive unique username for: "
-              << proj.string() << std::endl;
-    return 1;
-  }
-  std::string username = std::move(*derived);
-
+  // Priority 1: read username from .am_status (backward compatibility with old
+  // format) Priority 2: derive username using new hash-based naming
+  std::string username;
   std::string main_user = utils::get_effective_username();
+
+  auto state = core::UserManager::read_state(proj);
+  if (state && !state->username.empty()) {
+    username = state->username;
+    // Use main_user from state if available (more accurate)
+    if (!state->main_user.empty()) {
+      main_user = state->main_user;
+    }
+    utils::get_logger()->info("cmd_rm: using username '{}' from .am_status",
+                              username);
+  } else {
+    // No .am_status, derive username using hash-based naming
+    auto derived = ctx.user_mgr->derive_username(proj.string());
+    if (!derived) {
+      std::cerr << "Username collision: cannot derive unique username for: "
+                << proj.string() << std::endl;
+      return 1;
+    }
+    username = std::move(*derived);
+    utils::get_logger()->info("cmd_rm: derived username '{}' from path hash",
+                              username);
+  }
+
   if (!validate_ai_user_ownership(username, main_user,
                                   ctx.config.user.prefix)) {
     std::cerr << "ai_user '" << username << "' does not belong to user '"

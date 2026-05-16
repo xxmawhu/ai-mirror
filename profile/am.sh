@@ -164,7 +164,13 @@ am() {
 			fi
 			# SSH to AI user: start interactive login shell
 			# The ai user's HOME is set to the project directory, so no explicit cd needed
-			ssh -tt -i "$ssh_key" -o IdentitiesOnly=yes "${user}@localhost"
+			# StrictHostKeyChecking=accept-new: auto-accept new hosts, verify existing (MITM protection)
+			# UserKnownHostsFile: ensure known_hosts is used from AI user's ~/.ssh/
+			ssh -tt -i "$ssh_key" \
+				-o IdentitiesOnly=yes \
+				-o StrictHostKeyChecking=accept-new \
+				-o UserKnownHostsFile=~/.ssh/known_hosts \
+				"${user}@localhost"
 			;;
 		cd)
 			# Validate path

@@ -1,6 +1,27 @@
 cmake_minimum_required(VERSION 3.28)
 project(ai-mirror VERSION 0.1.0 LANGUAGES CXX)
 
+# Get git short hash for BUILD version
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE AI_MIRROR_BUILD
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+else()
+    set(AI_MIRROR_BUILD "unknown")
+endif()
+
+# Configure version header
+configure_file(
+    ${CMAKE_SOURCE_DIR}/include/ai_mirror/version.hpp.in
+    ${CMAKE_SOURCE_DIR}/include/ai_mirror/version.hpp
+    @ONLY
+)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

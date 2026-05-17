@@ -13,6 +13,9 @@ tests/
 release.sh
 .dockerignore
 
+# Auto-generated version header (from version.hpp.in via cmake)
+include/ai_mirror/version.hpp
+
 # Python
 __pycache__/
 *.pyc

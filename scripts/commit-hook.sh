@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
 # ai-mirror commit-hook: three-phase validation
+# Phase 0: Version check (version.hpp.in must be updated)
 # Phase 1: Code check (clang-format dry-run)
-# Phase 2: Build verification
+# Phase 2: Build verification (cmake)
 # Phase 3: Unit tests
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="${PROJECT_DIR}/build-test"
 PASS=0
 FAIL=0
 
@@ -26,18 +26,43 @@ log_status() {
 	local detail=$3
 	if [ $exit_code -eq 0 ]; then
 		echo -e "${GREEN}  ✅ PASSED${NC}: ${name}"
-		((PASS++))
+		PASS=$((PASS + 1))
 	else
 		echo -e "${RED}  ❌ FAILED${NC}: ${name}"
 		if [ -n "$detail" ]; then
 			echo -e "${YELLOW}    ${detail}${NC}"
 		fi
-		((FAIL++))
+		FAIL=$((FAIL + 1))
 	fi
 }
 
 echo -e "${CYAN}=== commit-hook: ai-mirror ===${NC}"
 echo ""
+
+# ============================================
+# Phase 0: Version check
+# ============================================
+echo -e "${CYAN}--- Phase 0: Version Check ---${NC}"
+
+VERSION_FILE="$PROJECT_DIR/include/ai_mirror/version.hpp.in"
+if [ -f "$VERSION_FILE" ]; then
+	# Check if version file changed in staged files
+	if git diff --cached --name-only | grep -q "version.hpp.in"; then
+		log_status 0 "version update" "version.hpp.in changed in commit"
+	else
+		# Check if any source files changed (excluding version file itself)
+		CHANGED=$(git diff --cached --name-only | grep -E "^(src/|include/)" | grep -v "version.hpp" | head -1)
+		if [ -n "$CHANGED" ]; then
+			log_status 1 "version update required" "source changed but version.hpp.in not updated"
+			echo -e "${YELLOW}    Files changed: ${CHANGED}${NC}"
+			echo -e "${YELLOW}    Action: edit version.hpp.in (update comment timestamp or add changelog)${NC}"
+		else
+			log_status 0 "version check" "no source changes"
+		fi
+	fi
+else
+	log_status 1 "version file missing" "include/ai_mirror/version.hpp.in not found"
+fi
 
 # ============================================
 # Phase 1: Code check (clang-format dry-run)
@@ -73,22 +98,21 @@ fi
 echo ""
 echo -e "${CYAN}--- Phase 2: Build Verification ---${NC}"
 
-# Check if build directory exists
-if [ ! -d "$BUILD_DIR" ]; then
-	echo -e "${YELLOW}  Creating build directory: $BUILD_DIR${NC}"
-	mkdir -p "$BUILD_DIR"
-	cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Debug 2>&1
-fi
+BUILD_DIR="$PROJECT_DIR/build-test"
+if [ -f "$PROJECT_DIR/CMakeLists.txt" ]; then
+	set +e
+	BUILD_OUTPUT=$(cmake --build "$BUILD_DIR" --target ai-mirror -j4 2>&1)
+	BUILD_EXIT=$?
+	set -e
 
-# Build target
-BUILD_OUTPUT=$(cmake --build "$BUILD_DIR" --target ai-mirror -j4 2>&1) || true
-BUILD_EXIT=$?
-
-if [ $BUILD_EXIT -eq 0 ]; then
-	log_status 0 "cmake build (ai-mirror)" ""
+	if [ $BUILD_EXIT -eq 0 ]; then
+		log_status 0 "cmake build" ""
+	else
+		log_status 1 "cmake build" "see errors above"
+		echo "$BUILD_OUTPUT" | tail -20
+	fi
 else
-	log_status 1 "cmake build (ai-mirror)" "see errors above"
-	echo "$BUILD_OUTPUT" | tail -20
+	echo -e "${YELLOW}  ⚠️  SKIPPED: CMakeLists.txt not found${NC}"
 fi
 
 # ============================================
@@ -100,8 +124,10 @@ echo -e "${CYAN}--- Phase 3: Unit Tests ---${NC}"
 TEST_DIR="$PROJECT_DIR/tests"
 if [ -f "$TEST_DIR/run_tests.sh" ]; then
 	cd "$TEST_DIR"
-	TEST_OUTPUT=$(bash run_tests.sh 2>&1) || true
+	set +e
+	TEST_OUTPUT=$(bash run_tests.sh 2>&1)
 	TEST_EXIT=$?
+	set -e
 	cd "$PROJECT_DIR"
 
 	if [ $TEST_EXIT -eq 0 ]; then

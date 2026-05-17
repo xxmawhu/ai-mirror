@@ -1,6 +1,7 @@
 #include "ai_mirror/cli/commands.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/core/config.hpp"
+#include "ai_mirror/version.hpp"
 #include <CLI/CLI.hpp>
 #include <iostream>
 #include <pwd.h>
@@ -28,6 +29,12 @@ int parse_and_run(int argc, char** argv) {
 
     bool verbose = false;
     app.add_flag("-v,--verbose", verbose, "显示详细输出");
+
+    // Add --version flag
+    app.set_version_flag("-V,--version", 
+        AI_MIRROR_VERSION_FULL "\n"
+        "ai-mirror — AI 时代的 Linux 用户隔离方案\n"
+        "仓库: gitlab@13.231.144.205:maxx/ai-mirror.git");
 
     // create
     std::string create_path;

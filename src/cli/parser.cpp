@@ -120,6 +120,18 @@ int parse_and_run(int argc, char **argv) {
                                "  退出码 0 = 全部健康，1 = 存在异常。\n"
                                "  可集成到 cron 定时任务");
 
+  // auto-fix-all
+  auto *auto_fix_cmd = app.add_subcommand(
+      "auto-fix-all",
+      "自动修复所有挂载\n"
+      "  检查所有 bind mount 健康状态，对异常挂载自动执行 update 修复。\n"
+      "  流程：\n"
+      "  1. 检查所有 mount 的 source/target 存在性\n"
+      "  2. 定位 unhealthy mount 所属的项目\n"
+      "  3. 对每个项目执行 update 重新挂载\n"
+      "  4. 修复后重新检查确认结果\n"
+      "  退出码 0 = 全部修复成功，1 = 仍有异常");
+
   // force-destroy
   std::string destroy_target;
   auto *destroy_cmd = app.add_subcommand(
@@ -238,6 +250,8 @@ int parse_and_run(int argc, char **argv) {
     return cmd_list(verbose);
   } else if (app.got_subcommand("health")) {
     return cmd_health(verbose);
+  } else if (auto_fix_cmd->parsed()) {
+    return cmd_auto_fix_all(verbose);
   } else if (destroy_cmd->parsed()) {
     return cmd_force_destroy(destroy_target, verbose);
   } else if (rm_cmd->parsed()) {

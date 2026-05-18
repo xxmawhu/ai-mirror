@@ -2216,6 +2216,93 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
 }
 
 // ============================================================================
+// cmd_auto_fix_all: check all mounts and fix unhealthy ones via update
+// ============================================================================
+
+// Walk up from mount target to find project directory containing .am_status
+static fs::path find_project_from_mount(const fs::path &mount_target) {
+  fs::path p = mount_target;
+  while (p.has_parent_path() && p != p.parent_path()) {
+    std::error_code ec;
+    if (fs::exists(p / ".am_status", ec)) {
+      return p;
+    }
+    p = p.parent_path();
+  }
+  return {};
+}
+
+int cmd_auto_fix_all(bool verbose) {
+  auto ctx = make_context(verbose);
+
+  if (!utils::is_root()) {
+    std::cerr << "ai-mirror auto-fix-all requires root privileges" << std::endl;
+    return 1;
+  }
+
+  // Step 1: Get all unhealthy mounts
+  core::Graft graft(ctx.config.user.prefix);
+  auto unhealthy = graft.health_check();
+
+  if (unhealthy.empty()) {
+    std::cout << "All mounts healthy, nothing to fix." << std::endl;
+    return 0;
+  }
+
+  std::cout << "Found " << unhealthy.size()
+            << " unhealthy mount(s):" << std::endl;
+  for (const auto &m : unhealthy) {
+    std::cout << "  [FAIL] " << m.target.string() << std::endl;
+  }
+
+  // Step 2: Find unique project paths from unhealthy mount targets
+  std::set<fs::path> projects_to_fix;
+  for (const auto &m : unhealthy) {
+    auto proj = find_project_from_mount(m.target);
+    if (!proj.empty()) {
+      projects_to_fix.insert(proj);
+    } else {
+      std::cerr << "Warning: cannot find project for mount target: "
+                << m.target.string() << std::endl;
+    }
+  }
+
+  if (projects_to_fix.empty()) {
+    std::cerr << "No projects found to fix." << std::endl;
+    return 1;
+  }
+
+  // Step 3: Fix each project via cmd_update
+  std::cout << "Fixing " << projects_to_fix.size()
+            << " project(s):" << std::endl;
+  int failures = 0;
+  for (const auto &proj : projects_to_fix) {
+    std::cout << "\n=== Fixing: " << proj.string() << " ===" << std::endl;
+    if (cmd_update(proj.string(), verbose) != 0) {
+      std::cerr << "Failed to fix: " << proj.string() << std::endl;
+      failures++;
+    } else {
+      std::cout << "Fixed: " << proj.string() << std::endl;
+    }
+  }
+
+  // Step 4: Re-check health after fixes
+  std::cout << "\n=== Re-checking health ===" << std::endl;
+  graft.invalidate_cache();
+  auto remaining = graft.health_check();
+  if (remaining.empty()) {
+    std::cout << "All mounts healthy after fix." << std::endl;
+    return 0;
+  }
+
+  std::cout << remaining.size() << " mount(s) still unhealthy:" << std::endl;
+  for (const auto &m : remaining) {
+    std::cout << "  [FAIL] " << m.target.string() << std::endl;
+  }
+  return 1;
+}
+
+// ============================================================================
 // cmd_watch: FTXUI-based real-time monitoring for ai-users
 // ============================================================================
 

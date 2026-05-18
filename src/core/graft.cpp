@@ -807,16 +807,27 @@ std::vector<MountEntry> Graft::health_check() const {
   std::vector<MountEntry> issues;
 
   for (const auto &m : mounts) {
-    // Skip virtual device names (beegfs_nodev, tmpfs, proc, etc.)
-    // These are not real paths and cannot be checked with fs::exists
-    if (!m.source.empty() && m.source.string()[0] != '/') {
-      continue; // virtual device, assume healthy
-    }
     std::error_code ec;
-    if (!fs::exists(m.source, ec)) {
-      MountEntry broken = m;
-      broken.active = false;
-      issues.push_back(broken);
+
+    // For virtual device names (beegfs_nodev, tmpfs, proc, etc.),
+    // check target existence since source is not a real path.
+    // For real path sources, check source existence.
+    bool is_virtual_device = !m.source.empty() && m.source.string()[0] != '/';
+
+    if (is_virtual_device) {
+      // Virtual device: check if target (mount point) exists
+      if (!fs::exists(m.target, ec)) {
+        MountEntry broken = m;
+        broken.active = false;
+        issues.push_back(broken);
+      }
+    } else {
+      // Real path source: check if source exists
+      if (!fs::exists(m.source, ec)) {
+        MountEntry broken = m;
+        broken.active = false;
+        issues.push_back(broken);
+      }
     }
   }
 

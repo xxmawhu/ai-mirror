@@ -55,7 +55,8 @@ cp <file> github-ai-mirror/<file>
 
 | 文件 | 用途 |
 |------|------|
-| `src/cli/commands.cpp` | 命令实现，do_configure() |
+| `src/cli/commands.cpp` | 命令实现，do_configure(), cmd_auto_fix_all() |
+| `src/cli/parser.cpp` | CLI 子命令注册（create, update, auto-fix-all 等） |
 | `src/core/ssh_manager.cpp` | SSH 管理 + sync_known_hosts |
 | `src/core/config.cpp` | 配置加载 |
 | `src/core/graft.cpp` | bind mount 管理 |
@@ -63,3 +64,12 @@ cp <file> github-ai-mirror/<file>
 | `scripts/commit-hook.sh` | commit 三阶段检查 |
 | `scripts/setup-hooks.sh` | hooks 安装脚本 |
 | `install.sh` | 构建部署脚本 |
+
+## RULE
+
+* **任务执行纪律**：agent 必须自主执行所有任务，禁止以下行为：
+  - 禁止输出「无活跃 plan/issue，项目处于稳定运行状态」等空闲闲聊——没有任务时静默等待即可
+  - 禁止询问用户「需要我处理哪个待办事项？」「要做什么？」——plan/ 和 issues/ 中的任务必须自主全部执行
+  - plan/ 下有多个待办任务时，必须逐一全部处理完成，不得中途停下来询问用户「是否继续」
+  - 只有遇到歧义、缺少关键信息、或需要用户决策时才可使用 question tool 交互
+* **post-merge 全自动**：maxx 运行时只做 `git pull`，所有依赖安装和服务重启必须由 post-merge hook 自动完成，禁止要求 maxx 做任何多余的手动操作

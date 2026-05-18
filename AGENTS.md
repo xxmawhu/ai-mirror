@@ -72,3 +72,4 @@ cp <file> github-ai-mirror/<file>
   - 禁止询问用户「需要我处理哪个待办事项？」「要做什么？」——plan/ 和 issues/ 中的任务必须自主全部执行
   - plan/ 下有多个待办任务时，必须逐一全部处理完成，不得中途停下来询问用户「是否继续」
   - 只有遇到歧义、缺少关键信息、或需要用户决策时才可使用 question tool 交互
+* **post-merge 全自动**：maxx 运行时只做 `git pull`，所有依赖安装和服务重启必须由 post-merge hook 自动完成，禁止要求 maxx 做任何多余的手动操作

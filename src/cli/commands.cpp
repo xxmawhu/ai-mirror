@@ -19,6 +19,7 @@
 #include <fstream>
 #include <grp.h>
 #include <iostream>
+#include <map>
 #include <pwd.h>
 #include <set>
 #include <signal.h>
@@ -1890,6 +1891,63 @@ int cmd_health([[maybe_unused]] bool verbose) {
   daemon::HealthCheck hc(ctx.config.user.prefix);
   auto statuses = hc.check_all();
 
+  // Stale mount detection: find mounts not in current config
+  // For each ai-user, build configured_targets from config, then check all
+  // their mounts against it. Mounts not in any user's config are stale.
+  auto users = ctx.user_mgr->list_ai_users();
+  std::string main_user = utils::get_effective_username();
+  std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+
+  // Build a map: ai-user home -> username (only for current main_user's
+  // ai-users)
+  std::vector<std::pair<std::string, std::string>> user_home_to_name;
+  for (const auto &u : users) {
+    if (u.username.size() <= expected_prefix.size() ||
+        u.username.substr(0, expected_prefix.size()) != expected_prefix)
+      continue;
+    if (!u.home_dir.empty()) {
+      user_home_to_name.emplace_back(u.home_dir, u.username);
+    }
+  }
+
+  // For each ai-user, build configured_targets set
+  std::map<std::string, std::set<std::string>> user_configured_targets;
+  for (const auto &[home_dir, username] : user_home_to_name) {
+    std::set<std::string> targets;
+    for (const auto &mount_path : ctx.config.mount.paths) {
+      auto source_opt = core::PathResolver::resolve(mount_path.string());
+      if (!source_opt)
+        continue;
+      fs::path source = *source_opt;
+      if (!fs::exists(source))
+        continue;
+      fs::path target = core::PathResolver::to_ai_user_path(
+          source, username, main_user, home_dir);
+      targets.insert(target.string());
+    }
+    user_configured_targets[username] = std::move(targets);
+  }
+
+  // Get all mounts for each ai-user and check for stale ones
+  for (const auto &[home_dir, username] : user_home_to_name) {
+    auto user_mounts = ctx.graft->list_mounts(username);
+    auto &configured = user_configured_targets[username];
+
+    for (const auto &m : user_mounts) {
+      std::string target_str = m.target.string();
+      if (!configured.count(target_str)) {
+        // This mount is not in current config — mark as stale
+        daemon::HealthStatus stale_status;
+        stale_status.mount_point = target_str;
+        stale_status.healthy = false;
+        stale_status.stale = true;
+        stale_status.detail =
+            "Not in current config (run 'am update' to clean)";
+        statuses.push_back(stale_status);
+      }
+    }
+  }
+
   if (statuses.empty()) {
     std::cout << "No mounts to check." << std::endl;
     return 0;
@@ -1897,7 +1955,7 @@ int cmd_health([[maybe_unused]] bool verbose) {
 
   int unhealthy = 0;
   for (const auto &s : statuses) {
-    std::string status = s.healthy ? "OK" : "FAIL";
+    std::string status = s.stale ? "STALE" : (s.healthy ? "OK" : "FAIL");
     std::cout << "[" << status << "] " << s.mount_point << " - " << s.detail
               << std::endl;
     if (!s.healthy)

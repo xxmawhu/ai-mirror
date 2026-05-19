@@ -55,7 +55,7 @@ cp <file> github-ai-mirror/<file>
 
 | 文件 | 用途 |
 |------|------|
-| `src/cli/commands.cpp` | 命令实现，do_configure(), cmd_auto_fix_all() |
+| `src/cli/commands.cpp` | 命令实现，do_configure(), cmd_auto_fix_all(), cmd_health()（含 stale mount 检测） |
 | `src/cli/parser.cpp` | CLI 子命令注册（create, update, auto-fix-all 等） |
 | `src/core/ssh_manager.cpp` | SSH 管理 + sync_known_hosts |
 | `src/core/config.cpp` | 配置加载 |

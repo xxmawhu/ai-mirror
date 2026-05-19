@@ -1,7 +1,6 @@
 # ai-mirror — AI 时代的 Linux 用户隔离方案
 
 ## 项目信息
-- **仓库**: `gitlab@13.231.144.205:maxx/ai-mirror.git`
 - **子模块**: gitee / gitlib / github（同步推送）
 - **技术栈**: C++20, CLI11, FTXUI, nlohmann/json, spdlog, toml11
 - **构建**: `cmake --build build-test --target ai-mirror -j4`
@@ -57,13 +56,19 @@ cp <file> github-ai-mirror/<file>
 |------|------|
 | `src/cli/commands.cpp` | 命令实现，do_configure(), cmd_auto_fix_all(), cmd_health()（含 stale mount 检测） |
 | `src/cli/parser.cpp` | CLI 子命令注册（create, update, auto-fix-all 等） |
+| `src/core/config.cpp` | 配置加载（toml11 解析） |
+| `src/core/user_manager.cpp` | ai-user 创建/删除，.am_status 状态文件管理，SSH 密钥生成 |
+| `src/core/graft.cpp` | bind mount 管理，health_check() 检测 mount source 存在性 |
 | `src/core/ssh_manager.cpp` | SSH 管理 + sync_known_hosts |
-| `src/core/config.cpp` | 配置加载 |
-| `src/core/graft.cpp` | bind mount 管理 |
+| `src/daemon/health_check.cpp` | 健康检查守护进程（定期检测 mount 状态） |
+| `src/daemon/auth_monitor.cpp` | 认证监控（监控 auth.log，检测异常登录） |
+| `src/daemon/mount_cleaner.cpp` | stale mount 清理（find_stale_mounts + clean_stale） |
+| `src/security/audit.cpp` | 安全审计（权限检查、用户隔离验证） |
 | `src/utils/shell.cpp` | exec_safe 命令白名单 |
-| `scripts/commit-hook.sh` | commit 三阶段检查 |
+| `scripts/commit-hook.sh` | commit 三阶段检查（clang-format + cmake + test） |
 | `scripts/setup-hooks.sh` | hooks 安装脚本 |
-| `install.sh` | 构建部署脚本 |
+| `scripts/post-merge-hook.sh` | post-merge 自动部署（调用 install.sh） |
+| `install.sh` | 构建部署脚本（build + install 到 /usr/local/bin） |
 
 ## RULE
 

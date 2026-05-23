@@ -464,20 +464,17 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                                     target.string());
         }
       } else {
-        // [log-review] 降级为 warning: beegfs stale mount umount 可能失败（"no
-        // mount point specified"） 但 continue
-        // 跳过后续操作不影响功能，用户可通过 am health 检查残留
+        // [log-review] 降级为 warning: beegfs stale mount umount 可能失败
+        // 但不跳过，继续尝试 bind mount 覆盖 stale mount
         utils::get_logger()->warn(
-            "Stale mount cleanup skipped (umount unavailable): {} - {}",
+            "Stale mount umount failed, will attempt remount: {} - {}",
             target.string(), umount_result.stderr_output);
-        // Skip ownership fix and remount for unmount-failed stale mounts
-        // The mount is still stale and inaccessible, further operations are
-        // useless
-        continue;
+        // Keep is_mounted = true, bind_mount will attempt to overlay
+        // mount --bind can override stale mounts on some filesystems
       }
     }
 
-    if (is_mounted) {
+    if (is_mounted && !is_stale) {
       // Already mounted — still fix ownership of intermediate dirs and target
       // This handles the case where dirs were created by root on first run
       if (state.uid != 0 || state.gid != 0) {

@@ -78,6 +78,10 @@ _am_parse_output() {
 
 # Resolve the binary path (lazy, cached on first call)
 _am_resolve_bin() {
+	# If cached but not executable, clear cache and re-search
+	if [[ -n "${_AM_BIN:-}" ]] && [[ ! -x "$_AM_BIN" ]]; then
+		_AM_BIN=""
+	fi
 	if [[ -n "${_AM_BIN:-}" && -x "$_AM_BIN" ]]; then
 		return 0
 	fi

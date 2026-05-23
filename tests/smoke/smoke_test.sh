@@ -426,6 +426,97 @@ test_stale_mount_recovery() {
 }
 
 # ============================================
+# Phase 7.5: Test mount failure diagnostics
+# ============================================
+test_mount_failure_diagnostics() {
+	log_section "Phase 7.5: mount failure diagnostics"
+
+	local AI_HOME="/root/projects/testproj"
+	local OUTPUT=""
+	local TEMP_SOURCE="/tmp/nonexistent_mount_source_$$"
+
+	# Scenario 1: mount with invalid source (source does not exist)
+	# This triggers mount failure → should output detailed diagnostics
+
+	# Add an invalid mount path to config (simulate mount failure)
+	# We'll use am update on a path that has a stale mount pointing to nonexistent source
+
+	# First, create a situation where mount will fail:
+	# Create a temporary file, mount it, then delete the source
+	local TEMP_TARGET="$AI_HOME/.local/bin/test_mount_fail"
+	mkdir -p "$AI_HOME/.local/bin"
+
+	# Create temp source file
+	echo "test mount source content" >"$TEMP_SOURCE"
+
+	# Manually bind mount (so we can control the scenario)
+	mount --bind "$TEMP_SOURCE" "$TEMP_TARGET" 2>/dev/null || {
+		warn "Could not create test mount (may need root)"
+		rm -f "$TEMP_SOURCE"
+		return
+	}
+
+	ok "Test mount created: $TEMP_SOURCE -> $TEMP_TARGET"
+
+	# Delete source to make mount stale
+	rm -f "$TEMP_SOURCE"
+	ok "Source deleted to create stale mount"
+
+	# Verify mount is now stale/inaccessible
+	if ! cat "$TEMP_TARGET" >/dev/null 2>&1; then
+		ok "Mount became stale (target inaccessible)"
+	else
+		warn "Mount still accessible (filesystem caches)"
+	fi
+
+	# Run am update - should detect stale and attempt recovery
+	OUTPUT=$(am update "$AI_HOME" 2>&1) || true
+
+	# 1. Log check: should detect stale mount
+	if echo "$OUTPUT" | grep -qE "Stale mount|inode mismatch|target inaccessible"; then
+		ok "Stale mount detected in logs"
+	else
+		warn "Missing stale mount detection log"
+	fi
+
+	# 2. Log check: should output diagnostics on mount failure
+	# Check for diagnostic info: stat, /proc/mounts, fs type
+	local DIAG_COUNT=$(echo "$OUTPUT" | grep -cE "source stat|target stat|/proc/mounts|fs type|mount context" || echo "0")
+	if [ "$DIAG_COUNT" -ge 3 ]; then
+		ok "Mount failure diagnostics logged (found $DIAG_COUNT diagnostic lines)"
+	else
+		warn "Mount failure diagnostics incomplete (found $DIAG_COUNT diagnostic lines)"
+	fi
+
+	# 3. Behavior check: should attempt umount (even if it fails)
+	if echo "$OUTPUT" | grep -qE "Lazy unmounted|umount failed|will attempt remount"; then
+		ok "umount attempt logged"
+	else
+		warn "Missing umount attempt log"
+	fi
+
+	# 4. Behavior check: should attempt remount even if umount failed
+	# The key fix: umount failure should NOT skip remount attempt
+	if echo "$OUTPUT" | grep -qE "Fixing mount|Mount failed"; then
+		ok "Remount attempt logged (umount failure did not block remount)"
+	else
+		# Check if mount was already healthy (umount succeeded)
+		if findmnt "$TEMP_TARGET" >/dev/null 2>&1 && cat "$TEMP_TARGET" >/dev/null 2>&1; then
+			ok "Mount recovered successfully"
+		else
+			warn "Missing remount attempt log"
+		fi
+	fi
+
+	# Cleanup: umount the test mount
+	umount -l "$TEMP_TARGET" 2>/dev/null || true
+	rm -rf "$AI_HOME/.local/bin/test_mount_fail" 2>/dev/null || true
+	rm -f "$TEMP_SOURCE" 2>/dev/null || true
+
+	ok "Test mount cleanup done"
+}
+
+# ============================================
 # Phase 8: Test am rm
 # ============================================
 test_rm() {
@@ -546,6 +637,7 @@ main() {
 		test_health
 		test_update_ssh "$AI_USER"
 		test_stale_mount_recovery
+		test_mount_failure_diagnostics
 		test_rm "$AI_USER"
 	else
 		fail "User creation failed, skipping tests"

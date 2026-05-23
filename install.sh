@@ -22,6 +22,10 @@ DATA_DIR="${AI_MIRROR_DATA_DIR:-/var/lib/ai-mirror}"
 BIN_NAME="ai-mirror"
 REAL_BIN_NAME="ai-mirror-bin"
 
+# ---- Error Tracking ----
+CURRENT_PHASE="init"
+ERROR_MSG=""
+
 # ---- Colors ----
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -39,6 +43,7 @@ _log() {
 }
 
 log() { _log "${GREEN}[install]${NC} $*"; }
+# warn:降级自error——安装过程中某些步骤失败不影响整体流程（如可选组件缺失），属于预期内可容忍的异常
 warn() { _log "${YELLOW}[warn]${NC} $*"; }
 error() { _log "${RED}[error]${NC} $*" >&2; }
 info() { _log "${CYAN}[info]${NC} $*"; }
@@ -55,8 +60,102 @@ require_sudo() {
 	fi
 }
 
+# ---- Error Report ----
+generate_fail_report() {
+	local exit_code=$?
+	# Only generate report on non-zero exit
+	[[ $exit_code -eq 0 ]] && return 0
+
+	local report_ts
+	report_ts=$(date '+%Y%m%d-%H%M%S')
+	local report_file="${LOG_DIR}/install-fail-${report_ts}.md"
+
+	mkdir -p "${LOG_DIR}"
+
+	# Atomic write: use tempfile then mv (Rule 11)
+	local tmp_file
+	tmp_file=$(mktemp "${LOG_DIR}/install-fail-${report_ts}.tmp")
+
+	local report_content
+	report_content=$(
+		cat <<REPORT_EOF
+# ai-mirror Install Failure Report
+
+- **Date**: $(date '+%Y-%m-%d %H:%M:%S')
+- **Exit Code**: ${exit_code}
+- **Failed Phase**: ${CURRENT_PHASE}
+- **Error Message**: ${ERROR_MSG:-unknown (check install.log for details)}
+
+## System Information
+
+| Item | Value |
+|------|-------|
+| Hostname | $(hostname 2>/dev/null || echo 'N/A') |
+| OS | $(cat /etc/os-release 2>/dev/null | grep '^PRETTY_NAME=' | cut -d'"' -f2 || uname -s) |
+| Kernel | $(uname -r 2>/dev/null || echo 'N/A') |
+| Architecture | $(uname -m 2>/dev/null || echo 'N/A') |
+| CPU Cores | $(nproc 2>/dev/null || echo 'N/A') |
+| Memory | $(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo 'N/A') |
+| Disk (root) | $(df -h / 2>/dev/null | awk 'NR==2{print $2" total, "$3" used, "$4" available ("$5" used)"}' || echo 'N/A') |
+| g++ | $(g++ -dumpversion 2>/dev/null || echo 'not found') |
+| cmake | $(cmake --version 2>/dev/null | head -1 || echo 'not found') |
+| make | $(make --version 2>/dev/null | head -1 || echo 'not found') |
+| git | $(git --version 2>/dev/null || echo 'not found') |
+| ssh | $(ssh -V 2>&1 || echo 'not found') |
+| sudo | $(sudo --version 2>/dev/null | head -1 || echo 'not found') |
+
+## Git Information
+
+| Item | Value |
+|------|-------|
+| Remote URL | $(git -C "${SCRIPT_DIR}" remote get-url origin 2>/dev/null || echo 'no remote configured') |
+| Branch | $(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'N/A') |
+| Commit | $(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo 'N/A') |
+| Commit Date | $(git -C "${SCRIPT_DIR}" log -1 --format='%ci' 2>/dev/null || echo 'N/A') |
+| Commit Message | $(git -C "${SCRIPT_DIR}" log -1 --format='%s' 2>/dev/null || echo 'N/A') |
+| Dirty | $(if git -C "${SCRIPT_DIR}" diff --quiet 2>/dev/null; then echo 'no'; else echo 'yes'; fi) |
+
+## Build Configuration
+
+| Item | Value |
+|------|-------|
+| PREFIX | ${PREFIX} |
+| CONFIG_DIR | ${CONFIG_DIR} |
+| DATA_DIR | ${DATA_DIR} |
+| BUILD_DIR | ${BUILD_DIR} |
+| Build Type | Release |
+
+## Install Log (last 50 lines)
+
+\`\`\`
+$(tail -50 "${INSTALL_LOG}" 2>/dev/null || echo 'install.log not available')
+\`\`\`
+
+## Actions
+
+1. Review the error message and failed phase above
+2. Check install.log for full details: \`${INSTALL_LOG}\`
+3. Fix the issue and re-run: \`bash install.sh\`
+REPORT_EOF
+	)
+
+	echo -e "$report_content" >"$tmp_file"
+	chmod 0644 "$tmp_file"
+	mv "$tmp_file" "$report_file"
+
+	echo "" >&2
+	echo -e "${RED}[install] INSTALL FAILED${NC}" >&2
+	echo -e "${RED}[install] Failure report saved to: ${report_file}${NC}" >&2
+	echo -e "${RED}[install] Please review and fix the issue, then re-run install.sh${NC}" >&2
+
+	return $exit_code
+}
+
+trap generate_fail_report EXIT
+
 # ---- Phase: Setup ----
 phase_setup() {
+	CURRENT_PHASE="setup"
 	mkdir -p "${LOG_DIR}"
 	mkdir -p "${BUILD_DIR}"
 	LOG_DIR_READY=1
@@ -76,6 +175,7 @@ phase_setup() {
 
 # ---- Phase: Install system deps ----
 phase_system_deps() {
+	CURRENT_PHASE="system_deps"
 	log "Checking system dependencies..."
 
 	local -A pkg_cmd=(
@@ -97,8 +197,14 @@ phase_system_deps() {
 	if [[ ${#missing[@]} -gt 0 ]]; then
 		require_sudo
 		log "Installing missing packages: ${missing[*]}"
-		sudo apt-get update -qq
-		sudo apt-get install -y -qq "${missing[@]}" 2>&1 | tee -a "$INSTALL_LOG"
+		if ! sudo apt-get update -qq 2>&1 | tee -a "$INSTALL_LOG"; then
+			ERROR_MSG="apt-get update failed"
+			return 1
+		fi
+		if ! sudo apt-get install -y -qq "${missing[@]}" 2>&1 | tee -a "$INSTALL_LOG"; then
+			ERROR_MSG="apt-get install failed for: ${missing[*]}"
+			return 1
+		fi
 	fi
 
 	local gxx_version
@@ -119,6 +225,7 @@ phase_system_deps() {
 
 # ---- Phase: Build ----
 phase_build() {
+	CURRENT_PHASE="build"
 	log "Building ai-mirror (C++20)..."
 
 	mkdir -p "${BUILD_DIR}"
@@ -137,25 +244,21 @@ phase_build() {
 
 	if $need_configure; then
 		log "  Running cmake..."
-		cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
+		if ! cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
 			-DCMAKE_CXX_COMPILER=g++ \
 			-DCMAKE_BUILD_TYPE=Release \
-			2>&1 | tee -a "$INSTALL_LOG"
-
-		if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-			error "CMake configure failed. Check ${INSTALL_LOG}"
-			exit 1
+			2>&1 | tee -a "$INSTALL_LOG"; then
+			ERROR_MSG="CMake configure failed"
+			return 1
 		fi
 	else
 		log "  CMake cache exists, skipping configure..."
 	fi
 
 	log "  Compiling..."
-	cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1 | tee -a "$INSTALL_LOG"
-
-	if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-		error "Build failed. Check ${INSTALL_LOG}"
-		exit 1
+	if ! cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1 | tee -a "$INSTALL_LOG"; then
+		ERROR_MSG="Build compilation failed"
+		return 1
 	fi
 
 	log "Build successful"
@@ -163,13 +266,14 @@ phase_build() {
 
 # ---- Phase: Verify ----
 phase_verify() {
+	CURRENT_PHASE="verify"
 	log "Verifying binary..."
 
 	local bin="${BUILD_DIR}/bin/${BIN_NAME}"
 
 	if [[ ! -x "$bin" ]]; then
-		error "Binary not found: ${bin}"
-		exit 1
+		ERROR_MSG="Binary not found or not executable: ${bin}"
+		return 1
 	fi
 
 	log "  ${BIN_NAME} ($(stat -c%s "$bin") bytes)"
@@ -184,11 +288,18 @@ phase_verify() {
 
 # ---- Phase: Install ----
 phase_install() {
+	CURRENT_PHASE="install"
 	require_sudo
 	log "Installing binary to ${PREFIX}/bin/..."
 
-	sudo install -d "${PREFIX}/bin"
-	sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${REAL_BIN_NAME}"
+	if ! sudo install -d "${PREFIX}/bin"; then
+		ERROR_MSG="Failed to create directory: ${PREFIX}/bin"
+		return 1
+	fi
+	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${REAL_BIN_NAME}"; then
+		ERROR_MSG="Failed to install binary to ${PREFIX}/bin/${REAL_BIN_NAME}"
+		return 1
+	fi
 
 	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${REAL_BIN_NAME}") bytes)"
 
@@ -327,36 +438,56 @@ phase_summary() {
 
 # ---- Phase: Clean ----
 phase_clean() {
+	CURRENT_PHASE="clean"
 	require_sudo
 	log "Removing installed files..."
 
 	if sudo test -f "${PREFIX}/bin/${REAL_BIN_NAME}"; then
-		sudo rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"
+		if ! sudo rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"; then
+			ERROR_MSG="Failed to remove ${PREFIX}/bin/${REAL_BIN_NAME}"
+			return 1
+		fi
 		log "  Removed ${PREFIX}/bin/${REAL_BIN_NAME}"
 	fi
 
 	if sudo test -f /etc/profile.d/am.sh; then
-		sudo rm -f /etc/profile.d/am.sh
+		if ! sudo rm -f /etc/profile.d/am.sh; then
+			ERROR_MSG="Failed to remove /etc/profile.d/am.sh"
+			return 1
+		fi
 		log "  Removed /etc/profile.d/am.sh"
 	fi
 
 	if sudo test -f /etc/bash_completion.d/am; then
-		sudo rm -f /etc/bash_completion.d/am
+		if ! sudo rm -f /etc/bash_completion.d/am; then
+			ERROR_MSG="Failed to remove /etc/bash_completion.d/am"
+			return 1
+		fi
 		log "  Removed /etc/bash_completion.d/am"
 	fi
 
 	if sudo test -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then
-		sudo rm -f "${CONFIG_DIR}/sudoers.d/ai-mirror"
+		if ! sudo rm -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then
+			ERROR_MSG="Failed to remove sudoers rule"
+			return 1
+		fi
 		log "  Removed sudoers rule"
 	fi
 
 	if sudo test -d "${CONFIG_DIR}"; then
-		sudo rm -rf "${CONFIG_DIR}"
+		if ! sudo rm -rf "${CONFIG_DIR}"; then
+			ERROR_MSG="Failed to remove config dir ${CONFIG_DIR}/"
+			return 1
+		fi
 		log "  Removed config dir ${CONFIG_DIR}/"
 	fi
 
 	if sudo test -d "${DATA_DIR}"; then
-		sudo rmdir "${DATA_DIR}" 2>/dev/null && log "  Removed data dir ${DATA_DIR}/" || true
+		if ! sudo rmdir "${DATA_DIR}" 2>/dev/null; then
+			warn "  Data dir ${DATA_DIR}/ not empty, skipping removal"
+		else
+			log "  Removed data dir ${DATA_DIR}/"
+		fi
 	fi
 
 	log "Uninstall complete"
@@ -368,23 +499,24 @@ main() {
 
 	case "$action" in
 	--build)
-		phase_setup
-		phase_system_deps
-		phase_build
-		phase_verify
+		phase_setup || return $?
+		phase_system_deps || return $?
+		phase_build || return $?
+		phase_verify || return $?
 		log "Build-only complete. Binary in ${BUILD_DIR}/bin/"
 		;;
 	--clean)
-		phase_setup
-		phase_clean
+		CURRENT_PHASE="clean"
+		phase_setup || return $?
+		phase_clean || return $?
 		;;
 	install | --install)
-		phase_setup
-		phase_system_deps
-		phase_build
-		phase_verify
-		phase_install
-		phase_summary
+		phase_setup || return $?
+		phase_system_deps || return $?
+		phase_build || return $?
+		phase_verify || return $?
+		phase_install || return $?
+		phase_summary || return $?
 		;;
 	--help | -h)
 		echo "Usage: bash $0 [--build|--clean|--help]"
@@ -395,9 +527,11 @@ main() {
 		echo "  --help      Show this help"
 		;;
 	*)
+		CURRENT_PHASE="main"
+		ERROR_MSG="Unknown action: $action"
 		error "Unknown action: $action"
 		echo "Usage: bash $0 [--build|--clean|--help]"
-		exit 1
+		return 1
 		;;
 	esac
 }

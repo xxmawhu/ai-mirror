@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
@@ -25,8 +26,10 @@
 #include <signal.h>
 #include <sstream>
 #include <string>
+#include <sys/errno.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <termios.h>
 #include <unistd.h>
 #include <vector>
@@ -533,8 +536,67 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
       fixes++;
     } else {
       mount_failures++;
-      utils::get_logger()->warn("Failed to mount {} -> {}", source.string(),
+
+      // [log-review] Mount failed is an error, diagnostics use warn as debug
+      // info (Rule 32: warn from error降级，用于调试诊断)
+      utils::get_logger()->warn("Mount failed: {} -> {}", source.string(),
                                 target.string());
+
+      // Source path diagnostics
+      struct stat source_st;
+      bool source_stat_ok = (stat(source.c_str(), &source_st) == 0);
+      if (source_stat_ok) {
+        utils::get_logger()->warn(
+            "  source stat: ino={}, dev={}, mode={}, uid={}, gid={}, size={}",
+            source_st.st_ino, source_st.st_dev, source_st.st_mode,
+            source_st.st_uid, source_st.st_gid, source_st.st_size);
+      } else {
+        utils::get_logger()->warn("  source stat failed: errno={} ({})", errno,
+                                  strerror(errno));
+      }
+
+      // Target path diagnostics
+      struct stat target_st;
+      bool target_stat_ok = (stat(target.c_str(), &target_st) == 0);
+      if (target_stat_ok) {
+        utils::get_logger()->warn(
+            "  target stat: ino={}, dev={}, mode={}, uid={}, gid={}, size={}",
+            target_st.st_ino, target_st.st_dev, target_st.st_mode,
+            target_st.st_uid, target_st.st_gid, target_st.st_size);
+      } else {
+        utils::get_logger()->warn("  target stat failed: errno={} ({})", errno,
+                                  strerror(errno));
+      }
+
+      // Check if target is in /proc/mounts
+      std::ifstream mounts("/proc/mounts");
+      if (mounts.is_open()) {
+        std::string line;
+        bool found = false;
+        while (std::getline(mounts, line)) {
+          if (line.find(target.string()) != std::string::npos) {
+            found = true;
+            utils::get_logger()->warn("  target in /proc/mounts: {}", line);
+          }
+        }
+        if (!found) {
+          utils::get_logger()->warn("  target not found in /proc/mounts");
+        }
+      }
+
+      // Filesystem type (statfs)
+      struct statfs fs_info;
+      if (statfs(target.c_str(), &fs_info) == 0) {
+        utils::get_logger()->warn("  target fs type: {:x}, block size: {}",
+                                  fs_info.f_type, fs_info.f_bsize);
+      } else if (statfs(source.c_str(), &fs_info) == 0) {
+        utils::get_logger()->warn("  source fs type: {:x}, block size: {}",
+                                  fs_info.f_type, fs_info.f_bsize);
+      }
+
+      utils::get_logger()->warn(
+          "  mount context: is_mounted={}, is_stale={}, home_dir={}",
+          is_mounted, is_stale, home_dir);
     }
   }
 

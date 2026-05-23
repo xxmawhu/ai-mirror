@@ -2103,12 +2103,14 @@ int cmd_rm(const std::string &project_path, bool verbose) {
   auto ctx = make_context(verbose);
 
   if (!utils::is_root()) {
+    utils::get_logger()->error("ai-mirror rm requires root privileges");
     std::cerr << "ai-mirror rm requires root privileges" << std::endl;
     return 1;
   }
 
   auto proj_opt = core::PathResolver::resolve(project_path);
   if (!proj_opt) {
+    utils::get_logger()->error("Invalid project path: {}", project_path);
     std::cerr << "Invalid project path: " << project_path << std::endl;
     return 1;
   }
@@ -2132,6 +2134,9 @@ int cmd_rm(const std::string &project_path, bool verbose) {
     // No .am_status, derive username using hash-based naming
     auto derived = ctx.user_mgr->derive_username(proj.string());
     if (!derived) {
+      utils::get_logger()->error(
+          "Username collision: cannot derive unique username for: {}",
+          proj.string());
       std::cerr << "Username collision: cannot derive unique username for: "
                 << proj.string() << std::endl;
       return 1;
@@ -2143,12 +2148,17 @@ int cmd_rm(const std::string &project_path, bool verbose) {
 
   if (!validate_ai_user_ownership(username, main_user,
                                   ctx.config.user.prefix)) {
+    utils::get_logger()->error("ai_user '{}' does not belong to user '{}'",
+                               username, main_user);
     std::cerr << "ai_user '" << username << "' does not belong to user '"
               << main_user << "'" << std::endl;
     return 1;
   }
 
   if (!ctx.user_mgr->user_exists(username)) {
+    utils::get_logger()->error(
+        "AI user not found for project: {} (expected: {})", proj.string(),
+        username);
     std::cerr << "AI user not found for project: " << proj.string()
               << std::endl;
     std::cerr << "Expected user: " << username << std::endl;
@@ -2157,42 +2167,49 @@ int cmd_rm(const std::string &project_path, bool verbose) {
 
   auto user_info = ctx.user_mgr->get_user_info(username);
   if (!user_info) {
+    utils::get_logger()->error("Failed to get user info: {}", username);
     std::cerr << "Failed to get user info: " << username << std::endl;
     return 1;
   }
 
   fs::path ai_home(user_info->home_dir);
 
-  utils::get_logger()->info("Removing project: {} (user: {})", proj.string(),
+  utils::get_logger()->info("Removing project: {} (user: {}, home: {})",
+                            proj.string(), username, ai_home.string());
+
+  // Step 1: Terminate user processes (must be before unmount)
+  utils::get_logger()->info("Step 1: Terminating processes for user {}",
                             username);
-
   if (verbose) {
-    std::cout << "Step 1: Unmounting bind mounts for " << username << std::endl;
+    std::cout << "Step 1: Terminating processes for " << username << std::endl;
   }
-  daemon::MountCleaner cleaner(ctx.config.user.prefix);
-  cleaner.cleanup_for_user(username);
-
   terminate_user_processes(username);
 
+  // Step 2: Unmount bind mounts
+  utils::get_logger()->info("Step 2: Unmounting bind mounts for {}", username);
   if (verbose) {
-    std::cout << "Step 2: Removing user " << username << std::endl;
+    std::cout << "Step 2: Unmounting bind mounts for " << username << std::endl;
+  }
+  daemon::MountCleaner cleaner(ctx.config.user.prefix);
+  int mounts_cleaned = cleaner.cleanup_for_user(username);
+  utils::get_logger()->info("Unmounted {} mount(s) for {}", mounts_cleaned,
+                            username);
+
+  // Step 3: Remove Linux user (userdel)
+  utils::get_logger()->info("Step 3: Removing Linux user {}", username);
+  if (verbose) {
+    std::cout << "Step 3: Removing user " << username << std::endl;
   }
   if (!ctx.user_mgr->remove_ai_user(username, false)) {
+    utils::get_logger()->error("Failed to remove user: {}", username);
     std::cerr << "Failed to remove user: " << username << std::endl;
     return 1;
   }
+  utils::get_logger()->info("User {} removed from system", username);
 
-  if (verbose) {
-    std::cout << "Step 3: Cleaning up ai-user home" << std::endl;
-  }
-  {
-    std::error_code ec;
-    fs::remove_all(ai_home, ec);
-    if (ec) {
-      utils::get_logger()->warn("Failed to clean home dir: {}", ec.message());
-    }
-  }
-
+  // Step 4: Revoke write access on project directory (before deleting home)
+  utils::get_logger()->info("Step 4: Revoking write access on project {}",
+                            proj.string());
   if (verbose) {
     std::cout << "Step 4: Revoking write grants on project" << std::endl;
   }
@@ -2200,8 +2217,44 @@ int cmd_rm(const std::string &project_path, bool verbose) {
     utils::get_logger()->warn(
         "Failed to revoke write access for user '{}' on project '{}'", username,
         proj.string());
+  } else {
+    utils::get_logger()->info("Write access revoked for {} on {}", username,
+                              proj.string());
   }
 
+  // Step 5: Clean up ai-user home directory and .am_status
+  utils::get_logger()->info("Step 5: Cleaning up ai-user home: {}",
+                            ai_home.string());
+  if (verbose) {
+    std::cout << "Step 5: Cleaning up ai-user home" << std::endl;
+  }
+  {
+    std::error_code ec;
+    fs::remove_all(ai_home, ec);
+    if (ec) {
+      utils::get_logger()->warn("Failed to clean home dir {}: {}",
+                                ai_home.string(), ec.message());
+    } else {
+      utils::get_logger()->info("Removed home directory: {}", ai_home.string());
+    }
+  }
+
+  // Remove .am_status from project directory
+  fs::path status_file = proj / ".am_status";
+  if (fs::exists(status_file)) {
+    std::error_code ec;
+    fs::remove(status_file, ec);
+    if (ec) {
+      utils::get_logger()->warn("Failed to remove .am_status: {}",
+                                ec.message());
+    } else {
+      utils::get_logger()->info("Removed .am_status from project: {}",
+                                proj.string());
+    }
+  }
+
+  utils::get_logger()->info("Removed: {} (project: {})", username,
+                            proj.string());
   std::cout << "Removed: " << username << std::endl;
   return 0;
 }

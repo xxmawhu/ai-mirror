@@ -464,12 +464,17 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                                     target.string());
         }
       } else {
-        utils::get_logger()->warn("Failed to unmount stale mount {}: {}",
-                                  target.string(), umount_result.stderr_output);
+        // [log-review] 降级为 warning: beegfs stale mount umount 可能失败
+        // 但不跳过，继续尝试 bind mount 覆盖 stale mount
+        utils::get_logger()->warn(
+            "Stale mount umount failed, will attempt remount: {} - {}",
+            target.string(), umount_result.stderr_output);
+        // Keep is_mounted = true, bind_mount will attempt to overlay
+        // mount --bind can override stale mounts on some filesystems
       }
     }
 
-    if (is_mounted) {
+    if (is_mounted && !is_stale) {
       // Already mounted — still fix ownership of intermediate dirs and target
       // This handles the case where dirs were created by root on first run
       if (state.uid != 0 || state.gid != 0) {

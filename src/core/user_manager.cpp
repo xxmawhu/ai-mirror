@@ -101,8 +101,10 @@ static bool verify_state_content(const std::string &content) {
   // PoW verification: md5 of content must start with "000"
   // Supports three formats:
   //   - Legacy hash format: has "hash" field → stored hash starts with "000"
-  //   - New PoW format: has "project_path"/"path_hash" → md5(content) starts with "000"
-  //   - Old format: no "hash" AND no "project_path"/"path_hash" → trust directly (pre-PoW)
+  //   - New PoW format: has "project_path"/"path_hash" → md5(content) starts
+  //   with "000"
+  //   - Old format: no "hash" AND no "project_path"/"path_hash" → trust
+  //   directly (pre-PoW)
   auto j = nlohmann::json::parse(content, nullptr, false);
   if (j.is_discarded())
     return false;
@@ -119,7 +121,8 @@ static bool verify_state_content(const std::string &content) {
   }
 
   // Old format (pre-PoW): trust directly - these files were created before PoW
-  // was introduced, they only have username/uid/gid/home_dir/main_user/timestamp
+  // was introduced, they only have
+  // username/uid/gid/home_dir/main_user/timestamp
   return true;
 }
 

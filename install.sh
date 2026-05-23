@@ -74,7 +74,7 @@ generate_fail_report() {
 
 	# Atomic write: use tempfile then mv (Rule 11)
 	local tmp_file
-	tmp_file=$(mktemp "${LOG_DIR}/install-fail-${report_ts}.tmp")
+	tmp_file=$(mktemp "${LOG_DIR}/install-fail-XXXXXX.tmp")
 
 	local report_content
 	report_content=$(

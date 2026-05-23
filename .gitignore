@@ -9,7 +9,9 @@ log/
 verification/
 pyproject.toml
 docker/
-tests/
+!docker/Dockerfile.smoke
+tests/*
+!tests/smoke/
 release.sh
 .dockerignore
 

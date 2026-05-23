@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 # ai-mirror pre-commit installation script
 # Single entry point for pre-commit setup (git-tidy Rule 8)
+# [log-review] 日志输出到 ./log/hook/ (Rule 2/9)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+LOG_DIR="$PROJECT_DIR/log/hook"
+LOG_FILE="$LOG_DIR/setup-pre-commit-$(date +%Y-%m-%d).log"
+
+# Ensure log directory exists
+mkdir -p "$LOG_DIR"
+
+# Tee all output to log file (Rule 2: screen output must tee to ./log/)
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

@@ -7,11 +7,20 @@
 #   bash scripts/setup-hooks.sh          # full setup
 #   bash scripts/setup-hooks.sh --check  # check only, no install
 #
+# [log-review] 日志输出到 ./log/hook/ (Rule 2/9)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CHECK_MODE="${1:-}"
+LOG_DIR="$PROJECT_DIR/log/hook"
+LOG_FILE="$LOG_DIR/setup-hooks-$(date +%Y-%m-%d).log"
+
+# Ensure log directory exists
+mkdir -p "$LOG_DIR"
+
+# Tee all output to log file (Rule 2: screen output must tee to ./log/)
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Colors
 RED='\033[0;31m'

@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # ai-mirror post-merge hook: auto-install after git pull
 # Managed by pre-commit framework, configured in .pre-commit-config.yaml
+# [log-review] 日志输出到 ./log/hook/ (Rule 2/9)
 set -euo pipefail
 
-main() {
-	local SCRIPT_DIR
-	SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-	local PROJECT_DIR
-	PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+LOG_DIR="$PROJECT_DIR/log/hook"
+LOG_FILE="$LOG_DIR/post-merge-$(date +%Y-%m-%d).log"
 
+# Ensure log directory exists
+mkdir -p "$LOG_DIR"
+
+# Tee all output to log file (Rule 2: screen output must tee to ./log/)
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+main() {
 	echo "=== post-merge: deploying ai-mirror ==="
 	cd "$PROJECT_DIR"
 

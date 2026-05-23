@@ -464,8 +464,16 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                                     target.string());
         }
       } else {
-        utils::get_logger()->warn("Failed to unmount stale mount {}: {}",
-                                  target.string(), umount_result.stderr_output);
+        // [log-review] 降级为 warning: beegfs stale mount umount 可能失败（"no
+        // mount point specified"） 但 continue
+        // 跳过后续操作不影响功能，用户可通过 am health 检查残留
+        utils::get_logger()->warn(
+            "Stale mount cleanup skipped (umount unavailable): {} - {}",
+            target.string(), umount_result.stderr_output);
+        // Skip ownership fix and remount for unmount-failed stale mounts
+        // The mount is still stale and inaccessible, further operations are
+        // useless
+        continue;
       }
     }
 

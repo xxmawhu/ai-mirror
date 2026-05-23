@@ -525,10 +525,20 @@ test_rm() {
 	local AI_USER="${1:-}"
 	local AI_HOME="/root/projects/testproj"
 	local OUTPUT=""
+	local MOUNT_TARGET="$AI_HOME/.bashrc"
 
 	if [ -z "$AI_USER" ]; then
 		fail "No AI user to test"
 		return 1
+	fi
+
+	# Verify mount exists before rm
+	local MOUNT_EXISTS_BEFORE=0
+	if findmnt "$MOUNT_TARGET" >/dev/null 2>&1; then
+		MOUNT_EXISTS_BEFORE=1
+		ok "Mount exists before am rm"
+	else
+		warn "Mount does not exist before am rm"
 	fi
 
 	OUTPUT=$(am rm "$AI_HOME" 2>&1) || true
@@ -536,25 +546,81 @@ test_rm() {
 	# 1. Error check
 	check_no_unexpected_error "$OUTPUT" "am rm"
 
-	# 2. Behavior check: user removed
-	if ! id "$AI_USER" >/dev/null 2>&1; then
-		ok "User removed"
+	# 2. Log check: Step 1 - Terminating processes
+	if echo "$OUTPUT" | grep -qE "Terminating processes|Step 1"; then
+		ok "rm Step 1: terminate processes logged"
 	else
-		fail "User still exists"
+		warn "rm missing Step 1 log (terminate processes)"
 	fi
 
-	# 3. Behavior check: .am_status removed
+	# 3. Log check: Step 2 - Unmounting bind mounts
+	if echo "$OUTPUT" | grep -qE "Unmounting|Unmounted.*mount|Step 2"; then
+		ok "rm Step 2: unmount logged"
+	else
+		warn "rm missing Step 2 log (unmount)"
+	fi
+
+	# 4. Behavior check: mount removed after unmount
+	if [ $MOUNT_EXISTS_BEFORE -eq 1 ]; then
+		if ! findmnt "$MOUNT_TARGET" >/dev/null 2>&1; then
+			ok "Mount removed after unmount"
+		else
+			fail "Mount still exists after unmount"
+		fi
+	fi
+
+	# 5. Log check: Step 3 - Removing Linux user
+	if echo "$OUTPUT" | grep -qE "Removing Linux user|User.*removed|Step 3"; then
+		ok "rm Step 3: user removal logged"
+	else
+		warn "rm missing Step 3 log (user removal)"
+	fi
+
+	# 6. Behavior check: user removed
+	if ! id "$AI_USER" >/dev/null 2>&1; then
+		ok "User removed from system"
+	else
+		fail "User still exists in system"
+	fi
+
+	# 7. Log check: Step 4 - Revoking write access
+	if echo "$OUTPUT" | grep -qE "Revoking write|Write access revoked|Step 4"; then
+		ok "rm Step 4: revoke write access logged"
+	else
+		warn "rm missing Step 4 log (revoke write)"
+	fi
+
+	# 8. Log check: Step 5 - Cleaning up home
+	if echo "$OUTPUT" | grep -qE "Cleaning up.*home|Removed home directory|Step 5"; then
+		ok "rm Step 5: home cleanup logged"
+	else
+		warn "rm missing Step 5 log (home cleanup)"
+	fi
+
+	# 9. Behavior check: .am_status removed
 	if [ ! -f "$AI_HOME/.am_status" ]; then
-		ok ".am_status removed"
+		ok ".am_status file removed"
 	else
 		warn ".am_status still exists"
 	fi
 
-	# 4. Behavior check: home directory cleaned (optional)
+	# 10. Behavior check: home directory cleaned
 	if [ ! -d "$AI_HOME" ]; then
 		ok "Home directory removed"
 	else
-		warn "Home directory still exists"
+		# Home may still exist (project dir), but should be cleaned of ai-user files
+		if [ ! -d "$AI_HOME/.ssh" ]; then
+			ok "Home .ssh directory removed"
+		else
+			warn "Home .ssh still exists"
+		fi
+	fi
+
+	# 11. Log check: completion
+	if echo "$OUTPUT" | grep -qE "Removed.*project"; then
+		ok "rm completion logged"
+	else
+		warn "rm missing completion log"
 	fi
 }
 

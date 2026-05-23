@@ -240,6 +240,18 @@ phase_build() {
 	elif [[ "${SCRIPT_DIR}/CMakeLists.txt" -nt "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
 		log "  CMakeLists.txt changed, reconfiguring..."
+	else
+		# Check if any header or source file is newer than the build cache
+		local cache_mtime
+		cache_mtime=$(stat -c '%Y' "${BUILD_DIR}/CMakeCache.txt")
+		local newer_src
+		newer_src=$(find "${SCRIPT_DIR}/src" "${SCRIPT_DIR}/include" \
+			-type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
+			-newer "${BUILD_DIR}/CMakeCache.txt" -print -quit 2>/dev/null)
+		if [[ -n "$newer_src" ]]; then
+			need_configure=true
+			log "  Source/header changed ($(basename "$newer_src")), reconfiguring..."
+		fi
 	fi
 
 	if $need_configure; then

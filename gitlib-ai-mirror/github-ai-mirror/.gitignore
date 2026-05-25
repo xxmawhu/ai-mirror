@@ -1,0 +1,66 @@
+# Internal/dev-only files (not for public release)
+AGENTS.md
+issues/
+end_task/
+plan/
+memory/
+log/
+.cache/
+verification/
+pyproject.toml
+docker/
+tests/
+release.sh
+.dockerignore
+
+# Auto-generated version header (from version.hpp.in via cmake)
+include/ai_mirror/version.hpp
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+
+# C/C++ build artifacts
+*.o
+*.so
+*.a
+build/
+build-release/
+build-test/
+build-test2/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# IDE / editor
+.vscode/
+tags
+*.out
+
+# Data / logs
+*.log
+*.h5
+*.parquet
+*.csv
+*.png
+*.s
+*.i
+data/
+compressedLog/
+log/
+
+# Environment
+.env
+.venv/
+env/
+
+# Tool state
+.opencode/
+.opencode_share/
+.sisyphus/
+history_log/
+miniconda.sh

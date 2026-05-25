@@ -474,8 +474,11 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     return {"", "", "", "", "", 0, 0, false, err};
   }
 
-  // Also check SYSTEM_DIRS blacklist
-  if (!security::validate_path_allowed(abs_proj)) {
+  // Also check SYSTEM_DIRS blacklist (skip for root user)
+  uid_t login_uid = utils::get_login_uid();
+  if (login_uid == 0)
+    login_uid = geteuid();
+  if (login_uid != 0 && !security::validate_path_allowed(abs_proj)) {
     std::string err = "Project path in system directory (not allowed): " + ps;
     utils::get_logger()->error("{}", err);
     return {"", "", "", "", "", 0, 0, false, err};

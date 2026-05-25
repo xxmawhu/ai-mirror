@@ -226,10 +226,8 @@ am list
 **输出格式**：
 ```
 ai-mirror managed users:
-  imaxx_project1 (uid=10000001, home=/path/to/proj1)
-    mount: ~/.bashrc -> /path/to/proj1/.bashrc (ro)
-    mount: ~/.config -> /path/to/proj1/.config (ro)
-  imaxx_project2 (uid=10000002, home=/path/to/proj2)
+  i_maxx_a1b2c3 (uid=10000001, home=/path/to/proj1)
+  i_maxx_d4e5f6 (uid=10000002, home=/path/to/proj2)
 ```
 
 **退出码**：0 成功

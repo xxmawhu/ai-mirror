@@ -963,14 +963,13 @@ bool SSHManager::sync_known_hosts(const std::string &main_user,
 
   // Ensure .ssh directory ownership and permissions are correct
   // (covers both newly created and pre-existing directories)
-  auto dir_chown = utils::exec_safe(
-      {"chown", ai_user + ":" + ai_user, ai_ssh_dir.string()});
+  auto dir_chown =
+      utils::exec_safe({"chown", ai_user + ":" + ai_user, ai_ssh_dir.string()});
   if (dir_chown.exit_code != 0) {
     utils::get_logger()->error("Failed to chown .ssh dir for {}", ai_user);
     return false;
   }
-  auto dir_chmod =
-      utils::exec_safe({"chmod", "700", ai_ssh_dir.string()});
+  auto dir_chmod = utils::exec_safe({"chmod", "700", ai_ssh_dir.string()});
   if (dir_chmod.exit_code != 0) {
     utils::get_logger()->error("Failed to chmod .ssh dir for {}", ai_user);
     return false;

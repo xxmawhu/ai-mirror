@@ -1,7 +1,12 @@
 #include "ai_mirror/utils/logger.hpp"
+#include <memory>
 #include <mutex>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/null_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <string>
+#include <unistd.h>
+#include <vector>
 
 namespace ai_mirror::utils {
 
@@ -10,11 +15,21 @@ static std::once_flag g_logger_once;
 
 void init_logger(const std::string &level, const std::string &log_file) {
   std::vector<spdlog::sink_ptr> sinks;
-  sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+
+  // Use stdout sink only if stdout is a valid terminal or pipe
+  // Avoid crashes when stdout is redirected to /dev/null
+  if (isatty(STDOUT_FILENO) || !log_file.empty()) {
+    sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+  }
 
   if (!log_file.empty()) {
     sinks.push_back(
         std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file, false));
+  }
+
+  // Fallback: if no sinks available, use a null sink to prevent crashes
+  if (sinks.empty()) {
+    sinks.push_back(std::make_shared<spdlog::sinks::null_sink_mt>());
   }
 
   g_logger =

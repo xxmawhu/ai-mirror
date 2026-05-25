@@ -88,10 +88,12 @@ int parse_and_run(int argc, char **argv) {
   // ai_user
   std::vector<std::string> touch_args;
   auto *touch_cmd = app.add_subcommand(
-      "touch", "创建文件并授权\n"
-               "  创建空文件并设置 ai-user 所有权。\n"
-               "  使用 O_NOFOLLOW + fchown 防符号链接攻击\n"
-               "  支持通配符：am touch /path/*.py user（shell 自动展开 *）");
+      "touch",
+      "创建文件并授权\n"
+      "  创建空文件并设置 ai-user 所有权。\n"
+      "  使用 O_NOFOLLOW + fchown 防符号链接攻击\n"
+      "  支持通配符：am touch /path/*.py user（shell 自动展开 *）\n"
+      "  递归模式：am touch /path/to/dir user（目录时递归修改所有权）");
   touch_cmd
       ->add_option("paths...", touch_args,
                    "文件路径（支持多个）+ AI 用户名（最后一个参数）")

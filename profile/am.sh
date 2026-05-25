@@ -126,7 +126,7 @@ am() {
 		fi
 
 		# Parse output
-		local action user path
+		local action user path ssh_key
 		action=$(_am_parse_output "$output" "action")
 		user=$(_am_parse_output "$output" "user")
 		path=$(_am_parse_output "$output" "path")
@@ -166,15 +166,18 @@ am() {
 				echo "error: SSH key missing: $ssh_key. Run 'am update' first." >&2
 				return 1
 			fi
-			# SSH to AI user: start interactive login shell
-			# The ai user's HOME is set to the project directory, so no explicit cd needed
+			# SSH to AI user: cd to target path and start interactive login shell
+			# The ai user's HOME is set to the project directory, but user may cd to subdir
+			# Escape single quotes in path for safe remote command execution (replace ' with '\''')
 			# StrictHostKeyChecking=accept-new: auto-accept new hosts, verify existing (MITM protection)
 			# UserKnownHostsFile: ensure known_hosts is used from AI user's ~/.ssh/
+			local escaped_path="${path//\'/\'\\\'\'}"
 			ssh -tt -i "$ssh_key" \
 				-o IdentitiesOnly=yes \
 				-o StrictHostKeyChecking=accept-new \
 				-o UserKnownHostsFile=~/.ssh/known_hosts \
-				"${user}@localhost"
+				"${user}@localhost" \
+				"cd '${escaped_path}' && exec bash -l"
 			;;
 		cd)
 			# Validate path

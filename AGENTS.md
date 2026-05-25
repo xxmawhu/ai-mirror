@@ -54,8 +54,8 @@ cp <file> github-ai-mirror/<file>
 
 | 文件 | 用途 |
 |------|------|
-| `src/cli/commands.cpp` | 命令实现，do_configure(), cmd_auto_fix_all(), cmd_health()（含 stale mount 检测） |
-| `src/cli/parser.cpp` | CLI 子命令注册（create, update, auto-fix-all 等） |
+| `src/cli/commands.cpp` | 命令实现，do_configure(), cmd_auto_fix_all(), cmd_health()（含 stale mount 检测）, cmd_touch（目录递归 chown） |
+| `src/cli/parser.cpp` | CLI 子命令注册（create, update, auto-fix-all, touch 等） |
 | `src/core/config.cpp` | 配置加载（toml11 解析） |
 | `src/core/user_manager.cpp` | ai-user 创建/删除，.am_status 状态文件管理，SSH 密钥生成 |
 | `src/core/graft.cpp` | bind mount 管理，health_check() 检测 mount source 存在性 |
@@ -68,6 +68,7 @@ cp <file> github-ai-mirror/<file>
 | `scripts/commit-hook.sh` | commit 三阶段检查（clang-format + cmake + test） |
 | `scripts/setup-hooks.sh` | hooks 安装脚本 |
 | `scripts/post-merge-hook.sh` | post-merge 自动部署（调用 install.sh） |
+| `profile/am.sh` | Shell 前端，`am cd` SSH 自动 cd 到项目目录（单引号转义路径），source 方式加载 |
 | `install.sh` | 构建部署脚本（build + install 到 /usr/local/bin） |
 
 ## RULE

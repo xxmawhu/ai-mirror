@@ -31,7 +31,7 @@ setup() {
 	cat >/root/.ai-mirror.toml <<'EOF'
 [user]
 prefix = "ai_"
-allowed_bases = ["/root", "/home"]
+allowed_bases = ["*"]
 
 [ssh]
 key_path = "/root/.ssh/ai-mirror"

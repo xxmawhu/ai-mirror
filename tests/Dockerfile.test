@@ -1,6 +1,10 @@
 FROM ubuntu:24.04
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build tools + runtime dependencies in single layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    g++ cmake make git pkg-config libssl-dev ca-certificates \
     passwd \
     openssh-server openssh-client \
     mount util-linux \
@@ -8,19 +12,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -s /bin/bash testuser && \
-    echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# Copy full source tree for in-container build
+COPY . /opt/ai-mirror-src/
 
-COPY build-test/bin/ai-mirror /usr/local/bin/ai-mirror-bin
-RUN ln -sf /usr/local/bin/ai-mirror-bin /usr/local/bin/am && \
-    chmod +x /usr/local/bin/ai-mirror-bin
+# Build from source
+WORKDIR /opt/ai-mirror-src
+RUN cmake -B build-test -DCMAKE_BUILD_TYPE=Debug . && \
+    cmake --build build-test --target ai-mirror -j$(nproc)
 
-RUN mkdir -p /etc/ai-mirror /var/lib/ai-mirror /home/testuser/projects/testproj && \
-    chown -R testuser:testuser /home/testuser && \
+# Install binary
+RUN install -d /usr/local/bin && \
+    install -m 0755 build-test/bin/ai-mirror /usr/local/bin/ai-mirror-bin && \
+    ln -sf /usr/local/bin/ai-mirror-bin /usr/local/bin/am
+
+# Setup runtime directories
+RUN mkdir -p /etc/ai-mirror /var/lib/ai-mirror /root/.ssh /root/projects/testproj && \
     groupadd -f ai-mirror && \
     usermod -aG ai-mirror root
 
-COPY tests/run_tests.sh tests/test_stale_mount.sh tests/test_git_chown.sh /tmp/
-RUN chmod +x /tmp/run_tests.sh /tmp/test_stale_mount.sh /tmp/test_git_chown.sh
+# Setup SSH host keys (required by test_ssh_login in run_tests.sh)
+RUN mkdir -p /run/sshd && ssh-keygen -A
 
-CMD ["/tmp/test_git_chown.sh"]
+# Copy test scripts
+COPY tests/run_tests.sh /tmp/run_tests.sh
+RUN chmod +x /tmp/run_tests.sh
+
+CMD ["/tmp/run_tests.sh"]

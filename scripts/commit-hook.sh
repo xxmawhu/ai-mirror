@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# ai-mirror commit-hook: three-phase validation
+# ai-mirror commit-hook: four-phase validation
 # Phase 0: Version check (version.hpp.in must be updated)
 # Phase 1: Code check (clang-format dry-run)
 # Phase 2: Build verification (cmake)
-# Phase 3: Unit tests
+# Phase 3: Unit tests (Docker, no host root required)
 #
 # [log-review] 日志输出到 ./log/hook/ (Rule 2/9)
 set -euo pipefail
@@ -34,12 +34,12 @@ log_status() {
 	local exit_code=$1
 	local name=$2
 	local detail=$3
-	if [ $exit_code -eq 0 ]; then
+	if [[ $exit_code -eq 0 ]]; then
 		echo -e "${GREEN}  ✅ PASSED${NC}: ${name}"
 		PASS=$((PASS + 1))
 	else
 		echo -e "${RED}  ❌ FAILED${NC}: ${name}"
-		if [ -n "$detail" ]; then
+		if [[ -n "$detail" ]]; then
 			echo -e "${YELLOW}    ${detail}${NC}"
 		fi
 		FAIL=$((FAIL + 1))
@@ -55,15 +55,16 @@ main() {
 	# ============================================
 	echo -e "${CYAN}--- Phase 0: Version Check ---${NC}"
 
-	VERSION_FILE="$PROJECT_DIR/include/ai_mirror/version.hpp.in"
-	if [ -f "$VERSION_FILE" ]; then
+	local VERSION_FILE="$PROJECT_DIR/include/ai_mirror/version.hpp.in"
+	if [[ -f "$VERSION_FILE" ]]; then
 		# Check if version file changed in staged files
 		if git diff --cached --name-only | grep -q "version.hpp.in"; then
 			log_status 0 "version update" "version.hpp.in changed in commit"
 		else
 			# Check if any source files changed (excluding version file itself)
+			local CHANGED
 			CHANGED=$(git diff --cached --name-only | grep -E "^(src/|include/)" | grep -v "version.hpp" | head -1)
-			if [ -n "$CHANGED" ]; then
+			if [[ -n "$CHANGED" ]]; then
 				log_status 1 "version update required" "source changed but version.hpp.in not updated"
 				echo -e "${YELLOW}    Files changed: ${CHANGED}${NC}"
 				echo -e "${YELLOW}    Action: edit version.hpp.in (update comment timestamp or add changelog)${NC}"
@@ -83,7 +84,7 @@ main() {
 	if ! command -v clang-format &>/dev/null; then
 		echo -e "${YELLOW}  ⚠️  SKIPPED: clang-format not installed${NC}"
 	else
-		FAILED_FILES=()
+		local -a FAILED_FILES=()
 		# Find C++ source files
 		while IFS= read -r -d '' f; do
 			if ! clang-format --dry-run -Werror "$f" 2>/dev/null; then
@@ -92,7 +93,7 @@ main() {
 		done < <(find "$PROJECT_DIR/src" "$PROJECT_DIR/include" \
 			\( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) -print0 2>/dev/null || true)
 
-		if [ ${#FAILED_FILES[@]} -eq 0 ]; then
+		if [[ ${#FAILED_FILES[@]} -eq 0 ]]; then
 			log_status 0 "clang-format check" ""
 		else
 			log_status 1 "clang-format check" "${#FAILED_FILES[@]} files need formatting"
@@ -109,14 +110,15 @@ main() {
 	echo ""
 	echo -e "${CYAN}--- Phase 2: Build Verification ---${NC}"
 
-	BUILD_DIR="$PROJECT_DIR/build-test"
-	if [ -f "$PROJECT_DIR/CMakeLists.txt" ]; then
+	local BUILD_DIR="$PROJECT_DIR/build-test"
+	if [[ -f "$PROJECT_DIR/CMakeLists.txt" ]]; then
 		set +e
+		local BUILD_OUTPUT BUILD_EXIT
 		BUILD_OUTPUT=$(cmake --build "$BUILD_DIR" --target ai-mirror -j4 2>&1)
 		BUILD_EXIT=$?
 		set -e
 
-		if [ $BUILD_EXIT -eq 0 ]; then
+		if [[ $BUILD_EXIT -eq 0 ]]; then
 			log_status 0 "cmake build" ""
 		else
 			log_status 1 "cmake build" "see errors above"
@@ -127,28 +129,26 @@ main() {
 	fi
 
 	# ============================================
-	# Phase 3: Unit tests
+	# Phase 3: Unit tests (Docker)
 	# ============================================
 	echo ""
-	echo -e "${CYAN}--- Phase 3: Unit Tests ---${NC}"
+	echo -e "${CYAN}--- Phase 3: Unit Tests (Docker) ---${NC}"
 
-	TEST_DIR="$PROJECT_DIR/tests"
-	if [ -f "$TEST_DIR/run_tests.sh" ]; then
-		cd "$TEST_DIR"
-		set +e
-		TEST_OUTPUT=$(bash run_tests.sh 2>&1)
-		TEST_EXIT=$?
-		set -e
-		cd "$PROJECT_DIR"
+	if command -v docker &>/dev/null; then
+		local test_exit=0
+		# Build and run tests inside Docker container (--privileged for mount/ssh/useradd)
+		docker build -t ai-mirror-test -f "$PROJECT_DIR/tests/Dockerfile.test" "$PROJECT_DIR" >/dev/null 2>&1 || test_exit=$?
+		if [[ $test_exit -eq 0 ]]; then
+			docker run --rm --privileged ai-mirror-test || test_exit=$?
+		fi
 
-		if [ $TEST_EXIT -eq 0 ]; then
-			log_status 0 "unit tests (run_tests.sh)" ""
+		if [[ $test_exit -eq 0 ]]; then
+			log_status 0 "unit tests (Docker)" ""
 		else
-			log_status 1 "unit tests (run_tests.sh)" "see errors above"
-			echo "$TEST_OUTPUT" | tail -20
+			log_status 1 "unit tests (Docker)" "Docker build or test failed (exit $test_exit)"
 		fi
 	else
-		echo -e "${YELLOW}  ⚠️  SKIPPED: tests/run_tests.sh not found${NC}"
+		echo -e "${YELLOW}  ⚠️  SKIPPED: docker not installed (required for rootless testing)${NC}"
 	fi
 
 	# ============================================
@@ -160,7 +160,7 @@ main() {
 	echo -e "  Failed: ${RED}${FAIL}${NC}"
 	echo ""
 
-	if [ $FAIL -gt 0 ]; then
+	if [[ $FAIL -gt 0 ]]; then
 		echo -e "${RED}commit blocked: ${FAIL} checks failed${NC}"
 		exit 1
 	fi

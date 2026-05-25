@@ -291,9 +291,17 @@ phase_verify() {
 	log "  ${BIN_NAME} ($(stat -c%s "$bin") bytes)"
 
 	log "  Testing --help output..."
-	"$bin" --help >/dev/null 2>&1 || {
-		warn "  ${BIN_NAME} --help returned non-zero (may need root for full operation)"
-	}
+	local help_output
+	local help_exit
+	help_output=$("$bin" --help 2>&1) && help_exit=0 || help_exit=$?
+
+	if [[ $help_exit -ne 0 ]]; then
+		warn "  ${BIN_NAME} --help returned non-zero (exit=$help_exit)"
+		warn "  Output: ${help_output}"
+		warn "  This may indicate a crash or terminal compatibility issue"
+	else
+		log "  --help works correctly"
+	fi
 
 	log "Binary verified OK"
 }
@@ -347,6 +355,16 @@ phase_install() {
 		fi
 	else
 		warn "  profile/am.sh not found, skipping profile function install"
+	fi
+
+	# Configure git safe.directory for project repository (fix dubious ownership)
+	log "Configuring git safe.directory..."
+	local project_repo
+	project_repo=$(cd "${SCRIPT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}")
+	if [[ -d "$project_repo" ]]; then
+		# Add to system-wide git config (requires sudo)
+		sudo git config --system --add safe.directory "$project_repo" 2>/dev/null || true
+		log "  Added $project_repo to git safe.directory (system config)"
 	fi
 
 	# Install bash completion

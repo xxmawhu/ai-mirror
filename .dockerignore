@@ -12,6 +12,9 @@ plan/
 .clangd/
 compile_commands.json
 
-# Keep tests/smoke for Docker build
+# Keep tests/smoke, tests/run_tests.sh and tests/Dockerfile.test for Docker build
 tests/*
 !tests/smoke/
+!tests/run_tests.sh
+!tests/Dockerfile.test
+!tests/test_*.sh

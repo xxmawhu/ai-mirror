@@ -1370,6 +1370,22 @@ int cmd_touch(const std::string &path, const std::string &ai_user,
     return 1;
   }
 
+  // If path is an existing directory, recursively chown all contents
+  std::error_code dir_ec;
+  if (fs::is_directory(file_path, dir_ec) && !dir_ec) {
+    if (!safe_chown_path(file_path, ai_user)) {
+      std::cerr << "Failed to recursively set ownership for " << ai_user
+                << std::endl;
+      return 1;
+    }
+    if (verbose) {
+      std::cout << "Recursively set ownership: " << file_path.string()
+                << " (owner: " << ai_user << ")" << std::endl;
+    }
+    return 0;
+  }
+
+  // Single file: create if not exists, then chown
   if (!fs::exists(file_path)) {
     std::error_code ec;
     fs::path parent = file_path.parent_path();

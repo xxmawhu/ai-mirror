@@ -1,9 +1,0 @@
-[submodule "gitlib-ai-mirror"]
-	path = gitlib-ai-mirror
-	url = gitlab@13.231.144.205:maxx/AiMirror.git
-[submodule "github-ai-mirror"]
-	path = github-ai-mirror
-	url = git@github.com:xxmawhu/ai-mirror.git
-[submodule "gitee-ai-mirror"]
-	path = gitee-ai-mirror
-	url = git@gitee.com:neotrino/ai-mirror.git

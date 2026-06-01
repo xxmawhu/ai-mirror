@@ -80,3 +80,32 @@ cp <file> github-ai-mirror/<file>
   - 只有遇到歧义、缺少关键信息、或需要用户决策时才可使用 question tool 交互
 * **git 错误必须报告**：遇到 git 错误（如 dubious ownership、permission denied、hook 失败、网络超时）时，必须使用 question tool 向用户报告具体错误信息和修复建议，禁止静默跳过或反复声明"立即执行"却不行动
 * **post-merge 全自动**：maxx 运行时只做 `git pull`，所有依赖安装和服务重启必须由 post-merge hook 自动完成，禁止要求 maxx 做任何多余的手动操作
+
+## 外部库操作规范
+
+本项目依赖以下外部库（header-only 或系统安装）：
+- CLI11（命令行解析）
+- FTXUI（终端 UI）
+- nlohmann/json（JSON 处理）
+- spdlog（日志）
+- toml11（TOML 配置）
+
+### 识别标准
+以下情况视为"外部库问题"：
+1. 编译错误涉及 `/opt/lib/` 或 `/usr/local/include/` 下的库文件
+2. 错误信息包含库名（如 `CLI11`, `nlohmann`, `spdlog`, `toml11`, `ftxui`）
+3. 问题出现在 `_deps/` 目录下的依赖源码（cmake FetchContent）
+
+### 强制流程
+发现外部库 bug 时：
+1. **禁止直接修改**：不得修改库代码、header 文件或 `_deps/` 内容
+2. **提出 issue**：使用 `/publish-issue` 向库项目提出 issue
+3. **等待修复**：等待库项目官方修复并发布新版本
+4. **更新依赖**：通过 cmake FetchContent 或系统包管理更新版本
+
+### 紧急处理
+如需紧急修复：
+- 先向库项目提出 issue 说明紧急程度
+- 仅限在本项目内提供临时方案（如 wrapper、patch 文件）
+- 禁止修改库原始文件
+- 等待库修复后撤销临时方案

@@ -40,3 +40,10 @@ repos:
         language: script
         stages: [post-merge]
         always_run: true
+
+      - id: check-file-permissions
+        name: check source file permissions (600)
+        entry: scripts/check-file-permissions.sh
+        language: script
+        types_or: [c++, c, python]
+        stages: [pre-commit]

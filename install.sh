@@ -358,13 +358,31 @@ phase_install() {
 	fi
 
 	# Configure git safe.directory for project repository (fix dubious ownership)
+	# Using --system level because: install.sh runs under maxx user with sudo,
+	# but the repo directory may be accessed by multiple AI users created by ai-mirror.
+	# System-level config ensures all users can use git without dubious ownership error.
 	log "Configuring git safe.directory..."
 	local project_repo
-	project_repo=$(cd "${SCRIPT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}")
+	project_repo=$(cd "${SCRIPT_DIR}" && git rev-parse --show-toplevel 2>/dev/null) || {
+		# Not a git repository - skip safe.directory configuration
+		info "  Not a git repository, skipping safe.directory config"
+		return 0
+	}
+
 	if [[ -d "$project_repo" ]]; then
-		# Add to system-wide git config (requires sudo)
-		sudo git config --system --add safe.directory "$project_repo" 2>/dev/null || true
-		log "  Added $project_repo to git safe.directory (system config)"
+		# Check if already configured (idempotency)
+		if sudo git config --system --get safe.directory "$project_repo" &>/dev/null; then
+			log "  Already configured: $project_repo"
+		else
+			# Add to system-wide git config (requires sudo)
+			if sudo git config --system --add safe.directory "$project_repo" 2>/dev/null; then
+				log "  Added $project_repo to git safe.directory (system config)"
+			else
+				# [log-review] 降级为 warning：非关键配置失败不影响主安装流程
+				# sudo 权限不足或 /etc/gitconfig 写入失败属预期内可容忍异常
+				warn "  Failed to configure git safe.directory (sudo or write error), continuing..."
+			fi
+		fi
 	fi
 
 	# Install bash completion

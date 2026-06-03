@@ -172,13 +172,14 @@ am() {
 			# StrictHostKeyChecking=accept-new: auto-accept new hosts, verify existing (MITM protection)
 			# UserKnownHostsFile: ensure known_hosts is used from AI user's ~/.ssh/
 			# Configure git safe.directory to avoid dubious ownership error (AI user owns project)
+			# Use --replace-all to ensure idempotency (avoid duplicate entries on repeated am cd)
 			local escaped_path="${path//\'/\'\\\'\'}"
 			ssh -tt -i "$ssh_key" \
 				-o IdentitiesOnly=yes \
 				-o StrictHostKeyChecking=accept-new \
 				-o UserKnownHostsFile=~/.ssh/known_hosts \
 				"${user}@localhost" \
-				"git config --global --add safe.directory '${escaped_path}' 2>/dev/null || true; cd '${escaped_path}' && exec bash -l"
+				"git config --global --replace-all safe.directory '${escaped_path}' 2>/dev/null; cd '${escaped_path}' && exec bash -l"
 			;;
 		cd)
 			# Validate path

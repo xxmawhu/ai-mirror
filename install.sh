@@ -362,9 +362,17 @@ phase_install() {
 	local project_repo
 	project_repo=$(cd "${SCRIPT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}")
 	if [[ -d "$project_repo" ]]; then
-		# Add to system-wide git config (requires sudo)
-		sudo git config --system --add safe.directory "$project_repo" 2>/dev/null || true
-		log "  Added $project_repo to git safe.directory (system config)"
+		# Check if already configured to avoid duplicate entries from repeated installs
+		local already_configured=false
+		if sudo git config --system --get-all safe.directory 2>/dev/null | grep -qF "$project_repo"; then
+			already_configured=true
+		fi
+		if ! $already_configured; then
+			sudo git config --system --add safe.directory "$project_repo" 2>/dev/null || true
+			log "  Added $project_repo to git safe.directory (system config)"
+		else
+			log "  $project_repo already in git safe.directory (skipped)"
+		fi
 	fi
 
 	# Install bash completion

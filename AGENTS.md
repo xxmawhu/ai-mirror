@@ -68,8 +68,8 @@ cp <file> github-ai-mirror/<file>
 | `scripts/commit-hook.sh` | commit 三阶段检查（clang-format + cmake + test） |
 | `scripts/setup-hooks.sh` | hooks 安装脚本 |
 | `scripts/post-merge-hook.sh` | post-merge 自动部署（调用 install.sh） |
-| `profile/am.sh` | Shell 前端，`am cd` SSH 自动 cd 到项目目录（单引号转义路径），source 方式加载 |
-| `install.sh` | 构建部署脚本（build + install 到 /usr/local/bin） |
+| `profile/am.sh` | Shell 前端，`am cd` SSH 自动 cd 到项目目录（单引号转义路径），source 方式加载，SSH 登录时自动配置 git safe.directory（防 dubious ownership） |
+| `install.sh` | 构建部署脚本（build + install 到 /usr/local/bin），部署时自动配置 git safe.directory（防 dubious ownership） |
 
 ## RULE
 

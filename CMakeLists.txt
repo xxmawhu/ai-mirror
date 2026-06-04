@@ -32,8 +32,6 @@ set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
 set(CMAKE_LINK_SEARCH_START_STATIC ON)
 set(CMAKE_LINK_SEARCH_END_STATIC ON)
 
-find_package(PkgConfig)
-
 set(AI_MIRROR_SOURCES
     src/main.cpp
     src/cli/parser.cpp

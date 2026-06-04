@@ -18,12 +18,12 @@ COPY . /opt/ai-mirror-src/
 # Build from source
 WORKDIR /opt/ai-mirror-src
 RUN cmake -B build-test -DCMAKE_BUILD_TYPE=Debug . && \
-    cmake --build build-test --target ai-mirror -j$(nproc)
+    cmake --build build-test --target am ai-mirror-bin -j$(nproc)
 
-# Install binary
+# Install binaries
 RUN install -d /usr/local/bin && \
-    install -m 0755 build-test/bin/ai-mirror /usr/local/bin/ai-mirror-bin && \
-    ln -sf /usr/local/bin/ai-mirror-bin /usr/local/bin/am
+    install -m 0755 build-test/bin/am /usr/local/bin/am && \
+    install -m 0755 build-test/bin/ai-mirror-bin /usr/local/bin/ai-mirror-bin
 
 # Setup runtime directories
 RUN mkdir -p /etc/ai-mirror /var/lib/ai-mirror /root/.ssh /root/projects/testproj && \

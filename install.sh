@@ -19,7 +19,8 @@ INSTALL_LOG="${LOG_DIR}/install.log"
 PREFIX="${AI_MIRROR_PREFIX:-/usr/local}"
 CONFIG_DIR="${AI_MIRROR_CONFIG_DIR:-/etc/ai-mirror}"
 DATA_DIR="${AI_MIRROR_DATA_DIR:-/var/lib/ai-mirror}"
-BIN_NAME="am"
+BIN_NAME="ai-mirror-bin"
+WRAPPER_NAME="am"
 
 # ---- Error Tracking ----
 CURRENT_PHASE="init"
@@ -309,29 +310,31 @@ phase_verify() {
 phase_install() {
 	CURRENT_PHASE="install"
 	require_sudo
-	log "Installing binary to ${PREFIX}/bin/..."
+	log "Installing binaries to ${PREFIX}/bin/..."
 
 	if ! sudo install -d "${PREFIX}/bin"; then
 		ERROR_MSG="Failed to create directory: ${PREFIX}/bin"
 		return 1
 	fi
+
+	# Install wrapper (am)
+	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${WRAPPER_NAME}" "${PREFIX}/bin/${WRAPPER_NAME}"; then
+		ERROR_MSG="Failed to install wrapper to ${PREFIX}/bin/${WRAPPER_NAME}"
+		return 1
+	fi
+	log "  ${PREFIX}/bin/${WRAPPER_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${WRAPPER_NAME}") bytes)"
+
+	# Install real binary (ai-mirror-bin)
 	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${BIN_NAME}"; then
 		ERROR_MSG="Failed to install binary to ${PREFIX}/bin/${BIN_NAME}"
 		return 1
 	fi
-
 	log "  ${PREFIX}/bin/${BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${BIN_NAME}") bytes)"
 
 	# Remove old am.sh from /etc/profile.d/ if present (legacy cleanup)
 	if sudo test -f /etc/profile.d/am.sh; then
 		sudo rm -f /etc/profile.d/am.sh
 		log "  Removed legacy /etc/profile.d/am.sh"
-	fi
-
-	# Remove old ai-mirror-bin if present (legacy cleanup)
-	if sudo test -f "${PREFIX}/bin/ai-mirror-bin"; then
-		sudo rm -f "${PREFIX}/bin/ai-mirror-bin"
-		log "  Removed legacy ${PREFIX}/bin/ai-mirror-bin"
 	fi
 
 	# Configure git safe.directory for project repository (fix dubious ownership)
@@ -366,7 +369,7 @@ phase_install() {
 	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
 	sudo tee "$sudoers_file" >/dev/null <<SUDOERS
 # ai-mirror sudo rules
-# Allows members of the ai-mirror group to run am commands as root
+# Allows members of the ai-mirror group to run ai-mirror-bin commands as root
 #
 # Security: Defense in depth
 # - No wildcards in commands: exact binary path required
@@ -408,8 +411,9 @@ phase_summary() {
 	log "INSTALL COMPLETE"
 	separator
 	log ""
-	log "Installed:"
-	log "  ${PREFIX}/bin/${BIN_NAME}  (binary)"
+	log "Installed binaries:"
+	log "  ${PREFIX}/bin/${WRAPPER_NAME}      (wrapper, auto sudo elevation)"
+	log "  ${PREFIX}/bin/${BIN_NAME}  (implementation)"
 	log "  /etc/bash_completion.d/am  (bash completion, sourced on login)"
 	log ""
 	log "Data directory:"
@@ -418,19 +422,18 @@ phase_summary() {
 	log "Sudoers:"
 	log "  ${CONFIG_DIR}/sudoers.d/ai-mirror"
 	log ""
-	log "Shell integration (zoxide-style):"
-	log "  Add to ~/.bashrc:"
-	log "    eval \"\$(am init bash)\""
+	log "Architecture:"
+	log "  User calls:        am create /path"
+	log "  Wrapper checks:    non-root → sudo ai-mirror-bin create /path"
+	log "  Wrapper checks:    root → ai-mirror-bin create /path"
 	log ""
 	log "Quick start:"
 	log "  1. Add user to group:     sudo usermod -aG ai-mirror \$USER"
-	log "  2. Add to ~/.bashrc:      eval \"\$(am init bash)\""
-	log "  3. (new login) source the profile: source ~/.bashrc"
-	log "  4. Create project user:   am create /path/to/project"
-	log "  5. Change directory:      am cd /path/to/project   (SSH to AI user)"
-	log "  6. Grant write access:    am mkdir /path/to/dir <ai-user>"
-	log "  7. List users:            am list"
-	log "  8. Remove project:        am rm /path/to/project"
+	log "  2. Create project user:   am create /path/to/project"
+	log "  3. Change directory:      am cd /path/to/project   (SSH to AI user)"
+	log "  4. Grant write access:    am mkdir /path/to/dir <ai-user>"
+	log "  5. List users:            am list"
+	log "  6. Remove project:        am rm /path/to/project"
 	log ""
 	log "Uninstall:"
 	log "  bash ${SCRIPT_DIR}/install.sh --clean"
@@ -445,18 +448,22 @@ phase_clean() {
 	require_sudo
 	log "Removing installed files..."
 
+	# Remove wrapper
+	if sudo test -f "${PREFIX}/bin/${WRAPPER_NAME}"; then
+		if ! sudo rm -f "${PREFIX}/bin/${WRAPPER_NAME}"; then
+			ERROR_MSG="Failed to remove ${PREFIX}/bin/${WRAPPER_NAME}"
+			return 1
+		fi
+		log "  Removed ${PREFIX}/bin/${WRAPPER_NAME}"
+	fi
+
+	# Remove real binary
 	if sudo test -f "${PREFIX}/bin/${BIN_NAME}"; then
 		if ! sudo rm -f "${PREFIX}/bin/${BIN_NAME}"; then
 			ERROR_MSG="Failed to remove ${PREFIX}/bin/${BIN_NAME}"
 			return 1
 		fi
 		log "  Removed ${PREFIX}/bin/${BIN_NAME}"
-	fi
-
-	# Remove legacy ai-mirror-bin if present
-	if sudo test -f "${PREFIX}/bin/ai-mirror-bin"; then
-		sudo rm -f "${PREFIX}/bin/ai-mirror-bin"
-		log "  Removed legacy ${PREFIX}/bin/ai-mirror-bin"
 	fi
 
 	# Remove legacy am.sh if present

@@ -51,13 +51,14 @@ set(AI_MIRROR_SOURCES
     src/utils/logger.cpp
 )
 
-add_executable(am ${AI_MIRROR_SOURCES})
+# Main implementation binary (ai-mirror-bin)
+add_executable(ai-mirror-bin ${AI_MIRROR_SOURCES})
 
-target_include_directories(am PRIVATE
+target_include_directories(ai-mirror-bin PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
-target_compile_options(am PRIVATE
+target_compile_options(ai-mirror-bin PRIVATE
     -Wall -Wextra -Wpedantic -Werror
     -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
     -Wformat -Wformat-security
@@ -65,10 +66,24 @@ target_compile_options(am PRIVATE
     -ffunction-sections -fdata-sections
 )
 
-target_link_options(am PRIVATE
+target_link_options(ai-mirror-bin PRIVATE
     -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
     -static-libstdc++ -static-libgcc
     -Wl,--gc-sections -Wl,--strip-all
+)
+
+# Wrapper binary (am) - auto sudo elevation
+add_executable(am src/am_wrapper.cpp)
+
+target_compile_options(am PRIVATE
+    -Wall -Wextra -Wpedantic -Werror
+    -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+)
+
+target_link_options(am PRIVATE
+    -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+    -static-libstdc++ -static-libgcc
+    -Wl,--strip-all
 )
 
 include(FetchContent)
@@ -78,39 +93,39 @@ FetchContent_Declare(cli11
     GIT_TAG v2.4.2
 )
 FetchContent_MakeAvailable(cli11)
-target_link_libraries(am PRIVATE CLI11::CLI11)
+target_link_libraries(ai-mirror-bin PRIVATE CLI11::CLI11)
 
 FetchContent_Declare(toml11
     URL "https://github.com/ToruNiina/toml11/archive/refs/tags/v4.2.0.tar.gz"
 )
 FetchContent_MakeAvailable(toml11)
-target_link_libraries(am PRIVATE toml11::toml11)
+target_link_libraries(ai-mirror-bin PRIVATE toml11::toml11)
 
 FetchContent_Declare(spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
     GIT_TAG v1.15.0
 )
 FetchContent_MakeAvailable(spdlog)
-target_link_libraries(am PRIVATE spdlog::spdlog)
+target_link_libraries(ai-mirror-bin PRIVATE spdlog::spdlog)
 
 FetchContent_Declare(nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG v3.11.3
 )
 FetchContent_MakeAvailable(nlohmann_json)
-target_link_libraries(am PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(ai-mirror-bin PRIVATE nlohmann_json::nlohmann_json)
 
 FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/ftxui
     GIT_TAG v6.1.9
 )
 FetchContent_MakeAvailable(ftxui)
-target_link_libraries(am PRIVATE ftxui::component)
+target_link_libraries(ai-mirror-bin PRIVATE ftxui::component)
 
-target_link_libraries(am PRIVATE pthread)
+target_link_libraries(ai-mirror-bin PRIVATE pthread)
 
 find_package(OpenSSL REQUIRED)
-target_link_libraries(am PRIVATE OpenSSL::Crypto)
+target_link_libraries(ai-mirror-bin PRIVATE OpenSSL::Crypto)
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     enable_testing()

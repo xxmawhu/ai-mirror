@@ -385,6 +385,7 @@ phase_install() {
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm ""
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy ""
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} auto-fix-all ""
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list ""
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config ""
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status ""

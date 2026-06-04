@@ -20,7 +20,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <grp.h>
 #include <iostream>
+#include <pwd.h>
 #include <string>
 #include <sys/types.h>
 #include <unistd.h>
@@ -41,38 +43,46 @@ static bool needs_sudo(const std::string &cmd) {
   return false;
 }
 
-// Check if user is in ai-mirror group
+// Check if user is in ai-mirror group (from system database, not process
+// groups)
 static bool is_ai_mirror_group_member() {
-  gid_t groups[64];
-  int ngroups = getgroups(64, groups);
-  if (ngroups < 0)
+  uid_t uid = getuid();
+
+  // Get username from UID
+  struct passwd *pw = getpwuid(uid);
+  if (!pw)
     return false;
 
-  // Get ai-mirror group GID from getent
-  FILE *fp = popen("getent group ai-mirror 2>/dev/null", "r");
-  if (!fp)
+  // Get ai-mirror group GID
+  struct group *gr = getgrnam("ai-mirror");
+  if (!gr)
+    return false;
+  gid_t target_gid = gr->gr_gid;
+
+  // Check primary group
+  if (pw->pw_gid == target_gid)
+    return true;
+
+  // Get all groups for this user from system database
+  int ngroups = 0;
+  getgrouplist(pw->pw_name, pw->pw_gid, nullptr, &ngroups);
+  if (ngroups <= 0)
     return false;
 
-  char line[256];
-  gid_t gid = static_cast<gid_t>(-1);
-  if (fgets(line, sizeof(line), fp)) {
-    char *p = strchr(line, ':');
-    if (p) {
-      p = strchr(p + 1, ':');
-      if (p) {
-        gid = static_cast<gid_t>(atoi(p + 1));
-      }
-    }
+  gid_t *groups = new gid_t[ngroups];
+  if (getgrouplist(pw->pw_name, pw->pw_gid, groups, &ngroups) < 0) {
+    delete[] groups;
+    return false;
   }
-  pclose(fp);
-
-  if (gid == static_cast<gid_t>(-1))
-    return false;
 
   for (int i = 0; i < ngroups; i++) {
-    if (groups[i] == gid)
+    if (groups[i] == target_gid) {
+      delete[] groups;
       return true;
+    }
   }
+
+  delete[] groups;
   return false;
 }
 

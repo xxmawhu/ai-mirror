@@ -19,8 +19,7 @@ INSTALL_LOG="${LOG_DIR}/install.log"
 PREFIX="${AI_MIRROR_PREFIX:-/usr/local}"
 CONFIG_DIR="${AI_MIRROR_CONFIG_DIR:-/etc/ai-mirror}"
 DATA_DIR="${AI_MIRROR_DATA_DIR:-/var/lib/ai-mirror}"
-BIN_NAME="ai-mirror"
-REAL_BIN_NAME="ai-mirror-bin"
+BIN_NAME="am"
 
 # ---- Error Tracking ----
 CURRENT_PHASE="init"
@@ -316,45 +315,23 @@ phase_install() {
 		ERROR_MSG="Failed to create directory: ${PREFIX}/bin"
 		return 1
 	fi
-	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${REAL_BIN_NAME}"; then
-		ERROR_MSG="Failed to install binary to ${PREFIX}/bin/${REAL_BIN_NAME}"
+	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${BIN_NAME}"; then
+		ERROR_MSG="Failed to install binary to ${PREFIX}/bin/${BIN_NAME}"
 		return 1
 	fi
 
-	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${REAL_BIN_NAME}") bytes)"
+	log "  ${PREFIX}/bin/${BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${BIN_NAME}") bytes)"
 
-	# Install bash profile function (only if content changed)
-	log "Checking bash profile function..."
-	local profile_src="${SCRIPT_DIR}/profile/am.sh"
-	if [[ -f "$profile_src" ]]; then
-		sudo install -d /etc/profile.d
+	# Remove old am.sh from /etc/profile.d/ if present (legacy cleanup)
+	if sudo test -f /etc/profile.d/am.sh; then
+		sudo rm -f /etc/profile.d/am.sh
+		log "  Removed legacy /etc/profile.d/am.sh"
+	fi
 
-		# Build expected content with search paths updated
-		# The profile now searches multiple paths, ensure PREFIX/bin is first non-empty entry
-		local expected_content
-		expected_content=$(sed -E '/^_AM_SEARCH_PATHS=\(/,/\)/c\_AM_SEARCH_PATHS=("'"${PREFIX}/bin/${REAL_BIN_NAME}"'" "${AI_MIRROR_BIN:-}" "${HOME:-}/.local/bin/ai-mirror-bin")' "$profile_src")
-
-		# Compare with installed version
-		local needs_update=false
-		if sudo test ! -f /etc/profile.d/am.sh; then
-			needs_update=true
-		else
-			local installed_content
-			installed_content=$(sudo cat /etc/profile.d/am.sh)
-			if [[ "$expected_content" != "$installed_content" ]]; then
-				needs_update=true
-			fi
-		fi
-
-		if $needs_update; then
-			echo "$expected_content" | sudo tee /etc/profile.d/am.sh >/dev/null
-			sudo chmod 0644 /etc/profile.d/am.sh
-			log "  /etc/profile.d/am.sh (updated)"
-		else
-			log "  /etc/profile.d/am.sh (unchanged, skipped)"
-		fi
-	else
-		warn "  profile/am.sh not found, skipping profile function install"
+	# Remove old ai-mirror-bin if present (legacy cleanup)
+	if sudo test -f "${PREFIX}/bin/ai-mirror-bin"; then
+		sudo rm -f "${PREFIX}/bin/ai-mirror-bin"
+		log "  Removed legacy ${PREFIX}/bin/ai-mirror-bin"
 	fi
 
 	# Configure git safe.directory for project repository (fix dubious ownership)
@@ -389,7 +366,7 @@ phase_install() {
 	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
 	sudo tee "$sudoers_file" >/dev/null <<SUDOERS
 # ai-mirror sudo rules
-# Allows members of the ai-mirror group to run ai-mirror commands as root
+# Allows members of the ai-mirror group to run am commands as root
 #
 # Security: Defense in depth
 # - No wildcards in commands: exact binary path required
@@ -399,28 +376,19 @@ phase_install() {
 # - Binary uses O_NOFOLLOW, fs::canonical, and boundary checks
 # - Sudoers is the outer gate; binary is the inner validator
 #
-# Note: sudoers path patterns (e.g., /home/*) are limited glob syntax
-# and cannot enforce username prefix validation. The binary performs
-# strict path validation including:
-# - Path must be under /home/<prefix>_username
-# - No .. traversal
-# - No symlink tricks (O_NOFOLLOW, canonical)
-# - Parent directory must exist for new file creation
-# The "" suffix allows any arguments after the subcommand.
-# Argument validation is enforced by the binary itself.
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} create ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} mkdir ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} touch ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} cp ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} mv ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} cd ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} rm ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} force-destroy ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} health ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} list ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} config ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} status ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${REAL_BIN_NAME} update ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} touch ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cp ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mv ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update ""
 SUDOERS
 	sudo chmod 0440 "$sudoers_file"
 	sudo chown root:root "$sudoers_file"
@@ -440,9 +408,8 @@ phase_summary() {
 	separator
 	log ""
 	log "Installed:"
-	log "  /etc/profile.d/am.sh       (bash function, sourced on login)"
+	log "  ${PREFIX}/bin/${BIN_NAME}  (binary)"
 	log "  /etc/bash_completion.d/am  (bash completion, sourced on login)"
-	log "  ${PREFIX}/bin/${REAL_BIN_NAME}  (actual binary)"
 	log ""
 	log "Data directory:"
 	log "  ${DATA_DIR}/"
@@ -450,14 +417,19 @@ phase_summary() {
 	log "Sudoers:"
 	log "  ${CONFIG_DIR}/sudoers.d/ai-mirror"
 	log ""
+	log "Shell integration (zoxide-style):"
+	log "  Add to ~/.bashrc:"
+	log "    eval \"\$(am init bash)\""
+	log ""
 	log "Quick start:"
 	log "  1. Add user to group:     sudo usermod -aG ai-mirror \$USER"
-	log "  2. (new login) source the profile function: source /etc/profile.d/am.sh"
-	log "  3. Create project user:   am create /path/to/project"
-	log "  4. Change directory:      am cd /path/to/project   (changes current shell)"
-	log "  5. Grant write access:    am mkdir /path/to/dir <ai-user>"
-	log "  6. List users:            am list"
-	log "  7. Remove project:        am rm /path/to/project"
+	log "  2. Add to ~/.bashrc:      eval \"\$(am init bash)\""
+	log "  3. (new login) source the profile: source ~/.bashrc"
+	log "  4. Create project user:   am create /path/to/project"
+	log "  5. Change directory:      am cd /path/to/project   (SSH to AI user)"
+	log "  6. Grant write access:    am mkdir /path/to/dir <ai-user>"
+	log "  7. List users:            am list"
+	log "  8. Remove project:        am rm /path/to/project"
 	log ""
 	log "Uninstall:"
 	log "  bash ${SCRIPT_DIR}/install.sh --clean"
@@ -472,20 +444,24 @@ phase_clean() {
 	require_sudo
 	log "Removing installed files..."
 
-	if sudo test -f "${PREFIX}/bin/${REAL_BIN_NAME}"; then
-		if ! sudo rm -f "${PREFIX}/bin/${REAL_BIN_NAME}"; then
-			ERROR_MSG="Failed to remove ${PREFIX}/bin/${REAL_BIN_NAME}"
+	if sudo test -f "${PREFIX}/bin/${BIN_NAME}"; then
+		if ! sudo rm -f "${PREFIX}/bin/${BIN_NAME}"; then
+			ERROR_MSG="Failed to remove ${PREFIX}/bin/${BIN_NAME}"
 			return 1
 		fi
-		log "  Removed ${PREFIX}/bin/${REAL_BIN_NAME}"
+		log "  Removed ${PREFIX}/bin/${BIN_NAME}"
 	fi
 
+	# Remove legacy ai-mirror-bin if present
+	if sudo test -f "${PREFIX}/bin/ai-mirror-bin"; then
+		sudo rm -f "${PREFIX}/bin/ai-mirror-bin"
+		log "  Removed legacy ${PREFIX}/bin/ai-mirror-bin"
+	fi
+
+	# Remove legacy am.sh if present
 	if sudo test -f /etc/profile.d/am.sh; then
-		if ! sudo rm -f /etc/profile.d/am.sh; then
-			ERROR_MSG="Failed to remove /etc/profile.d/am.sh"
-			return 1
-		fi
-		log "  Removed /etc/profile.d/am.sh"
+		sudo rm -f /etc/profile.d/am.sh
+		log "  Removed legacy /etc/profile.d/am.sh"
 	fi
 
 	if sudo test -f /etc/bash_completion.d/am; then

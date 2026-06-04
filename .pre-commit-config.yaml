@@ -43,7 +43,7 @@ repos:
 
       - id: check-file-permissions
         name: check source file permissions (600)
-        entry: scripts/check-file-permissions.sh
-        language: script
-        types_or: [c++, c, python]
+        entry: bash scripts/check-file-permissions.sh
+        language: system
+        types_or: [c++, c, python, shell]
         stages: [pre-commit]

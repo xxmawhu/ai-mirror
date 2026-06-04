@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# ai-mirror commit-hook: four-phase validation
+# ai-mirror commit-hook: five-phase validation
 # Phase 0: Version check (version.hpp.in must be updated)
 # Phase 1: Code check (clang-format dry-run)
+# Phase 1b: File permissions check (source files must be 600)
 # Phase 2: Build verification (cmake)
 # Phase 3: Unit tests (Docker, no host root required)
 #
@@ -102,6 +103,29 @@ main() {
 			done
 			echo -e "${YELLOW}    Run: clang-format -i <files>${NC}"
 		fi
+	fi
+
+	# ============================================
+	# Phase 1b: Source file permissions check
+	# ============================================
+	echo -e "${CYAN}--- Phase 1b: File Permissions Check ---${NC}"
+
+	local BAD_PERMS=0
+	while IFS= read -r -d '' f; do
+		local perms
+		perms=$(stat -c '%a' "$f")
+		if [[ "$perms" != "600" ]]; then
+			echo -e "${YELLOW}      $f ($perms)${NC}"
+			BAD_PERMS=$((BAD_PERMS + 1))
+		fi
+	done < <(find "$PROJECT_DIR/src" "$PROJECT_DIR/include" "$PROJECT_DIR/tests" "$PROJECT_DIR/scripts" \
+		\( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" -o -name "*.cxx" -o -name "*.py" -o -name "*.sh" \) -print0 2>/dev/null)
+
+	if [[ $BAD_PERMS -eq 0 ]]; then
+		log_status 0 "file permissions (600)" ""
+	else
+		log_status 1 "file permissions (600)" "$BAD_PERMS files need chmod 600"
+		echo -e "${YELLOW}    Fix: find src/ include/ tests/ scripts/ -type f \\( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' -o -name '*.py' -o -name '*.sh' \\) -exec chmod 600 {} +${NC}"
 	fi
 
 	# ============================================

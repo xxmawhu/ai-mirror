@@ -4,10 +4,10 @@
 - **子模块**: gitee / gitlib / github（同步推送）
 - **技术栈**: C++20, CLI11, FTXUI, nlohmann/json, spdlog, toml11
 - **构建**: `cmake --build build-test --target ai-mirror -j4`
-- **安装**: `bash install.sh`（部署到 `/usr/local/bin/ai-mirror-bin`）
+- **安装**: `bash install.sh`（部署到 `/usr/local/bin/am`）
 
 ## 安装目录
-- 二进制: `/usr/local/bin/ai-mirror-bin`（由 install.sh 通过 sudo install 部署）
+- 二进制: `/usr/local/bin/am`（由 install.sh 通过 sudo install 部署）
 - 配置: `/etc/ai-mirror/`
 - 数据: `/var/lib/ai-mirror/`
 
@@ -68,7 +68,7 @@ cp <file> github-ai-mirror/<file>
 | `scripts/commit-hook.sh` | commit 三阶段检查（clang-format + cmake + test） |
 | `scripts/setup-hooks.sh` | hooks 安装脚本 |
 | `scripts/post-merge-hook.sh` | post-merge 自动部署（调用 install.sh） |
-| `profile/am.sh` | Shell 前端，`am cd` SSH 自动 cd 到项目目录（单引号转义路径），source 方式加载 |
+| `completions/am-completion.bash` | Bash 补齐，安装到 `/etc/bash_completion.d/am` |
 | `install.sh` | 构建部署脚本（build + install 到 /usr/local/bin） |
 
 ## RULE

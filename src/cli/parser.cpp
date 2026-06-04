@@ -103,11 +103,12 @@ int parse_and_run(int argc, char **argv) {
   // cd
   std::string cd_path;
   auto *cd_cmd = app.add_subcommand(
-      "cd", "切换身份\n"
-            "  根据目标路径所属用户，自动切换到对应的身份上下文：\n"
-            "  - 普通目录：在当前 shell 中执行 cd\n"
-            "  - ai-user 项目目录：通过 SSH 登录到 AI 用户\n"
-            "  跨共享盘支持：ai-user 检测基于路径结构而非 UID");
+      "cd",
+      "切换身份\n"
+      "  根据目标路径所属用户，自动切换到对应的身份上下文：\n"
+      "  - 普通目录：输出 cd 命令供 shell eval（需要 am init bash 集成）\n"
+      "  - ai-user 项目目录：直接执行 SSH 登录到 AI 用户（C++ fork+exec）\n"
+      "  跨共享盘支持：ai-user 检测基于路径结构而非 UID");
   cd_cmd->add_option("path", cd_path, "目标路径")->required();
 
   // list
@@ -186,14 +187,18 @@ int parse_and_run(int argc, char **argv) {
   watch_cmd->add_option("ai_user", watch_user, "AI 用户名（可选，用于过滤）");
 
   // init
+  std::string init_shell = "bash";
   auto *init_cmd = app.add_subcommand(
-      "init", "初始化用户环境\n"
-              "  确保当前用户环境正确配置 am 命令，包括：\n"
-              "  1. 检查 ai-mirror 组成员身份\n"
-              "  2. 创建用户配置文件 ~/.ai-mirror.toml\n"
-              "  3. 在 ~/.bashrc 中添加 source am.sh（tmux 兼容）\n"
-              "  4. 加载 bash 补齐\n"
-              "  运行后新终端/tmux 窗口即可直接使用 am 命令");
+      "init",
+      "Shell 集成\n"
+      "  输出 shell 函数供 eval 加载，使 am cd 等命令在当前 shell 生效。\n"
+      "  用法: eval \"$(am init bash)\"\n"
+      "  建议添加到 ~/.bashrc:\n"
+      "    eval \"$(am init bash)\"\n"
+      "  生效后 'am' 成为 shell 函数，支持本地 cd、sudo 包装等");
+  init_cmd->add_option("shell", init_shell, "Shell 类型 (bash)")
+      ->default_val("bash")
+      ->capture_default_str();
 
   try {
     app.parse(argc, argv);
@@ -203,7 +208,7 @@ int parse_and_run(int argc, char **argv) {
 
   // init can run without group check (it helps user set up membership)
   if (init_cmd->parsed()) {
-    return cmd_init(verbose);
+    return cmd_init(init_shell, verbose);
   }
 
   if (is_ai_user()) {

@@ -31,10 +31,11 @@
 static const char *REAL_BIN = "/usr/local/bin/ai-mirror-bin";
 
 // Commands that need sudo (user management, mount, chown)
+// Note: 'cd' needs sudo because it internally calls cmd_update() for auto-fix
 static bool needs_sudo(const std::string &cmd) {
   static const char *sudo_cmds[] = {
-      "create", "update", "rm", "force-destroy", "mkdir",
-      "touch",  "cp",     "mv", "auto-fix-all",  nullptr,
+      "create", "update",       "rm", "force-destroy", "mkdir", "touch", "cp",
+      "mv",     "auto-fix-all", "cd", nullptr,
   };
   for (int i = 0; sudo_cmds[i]; i++) {
     if (cmd == sudo_cmds[i])

@@ -36,14 +36,15 @@ repos:
     hooks:
       - id: post-merge-install
         name: post-merge install dependencies
-        entry: scripts/post-merge-hook.sh
-        language: script
+        entry: bash scripts/post-merge-hook.sh
+        language: system
         stages: [post-merge]
         always_run: true
+        pass_filenames: false
 
       - id: check-file-permissions
         name: check source file permissions (600)
-        entry: scripts/check-file-permissions.sh
-        language: script
+        entry: bash scripts/check-file-permissions.sh
+        language: system
         types_or: [c++, c, python, shell]
         stages: [pre-commit]

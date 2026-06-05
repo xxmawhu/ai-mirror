@@ -3,13 +3,22 @@
 ## 项目信息
 - **子模块**: gitee / gitlib / github（同步推送）
 - **技术栈**: C++20, CLI11, FTXUI, nlohmann/json, spdlog, toml11
-- **构建**: `cmake --build build-test --target ai-mirror -j4`
-- **安装**: `bash install.sh`（部署到 `/usr/local/bin/ai-mirror-bin`）
+- **构建**: `cmake --build build-test --target am ai-mirror-bin -j4`
+- **安装**: `bash install.sh`（部署到 `/usr/local/bin/am`）
 
 ## 安装目录
-- 二进制: `/usr/local/bin/ai-mirror-bin`（由 install.sh 通过 sudo install 部署）
+- Wrapper: `/usr/local/bin/am`（由 install.sh 部署）
+- 实现二进制: `/usr/local/bin/ai-mirror-bin`（由 install.sh 部署）
 - 配置: `/etc/ai-mirror/`
 - 数据: `/var/lib/ai-mirror/`
+
+## 双二进制架构
+
+用户调用 `am`（wrapper），wrapper 自动检测：
+- 非root + 在ai-mirror组 → `sudo ai-mirror-bin`
+- root → 直接执行 `ai-mirror-bin`
+
+用户无需手动 sudo，权限模型透明。
 
 ## 开发工作流
 
@@ -68,8 +77,8 @@ cp <file> github-ai-mirror/<file>
 | `scripts/commit-hook.sh` | commit 三阶段检查（clang-format + cmake + test） |
 | `scripts/setup-hooks.sh` | hooks 安装脚本 |
 | `scripts/post-merge-hook.sh` | post-merge 自动部署（调用 install.sh） |
-| `profile/am.sh` | Shell 前端，`am cd` SSH 自动 cd 到项目目录（单引号转义路径），SSH 登录时自动配置 git safe.directory（幂等），source 方式加载 |
-| `install.sh` | 构建部署脚本（build + install 到 /usr/local/bin），部署时自动配置 git safe.directory（幂等） |
+| `completions/am-completion.bash` | Bash 补齐，安装到 `/etc/bash_completion.d/am` |
+| `install.sh` | 构建部署脚本（build + install 到 /usr/local/bin） |
 
 ## RULE
 

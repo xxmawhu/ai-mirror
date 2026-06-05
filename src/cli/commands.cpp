@@ -30,6 +30,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 #include <vector>
@@ -1785,6 +1786,67 @@ int cmd_mv(const std::string &src, const std::string &dst, bool verbose) {
   return 0;
 }
 
+// Execute ssh in a forked child process, connecting stdin/stdout/stderr
+// directly to the terminal. This replaces the old am.sh ssh -tt wrapper.
+static int exec_ssh_interactive(const std::string &ai_user,
+                                const std::string &target_path,
+                                const std::string &ssh_key,
+                                const std::string &known_hosts) {
+  std::string escaped_path = target_path;
+  // Escape single quotes for the remote command
+  // Replace ' with '\''
+  size_t pos = 0;
+  while ((pos = escaped_path.find('\'', pos)) != std::string::npos) {
+    escaped_path.replace(pos, 1, "'\\''");
+    pos += 4;
+  }
+
+  // Remote command: configure git safe.directory, cd, then interactive shell
+  std::string remote_cmd = "git config --global --add safe.directory '";
+  remote_cmd += escaped_path;
+  remote_cmd += "' 2>/dev/null || true; cd '";
+  remote_cmd += escaped_path;
+  remote_cmd += "' && exec bash -l";
+
+  std::string host = ai_user + "@localhost";
+
+  // Build argv: ssh -tt -i key -o IdentitiesOnly=yes -o
+  // StrictHostKeyChecking=accept-new -o UserKnownHostsFile=... user@host
+  // remote_cmd
+  std::vector<std::string> args_str = {
+      "/usr/bin/ssh", "-tt",
+      "-i",           ssh_key,
+      "-o",           "IdentitiesOnly=yes",
+      "-o",           "StrictHostKeyChecking=accept-new",
+      "-o",           "UserKnownHostsFile=" + known_hosts,
+      host,           remote_cmd};
+
+  std::vector<char *> argv;
+  argv.reserve(args_str.size() + 1);
+  for (auto &a : args_str)
+    argv.push_back(const_cast<char *>(a.c_str()));
+  argv.push_back(nullptr);
+
+  pid_t pid = ::fork();
+  if (pid < 0) {
+    std::cerr << "error: fork() failed: " << strerror(errno) << std::endl;
+    return 1;
+  }
+
+  if (pid == 0) {
+    // Child: exec ssh directly. stdin/stdout/stderr are inherited from parent
+    // which is connected to the terminal.
+    ::execv("/usr/bin/ssh", argv.data());
+    std::cerr << "error: execv(ssh) failed: " << strerror(errno) << std::endl;
+    ::_exit(127);
+  }
+
+  // Parent: wait for ssh to finish
+  int status = 0;
+  ::waitpid(pid, &status, 0);
+  return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
 int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
   auto config = core::ConfigParser::load_default();
   std::string prefix = config.user.prefix;
@@ -1863,27 +1925,51 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
     }
 
     if (has_broken || missing_ssh) {
-      std::cerr << "WARNING: project health issues detected, run 'am update "
-                << target_str << "' to fix:" << std::endl;
-      if (missing_ssh)
-        std::cerr << "  - SSH authorized_keys missing" << std::endl;
-      if (has_broken && expected_mounts > 0)
-        std::cerr << "  - mounts broken or missing" << std::endl;
+      // Auto-fix: run update logic before SSH
+      std::cerr << "INFO: auto-fixing project health issues..." << std::endl;
+      if (cmd_update(target_str, verbose) != 0) {
+        std::cerr << "WARNING: auto-fix failed, proceeding with SSH anyway"
+                  << std::endl;
+      } else {
+        std::cerr << "INFO: auto-fix complete" << std::endl;
+      }
     }
 
-    std::cout << "action=ssh" << std::endl;
-    std::cout << "user=" << ai_user << std::endl;
-    std::cout << "path=" << target_str << std::endl;
-    std::cout << "key=" << config.ssh.key_path.string() << std::endl;
+    // Validate SSH key exists
+    std::string ssh_key = config.ssh.key_path.string();
+    if (ssh_key.empty()) {
+      std::cerr << "error: no SSH key configured" << std::endl;
+      return 1;
+    }
+    if (!fs::exists(ssh_key, ec)) {
+      std::cerr << "error: SSH key missing: " << ssh_key << ". Run 'am update "
+                << target_str << "' first." << std::endl;
+      return 1;
+    }
 
-    // Check if key is in authorized_keys (needed for both debug and health
-    // check)
+    // Validate path is under main_user's allowed directories
+    if (!utils::is_path_allowed(target, main_user, config.user.allowed_bases)) {
+      std::cerr << "error: invalid path: '" << target_str
+                << "' (must be under $HOME or allowed bases)" << std::endl;
+      return 1;
+    }
+
+    // Validate AI user format
+    std::string expected_prefix = prefix + main_user + "_";
+    if (ai_user.size() <= expected_prefix.size() ||
+        ai_user.substr(0, expected_prefix.size()) != expected_prefix) {
+      std::cerr << "error: invalid AI user: '" << ai_user << "' (expected "
+                << "format: " << prefix << main_user << "_<hash>)" << std::endl;
+      return 1;
+    }
+
+    // Check if key is in authorized_keys (debug info)
     fs::path ssh_dir = fs::path(state->home_dir) / ".ssh";
     fs::path auth_keys = ssh_dir / "authorized_keys";
     bool key_authorized = false;
     if (fs::exists(auth_keys, ec) && !ec) {
       std::ifstream ak(auth_keys);
-      fs::path main_pub = fs::path(config.ssh.key_path.string() + ".pub");
+      fs::path main_pub = fs::path(ssh_key + ".pub");
       std::ifstream pk(main_pub);
       if (pk.is_open()) {
         std::string pub_key_line, auth_line;
@@ -1919,14 +2005,20 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
           auth_keys_perms = std::to_string(
               static_cast<unsigned>(st.permissions() & fs::perms::all));
       }
-      std::cout << "debug=home=" << state->home_dir
+      std::cerr << "debug=home=" << state->home_dir
                 << ",ssh_perms=" << ssh_dir_perms
                 << ",auth_perms=" << auth_keys_perms
                 << ",key_in_auth=" << (key_authorized ? "yes" : "no")
                 << std::endl;
     }
 
-    return 0;
+    // Known hosts file: use main user's ~/.ssh/known_hosts
+    std::string known_hosts =
+        (fs::path(utils::get_effective_home()) / ".ssh" / "known_hosts")
+            .string();
+
+    // Directly execute SSH in a forked child process
+    return exec_ssh_interactive(ai_user, target_str, ssh_key, known_hosts);
   }
 
   // Fallback: detect AI user from path component name (legacy method)
@@ -1934,14 +2026,17 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
       core::PathResolver::detect_ai_user_from_path(target, main_user, prefix);
 
   if (!ai_user.empty()) {
+    // Legacy path-detected AI user: output action=ssh for shell eval
+    // (no .am_status file found, so we don't have enough info to exec ssh
+    // directly)
     std::cout << "action=ssh" << std::endl;
     std::cout << "user=" << ai_user << std::endl;
     std::cout << "path=" << target_str << std::endl;
     return 0;
   }
 
-  std::cout << "action=cd" << std::endl;
-  std::cout << "path=" << target_str << std::endl;
+  // Local cd: output shell code for eval
+  std::cout << "cd " << utils::shell_escape(target_str) << std::endl;
   return 0;
 }
 
@@ -2751,123 +2846,85 @@ int cmd_watch(const std::string &watch_path, const std::string &watch_user,
   return 0;
 }
 
-// cmd_init: Initialize user environment for am command
-// Ensures am command works in all shell contexts (login, non-login, tmux,
-// screen)
-int cmd_init([[maybe_unused]] bool verbose) {
-  std::string user = utils::get_effective_username();
-  std::string home = utils::get_home_dir(user);
-  std::string bashrc = home + "/.bashrc";
-  std::string config_file = home + "/.ai-mirror.toml";
-
-  std::cout << "=== ai-mirror 初始化检查 ===\n\n";
-
-  // 1. Check ai-mirror group membership
-  bool in_group = utils::is_group_member("ai-mirror");
-  std::cout << "1. ai-mirror 组成员身份: ";
-  if (in_group) {
-    std::cout << "✓ 已在组中\n";
-  } else {
-    std::cout << "✗ 未在组中\n";
-    std::cout << "   修复命令: sudo usermod -aG ai-mirror " << user << "\n";
-    std::cout << "   修复后需重新登录生效\n";
+// cmd_init: Output shell integration function (zoxide-style)
+// Usage: eval "$(am init bash)"
+//
+// The shell function wraps the `am` binary:
+// - For `am cd`: captures stdout, executes cd/ssh as needed
+// - For all other commands: passes through to the binary directly
+// - Handles sudo elevation for non-root users
+// - Handles newgrp hints
+int cmd_init(const std::string &shell, [[maybe_unused]] bool verbose) {
+  if (shell != "bash") {
+    std::cerr << "error: unsupported shell: " << shell
+              << " (only 'bash' is supported)" << std::endl;
+    return 1;
   }
 
-  // 2. Check config file exists
-  std::cout << "\n2. 用户配置文件 ~/.ai-mirror.toml: ";
-  bool config_exists = fs::exists(config_file);
-  if (config_exists) {
-    std::cout << "✓ 已存在\n";
-  } else {
-    std::cout << "○ 不存在（将使用默认配置）\n";
-    // Create minimal config
-    std::ofstream ofs(config_file);
-    if (ofs.is_open()) {
-      ofs << "# ai-mirror 用户配置\n";
-      ofs << "# 首次运行自动创建，覆盖默认值\n\n";
-      ofs << "[mount]\n";
-      ofs << "paths = [\n";
-      ofs << "    \"~/.bashrc\",\n";
-      ofs << "    \"~/.config\",\n";
-      ofs << "    \"~/.local/bin\",\n";
-      ofs << "]\n\n";
-      ofs << "[ssh]\n";
-      ofs << "key_type = \"ed25519\"\n";
-      ofs.close();
-      std::cout << "   → 已创建默认配置文件\n";
-    } else {
-      std::cout << "   → 创建失败（权限问题）\n";
-    }
-  }
+  // Output a self-contained shell function that replaces am.sh
+  // All logic lives in the C++ binary; this function is minimal glue.
+  std::cout << R"DELIM(#!/usr/bin/env bash
+# am shell integration — generated by 'am init bash'
+# Install: add to ~/.bashrc:  eval "$(am init bash)"
+#
+# This function provides shell-level features that a binary cannot:
+#   - 'am cd' local: changes directory in the current shell
+#   - sudo elevation for non-root users
+#   - newgrp hint after group membership changes
 
-  // 3. Check if ~/.bashrc sources am.sh (critical for tmux)
-  std::cout << "\n3. ~/.bashrc 中 am.sh 加载: ";
-  bool bashrc_has_source = false;
-  std::ifstream bashrc_in(bashrc);
-  if (bashrc_in.is_open()) {
-    std::string line;
-    while (std::getline(bashrc_in, line)) {
-      // Check for various forms of sourcing am.sh
-      if (line.find("source /etc/profile.d/am.sh") != std::string::npos ||
-          line.find(". /etc/profile.d/am.sh") != std::string::npos ||
-          line.find("source ~/.local/share/bash-completion/completions/am") !=
-              std::string::npos) {
-        bashrc_has_source = true;
-        break;
-      }
-    }
-    bashrc_in.close();
-  }
+_am() {
+	local _am_bin="/usr/local/bin/am"
+	if [[ ! -x "$_am_bin" ]]; then
+		echo "error: am binary not found at $_am_bin" >&2
+		return 1
+	fi
 
-  if (bashrc_has_source) {
-    std::cout << "✓ 已配置\n";
-  } else {
-    std::cout << "○ 未配置（tmux/screen 等非登录 shell 可能无法使用 am）\n";
+	# 'am cd' needs special handling: capture stdout for local cd
+	if [[ "${1:-}" == "cd" ]]; then
+		shift
+		local _am_output _am_ret=0
+		if [[ "$(id -u)" -eq 0 ]]; then
+			_am_output=$("$_am_bin" cd "$@") || _am_ret=$?
+		else
+			_am_output=$(sudo --preserve-env=HOME "$_am_bin" cd "$@") || _am_ret=$?
+		fi
+		if [[ $_am_ret -ne 0 ]]; then
+			echo "$_am_output"
+			return $_am_ret
+		fi
+		# If output is a cd command, eval it to change directory in current shell
+		# Otherwise (e.g. legacy action=ssh), pass through
+		if [[ -n "$_am_output" ]]; then
+			eval "$_am_output"
+		fi
+		return 0
+	fi
 
-    // Append source line to ~/.bashrc
-    std::ofstream bashrc_out(bashrc, std::ios::app);
-    if (bashrc_out.is_open()) {
-      bashrc_out << "\n# ai-mirror: 确保 am 命令在 tmux/screen 等非登录 shell "
-                    "中可用\n";
-      bashrc_out << "if [[ -f /etc/profile.d/am.sh ]]; then\n";
-      bashrc_out << "    source /etc/profile.d/am.sh\n";
-      bashrc_out << "fi\n";
-      bashrc_out.close();
-      std::cout << "   → 已追加配置到 ~/.bashrc\n";
-    } else {
-      std::cout << "   → 写入失败（请手动添加）\n";
-    }
-  }
+	# All other commands: pass through to binary
+	local _am_cmd_output _am_ret=0
+	if [[ "$(id -u)" -eq 0 ]]; then
+		"$_am_bin" "$@"
+		return $?
+	else
+		_am_cmd_output=$(sudo --preserve-env=HOME "$_am_bin" "$@" 2>&1) || _am_ret=$?
+		echo "$_am_cmd_output"
+		# Hint for newgrp if group membership changed
+		local _am_newgrp
+		_am_newgrp=$(echo "$_am_cmd_output" | grep "^newgrp=" | cut -d= -f2- || true)
+		if [[ -n "$_am_newgrp" ]]; then
+			echo "INFO: Run 'newgrp $_am_newgrp' to activate new group membership" >&2
+		fi
+		return $_am_ret
+	fi
+}
 
-  // 4. Check bash completion
-  std::cout << "\n4. Bash 补齐: ";
-  bool completion_installed = fs::exists("/etc/bash_completion.d/am");
-  if (completion_installed) {
-    std::cout << "✓ 已安装 (/etc/bash_completion.d/am)\n";
-  } else {
-    std::cout << "○ 未安装系统级补齐\n";
-    std::cout << "   修复命令: sudo cp completions/am-completion.bash "
-                 "/etc/bash_completion.d/am\n";
-  }
+# Override 'am' as a function
+am() { _am "$@"; }
+export -f am
+export -f _am
+)DELIM";
 
-  // 5. Summary
-  std::cout << "\n=== 总结 ===\n";
-  if (in_group && bashrc_has_source) {
-    std::cout << "环境已完整配置。\n";
-    std::cout << "新终端/tmux 窗口可直接使用 am 命令。\n";
-  } else {
-    std::cout << "部分配置缺失，请按上述提示修复。\n";
-    if (!in_group) {
-      std::cout << "关键: 请先加入 ai-mirror 组并重新登录。\n";
-    }
-    if (!bashrc_has_source) {
-      std::cout << "提示: ~/.bashrc 已更新，新终端自动生效。\n";
-    }
-  }
-
-  std::cout << "\n如需立即生效，执行: source ~/.bashrc\n";
-
-  return (in_group && bashrc_has_source) ? 0 : 1;
+  return 0;
 }
 
 } // namespace ai_mirror::cli

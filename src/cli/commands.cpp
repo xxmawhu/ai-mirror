@@ -2912,6 +2912,7 @@ _am() {
 	# 'am cd' needs special handling: capture stdout for local cd
 	# Binary handles sudo via wrapper; function just captures output
 	if [[ "${1:-}" == "cd" ]]; then
+		shift  # Remove 'cd' from args, leave only the path
 		local _am_output _am_ret=0
 		_am_output=$("$_am_bin" cd "$@") || _am_ret=$?
 		if [[ $_am_ret -ne 0 ]]; then

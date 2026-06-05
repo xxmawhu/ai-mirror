@@ -306,37 +306,50 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
   fs::path key_pub = fs::path(ctx.config.ssh.key_path.string() + ".pub");
   bool need_ssh_fix = false;
-  if (!fs::exists(auth_keys)) {
+
+  // Use error_code version to avoid exception on permission denied
+  std::error_code ec;
+  if (!fs::exists(auth_keys, ec)) {
+    // Permission error means we can't check - assume need fix (root can access)
+    if (ec.value() == EACCES || ec.value() == EPERM) {
+      utils::get_logger()->debug(
+          "Cannot check {} (permission denied), assuming need fix",
+          auth_keys.string());
+    }
     need_ssh_fix = true;
     utils::get_logger()->info("authorized_keys missing for {}", username);
   } else {
     // Check if authorized_keys contains the key_path's public key
     bool key_found = false;
-    if (fs::exists(key_pub)) {
-      std::ifstream pub_file(key_pub);
-      std::string pub_key_line;
-      if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
-        // Extract the base64 key body (second field) for exact matching
-        auto first_space = pub_key_line.find(' ');
-        auto second_space = (first_space != std::string::npos)
-                                ? pub_key_line.find(' ', first_space + 1)
-                                : std::string::npos;
-        std::string key_body =
-            (first_space != std::string::npos &&
-             second_space != std::string::npos)
-                ? pub_key_line.substr(first_space + 1,
-                                      second_space - first_space - 1)
-                : std::string();
-        if (!key_body.empty()) {
-          std::ifstream auth_file(auth_keys);
-          std::string auth_line;
-          while (std::getline(auth_file, auth_line)) {
-            if (auth_line.find(key_body) != std::string::npos) {
-              key_found = true;
-              break;
+    if (fs::exists(key_pub, ec) && !ec) {
+      try {
+        std::ifstream pub_file(key_pub);
+        std::string pub_key_line;
+        if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
+          // Extract the base64 key body (second field) for exact matching
+          auto first_space = pub_key_line.find(' ');
+          auto second_space = (first_space != std::string::npos)
+                                  ? pub_key_line.find(' ', first_space + 1)
+                                  : std::string::npos;
+          std::string key_body =
+              (first_space != std::string::npos &&
+               second_space != std::string::npos)
+                  ? pub_key_line.substr(first_space + 1,
+                                        second_space - first_space - 1)
+                  : std::string();
+          if (!key_body.empty()) {
+            std::ifstream auth_file(auth_keys);
+            std::string auth_line;
+            while (std::getline(auth_file, auth_line)) {
+              if (auth_line.find(key_body) != std::string::npos) {
+                key_found = true;
+                break;
+              }
             }
           }
         }
+      } catch (const std::exception &e) {
+        utils::get_logger()->warn("Cannot read SSH keys: {}", e.what());
       }
     }
     if (!key_found) {

@@ -42,9 +42,7 @@ repos:
         always_run: true
         pass_filenames: false
 
-      - id: check-file-permissions
-        name: check source file permissions (600)
-        entry: bash scripts/check-file-permissions.sh
-        language: system
-        types_or: [c++, c, python, shell]
-        stages: [pre-commit]
+# REMOVED: check-file-permissions (violates platform permission-handling Rule 3)
+# Source file permissions are managed by system admin, not by code hooks
+# See: permission-handling skill - "禁止 chmod/chown"
+# Violation: scripts/check-file-permissions.sh forced chmod 600 on source files

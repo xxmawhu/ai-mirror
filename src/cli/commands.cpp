@@ -1925,12 +1925,14 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
     }
 
     if (has_broken || missing_ssh) {
-      std::cerr << "WARNING: project health issues detected, run 'am update "
-                << target_str << "' to fix:" << std::endl;
-      if (missing_ssh)
-        std::cerr << "  - SSH authorized_keys missing" << std::endl;
-      if (has_broken && expected_mounts > 0)
-        std::cerr << "  - mounts broken or missing" << std::endl;
+      // Auto-fix: run update logic before SSH
+      std::cerr << "INFO: auto-fixing project health issues..." << std::endl;
+      if (cmd_update(target_str, verbose) != 0) {
+        std::cerr << "WARNING: auto-fix failed, proceeding with SSH anyway"
+                  << std::endl;
+      } else {
+        std::cerr << "INFO: auto-fix complete" << std::endl;
+      }
     }
 
     // Validate SSH key exists

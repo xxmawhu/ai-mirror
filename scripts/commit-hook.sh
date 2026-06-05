@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 #
-# ai-mirror commit-hook: five-phase validation
+# ai-mirror commit-hook: six-phase validation
 # Phase 0: Version check (version.hpp.in must be updated)
 # Phase 1: Code check (clang-format dry-run)
 # Phase 1b: File permissions check (source files must be 600)
 # Phase 2: Build verification (cmake)
 # Phase 3: Unit tests (Docker, no host root required)
+# Phase 4: Submodule sync (minimal exposure, root.md Section 9)
+#
+# Note: Phase 4 syncs AFTER commit success (not blocking commit)
+#       To ensure sync runs, use: git commit && bash scripts/sync-submodules.sh
 #
 # [log-review] 日志输出到 ./log/hook/ (Rule 2/9)
 set -euo pipefail
@@ -190,6 +194,22 @@ main() {
 	fi
 
 	echo -e "${GREEN}commit allowed: all checks passed${NC}"
+
+	# ============================================
+	# Phase 4: Submodule Sync (post-commit)
+	# ============================================
+	# Note: Sync runs AFTER commit success (not blocking)
+	#       This ensures commit can proceed even if remote push fails
+	#       User must manually run sync if needed, or rely on CI/CD
+	echo ""
+	echo -e "${CYAN}=== Phase 4: Submodule Sync ===${NC}"
+	echo -e "${YELLOW}  ℹ️  Run after commit success:${NC}"
+	echo -e "${YELLOW}     bash scripts/sync-submodules.sh${NC}"
+	echo -e "${YELLOW}  This script will:${NC}"
+	echo -e "${YELLOW}    - Sync minimal files to submodules${NC}"
+	echo -e "${YELLOW}    - Verify build/install success${NC}"
+	echo -e "${YELLOW}    - Push to all remotes${NC}"
+	echo ""
 	exit 0
 }
 

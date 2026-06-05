@@ -7,19 +7,27 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
+        stages: [pre-commit]
       - id: end-of-file-fixer
+        stages: [pre-commit]
       - id: check-yaml
+        stages: [pre-commit]
       - id: check-json
+        stages: [pre-commit]
       - id: check-merge-conflict
+        stages: [pre-commit]
       - id: check-added-large-files
+        stages: [pre-commit]
         args: ['--maxkb=500']
       - id: check-case-conflict
+        stages: [pre-commit]
 
   # C++ formatting
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v19.1.7
     hooks:
       - id: clang-format
+        stages: [pre-commit]
         types_or: [c++, c]
         args: ['--style=file']
 
@@ -28,6 +36,7 @@ repos:
     rev: v0.6.13
     hooks:
       - id: cmake-format
+        stages: [pre-commit]
         types: [file]
         files: \.(cmake|CMakeLists\.txt)$
 

@@ -25,6 +25,9 @@ MAIN_REPO="$(dirname "$SCRIPT_DIR")"
 SUBMODULES=("gitee-ai-mirror" "gitlib-ai-mirror" "github-ai-mirror")
 
 # ---- 白名单：编译/安装必需的文件和目录 ----
+# 严格最小化：仅包含编译和安装必需的文件
+# 禁止推送：tests/, llm-docs/, docker-test/, profile/, scripts/, docs/, memory/, *-ai-mirror/
+
 # 目录（rsync 会递归同步目录下所有文件）
 SYNC_DIRS=(
   "src"
@@ -37,16 +40,11 @@ SYNC_FILES=(
   "CMakeLists.txt"
   "install.sh"
   "README.md"
-  ".dockerignore"
   ".gitignore"
 )
 
-# 可选文件（存在则同步）
-SYNC_OPTIONAL=(
-  "tests/Dockerfile.test"
-  "docker-test/run-tests.sh"
-  "docker-test/Dockerfile"
-)
+# 可选文件（存在则同步）—— 已移除所有测试文件
+SYNC_OPTIONAL=()
 
 # ---- Colors ----
 RED='\033[0;31m'
@@ -135,21 +133,54 @@ clean_submodule() {
 
   log "Cleaning non-whitelisted files in $submodule..."
 
+  # 强制清理列表（安装无关，必须删除）
+  local FORCE_REMOVE=(
+    "tests"
+    "llm-docs"
+    "docker-test"
+    "docker"
+    "docs"
+    "profile"
+    "scripts"
+    "memory"
+    "issues"
+    "plan"
+    "end_task"
+    "log"
+    "data"
+    ".cache"
+    "publish-llm-docs.sh"
+    "release.sh"
+    "gitee-ai-mirror"
+    "github-ai-mirror"
+    "gitlib-ai-mirror"
+  )
+
+  # 强制删除目录和文件
+  local removed=0
+  for item in "${FORCE_REMOVE[@]}"; do
+    if [[ -e "$item" ]]; then
+      warn "  Removing (force): $item"
+      $DRY_RUN || { git rm -rf --cached "$item" 2>/dev/null || rm -rf "$item"; }
+      removed=$((removed + 1))
+    fi
+  done
+
   # 构建允许保留的文件列表
   local allowed_tmp
   allowed_tmp=$(mktemp)
   list_allowed_files "." > "$allowed_tmp"
 
   # 查找不在白名单中的 tracked 文件
-  local removed=0
   while IFS= read -r file; do
     # 跳过 .gitignore 和 .git 目录
     [[ "$file" == ".gitignore" ]] && continue
     [[ "$file" == .git/* ]] && continue
-    # 跳过嵌套子模块目录（gitee-ai-mirror/, github-ai-mirror/, gitlib-ai-mirror/）
-    [[ "$file" == gitee-ai-mirror/* ]] && continue
-    [[ "$file" == github-ai-mirror/* ]] && continue
-    [[ "$file" == gitlib-ai-mirror/* ]] && continue
+    # 跳过强制清理列表中的文件（已处理）
+    for item in "${FORCE_REMOVE[@]}"; do
+      [[ "$file" == "$item" ]] && continue 2
+      [[ "$file" == ${item}/* ]] && continue 2
+    done
 
     if ! grep -qx "$file" "$allowed_tmp" 2>/dev/null; then
       if [[ -f "$file" ]]; then
@@ -193,7 +224,20 @@ sync_to_submodule() {
   for file in "${SYNC_FILES[@]}"; do
     if [[ -f "$file" ]]; then
       info "  Syncing: $file"
-      $DRY_RUN || cp "$file" "$submodule/$file"
+      if [[ "$file" == "CMakeLists.txt" ]]; then
+        # CMakeLists.txt: 移除测试配置，只保留编译
+        $DRY_RUN || {
+          # 删除所有测试相关的行（enable_testing, add_test, tests/ 目录配置）
+          sed -i \
+            -e '/if(EXISTS.*tests)/,/endif()/d' \
+            -e '/enable_testing()/d' \
+            -e '/add_test/d' \
+            -e '/tests\//d' \
+            "$submodule/$file"
+        }
+      else
+        $DRY_RUN || cp "$file" "$submodule/$file"
+      fi
       synced=$((synced + 1))
     fi
   done

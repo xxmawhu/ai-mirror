@@ -13,15 +13,23 @@ struct ShellResult {
   int exit_code;
   std::string stdout_output;
   std::string stderr_output;
+  bool timed_out = false; // true if process was killed by timeout
 };
+
+// Default timeout for exec_safe commands (seconds)
+static constexpr int EXEC_SAFE_TIMEOUT_DEFAULT = 30;
 
 // Execute command with security restrictions:
 // 1. Command must be in ALLOWED_COMMANDS whitelist (by basename)
 // 2. Command resolved via hardcoded absolute paths (no PATH lookup)
 // 3. Uses fork()+execv() instead of popen()/system()
+// 4. Timeout: kills process after EXEC_SAFE_TIMEOUT_DEFAULT seconds
 ShellResult exec_safe(const std::vector<std::string> &args);
 ShellResult exec_safe(const std::string &file,
                       const std::vector<std::string> &args);
+// With custom timeout (seconds, 0 = no timeout)
+ShellResult exec_safe(const std::string &file,
+                      const std::vector<std::string> &args, int timeout_sec);
 
 // Validate username format: [a-z0-9_] only, max 32 chars, first char non-digit.
 // No hyphens allowed to ensure consistency with path_resolver detection logic.

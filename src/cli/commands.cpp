@@ -306,37 +306,50 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
   fs::path key_pub = fs::path(ctx.config.ssh.key_path.string() + ".pub");
   bool need_ssh_fix = false;
-  if (!fs::exists(auth_keys)) {
+
+  // Use error_code version to avoid exception on permission denied
+  std::error_code ec;
+  if (!fs::exists(auth_keys, ec)) {
+    // Permission error means we can't check - assume need fix (root can access)
+    if (ec.value() == EACCES || ec.value() == EPERM) {
+      utils::get_logger()->debug(
+          "Cannot check {} (permission denied), assuming need fix",
+          auth_keys.string());
+    }
     need_ssh_fix = true;
     utils::get_logger()->info("authorized_keys missing for {}", username);
   } else {
     // Check if authorized_keys contains the key_path's public key
     bool key_found = false;
-    if (fs::exists(key_pub)) {
-      std::ifstream pub_file(key_pub);
-      std::string pub_key_line;
-      if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
-        // Extract the base64 key body (second field) for exact matching
-        auto first_space = pub_key_line.find(' ');
-        auto second_space = (first_space != std::string::npos)
-                                ? pub_key_line.find(' ', first_space + 1)
-                                : std::string::npos;
-        std::string key_body =
-            (first_space != std::string::npos &&
-             second_space != std::string::npos)
-                ? pub_key_line.substr(first_space + 1,
-                                      second_space - first_space - 1)
-                : std::string();
-        if (!key_body.empty()) {
-          std::ifstream auth_file(auth_keys);
-          std::string auth_line;
-          while (std::getline(auth_file, auth_line)) {
-            if (auth_line.find(key_body) != std::string::npos) {
-              key_found = true;
-              break;
+    if (fs::exists(key_pub, ec) && !ec) {
+      try {
+        std::ifstream pub_file(key_pub);
+        std::string pub_key_line;
+        if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
+          // Extract the base64 key body (second field) for exact matching
+          auto first_space = pub_key_line.find(' ');
+          auto second_space = (first_space != std::string::npos)
+                                  ? pub_key_line.find(' ', first_space + 1)
+                                  : std::string::npos;
+          std::string key_body =
+              (first_space != std::string::npos &&
+               second_space != std::string::npos)
+                  ? pub_key_line.substr(first_space + 1,
+                                        second_space - first_space - 1)
+                  : std::string();
+          if (!key_body.empty()) {
+            std::ifstream auth_file(auth_keys);
+            std::string auth_line;
+            while (std::getline(auth_file, auth_line)) {
+              if (auth_line.find(key_body) != std::string::npos) {
+                key_found = true;
+                break;
+              }
             }
           }
         }
+      } catch (const std::exception &e) {
+        utils::get_logger()->warn("Cannot read SSH keys: {}", e.what());
       }
     }
     if (!key_found) {
@@ -1815,6 +1828,10 @@ static int exec_ssh_interactive(const std::string &ai_user,
   // remote_cmd
   std::vector<std::string> args_str = {
       "/usr/bin/ssh", "-tt",
+      "-o",           "ConnectTimeout=10",
+      "-o",           "ConnectionAttempts=1",
+      "-o",           "ServerAliveInterval=5",
+      "-o",           "ServerAliveCountMax=3",
       "-i",           ssh_key,
       "-o",           "IdentitiesOnly=yes",
       "-o",           "StrictHostKeyChecking=accept-new",
@@ -1841,9 +1858,40 @@ static int exec_ssh_interactive(const std::string &ai_user,
     ::_exit(127);
   }
 
-  // Parent: wait for ssh to finish
+  // Parent: wait for ssh to finish (with timeout protection)
+  // SSH with -tt can hang if connection drops; use timeout to prevent that
   int status = 0;
-  ::waitpid(pid, &status, 0);
+  bool ssh_timed_out = false;
+  const int ssh_timeout_sec = 300; // 5 minutes max for interactive SSH
+  int elapsed_ms = 0;
+  const int poll_ms = 500;
+
+  while (elapsed_ms < ssh_timeout_sec * 1000) {
+    int ret = ::waitpid(pid, &status, WNOHANG);
+    if (ret > 0) {
+      break; // Child exited
+    }
+    if (ret < 0) {
+      break; // Error
+    }
+    usleep(poll_ms * 1000);
+    elapsed_ms += poll_ms;
+  }
+
+  if (elapsed_ms >= ssh_timeout_sec * 1000) {
+    ssh_timed_out = true;
+    std::cerr << "\nERROR: SSH session timed out after " << ssh_timeout_sec
+              << "s, killing..." << std::endl;
+    ::kill(pid, SIGTERM);
+    usleep(200000);
+    if (::waitpid(pid, &status, WNOHANG) == 0) {
+      ::kill(pid, SIGKILL);
+      ::waitpid(pid, &status, 0);
+    }
+  }
+
+  if (ssh_timed_out)
+    return 2; // Special exit code for SSH timeout
   return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
@@ -1925,13 +1973,23 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
     }
 
     if (has_broken || missing_ssh) {
-      // Auto-fix: run update logic before SSH
-      std::cerr << "INFO: auto-fixing project health issues..." << std::endl;
-      if (cmd_update(target_str, verbose) != 0) {
-        std::cerr << "WARNING: auto-fix failed, proceeding with SSH anyway"
-                  << std::endl;
-      } else {
-        std::cerr << "INFO: auto-fix complete" << std::endl;
+      // Auto-fix: run update ONCE, then proceed regardless of result
+      // Never retry — prevents infinite loops
+      std::cerr << "INFO: health issues detected:" << std::endl;
+      if (has_broken)
+        std::cerr << "  - broken/missing mounts" << std::endl;
+      if (missing_ssh)
+        std::cerr << "  - missing SSH authorized_keys" << std::endl;
+      std::cerr << "INFO: running auto-fix (one attempt only)..." << std::endl;
+      try {
+        if (cmd_update(target_str, verbose) != 0) {
+          std::cerr << "WARNING: auto-fix failed, proceeding anyway"
+                    << std::endl;
+        } else {
+          std::cerr << "INFO: auto-fix complete" << std::endl;
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "WARNING: auto-fix exception: " << e.what() << std::endl;
       }
     }
 
@@ -2852,8 +2910,13 @@ int cmd_watch(const std::string &watch_path, const std::string &watch_user,
 // The shell function wraps the `am` binary:
 // - For `am cd`: captures stdout, executes cd/ssh as needed
 // - For all other commands: passes through to the binary directly
-// - Handles sudo elevation for non-root users
 // - Handles newgrp hints
+//
+// Design: function name = binary name (same as pyenv/fzf)
+// - No recursion: function uses absolute path to call binary
+// - `am --type` shows diagnostic info
+// - `unset -f am` restores raw binary
+//
 int cmd_init(const std::string &shell, [[maybe_unused]] bool verbose) {
   if (shell != "bash") {
     std::cerr << "error: unsupported shell: " << shell
@@ -2861,7 +2924,7 @@ int cmd_init(const std::string &shell, [[maybe_unused]] bool verbose) {
     return 1;
   }
 
-  // Output a self-contained shell function that replaces am.sh
+  // Output a self-contained shell function.
   // All logic lives in the C++ binary; this function is minimal glue.
   std::cout << R"DELIM(#!/usr/bin/env bash
 # am shell integration — generated by 'am init bash'
@@ -2869,8 +2932,11 @@ int cmd_init(const std::string &shell, [[maybe_unused]] bool verbose) {
 #
 # This function provides shell-level features that a binary cannot:
 #   - 'am cd' local: changes directory in the current shell
-#   - sudo elevation for non-root users
-#   - newgrp hint after group membership changes
+#   - 'am --type': shows whether am is a function or binary
+#
+# Design: function overrides binary (same name). No recursion because
+# function uses absolute path to call the wrapper binary.
+# Restore binary: unset -f am
 
 _am() {
 	local _am_bin="/usr/local/bin/am"
@@ -2879,43 +2945,37 @@ _am() {
 		return 1
 	fi
 
+	# Diagnostic: show what 'am' currently is
+	if [[ "${1:-}" == "--type" ]]; then
+		echo "am is a shell function (overrides ${_am_bin})"
+		echo "  Binary:   ${_am_bin}"
+		echo "  Wrapper:  /usr/local/bin/ai-mirror-bin"
+		echo "  Remove:   unset -f am"
+		return 0
+	fi
+
 	# 'am cd' needs special handling: capture stdout for local cd
+	# Binary handles sudo via wrapper; function just captures output
 	if [[ "${1:-}" == "cd" ]]; then
-		shift
+		shift  # Remove 'cd' from args, leave only the path
 		local _am_output _am_ret=0
-		if [[ "$(id -u)" -eq 0 ]]; then
-			_am_output=$("$_am_bin" cd "$@") || _am_ret=$?
-		else
-			_am_output=$(sudo --preserve-env=HOME "$_am_bin" cd "$@") || _am_ret=$?
-		fi
+		_am_output=$("$_am_bin" cd "$@") || _am_ret=$?
 		if [[ $_am_ret -ne 0 ]]; then
 			echo "$_am_output"
 			return $_am_ret
 		fi
 		# If output is a cd command, eval it to change directory in current shell
-		# Otherwise (e.g. legacy action=ssh), pass through
+		# Otherwise (e.g. SSH action), pass through
 		if [[ -n "$_am_output" ]]; then
 			eval "$_am_output"
 		fi
 		return 0
 	fi
 
-	# All other commands: pass through to binary
-	local _am_cmd_output _am_ret=0
-	if [[ "$(id -u)" -eq 0 ]]; then
-		"$_am_bin" "$@"
-		return $?
-	else
-		_am_cmd_output=$(sudo --preserve-env=HOME "$_am_bin" "$@" 2>&1) || _am_ret=$?
-		echo "$_am_cmd_output"
-		# Hint for newgrp if group membership changed
-		local _am_newgrp
-		_am_newgrp=$(echo "$_am_cmd_output" | grep "^newgrp=" | cut -d= -f2- || true)
-		if [[ -n "$_am_newgrp" ]]; then
-			echo "INFO: Run 'newgrp $_am_newgrp' to activate new group membership" >&2
-		fi
-		return $_am_ret
-	fi
+	# All other commands: pass through to wrapper binary
+	# Wrapper handles sudo elevation internally
+	"$_am_bin" "$@"
+	return $?
 }
 
 # Override 'am' as a function

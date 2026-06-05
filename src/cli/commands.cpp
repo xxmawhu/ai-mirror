@@ -1828,6 +1828,10 @@ static int exec_ssh_interactive(const std::string &ai_user,
   // remote_cmd
   std::vector<std::string> args_str = {
       "/usr/bin/ssh", "-tt",
+      "-o",           "ConnectTimeout=10",
+      "-o",           "ConnectionAttempts=1",
+      "-o",           "ServerAliveInterval=5",
+      "-o",           "ServerAliveCountMax=3",
       "-i",           ssh_key,
       "-o",           "IdentitiesOnly=yes",
       "-o",           "StrictHostKeyChecking=accept-new",
@@ -1854,9 +1858,40 @@ static int exec_ssh_interactive(const std::string &ai_user,
     ::_exit(127);
   }
 
-  // Parent: wait for ssh to finish
+  // Parent: wait for ssh to finish (with timeout protection)
+  // SSH with -tt can hang if connection drops; use timeout to prevent that
   int status = 0;
-  ::waitpid(pid, &status, 0);
+  bool ssh_timed_out = false;
+  const int ssh_timeout_sec = 300; // 5 minutes max for interactive SSH
+  int elapsed_ms = 0;
+  const int poll_ms = 500;
+
+  while (elapsed_ms < ssh_timeout_sec * 1000) {
+    int ret = ::waitpid(pid, &status, WNOHANG);
+    if (ret > 0) {
+      break; // Child exited
+    }
+    if (ret < 0) {
+      break; // Error
+    }
+    usleep(poll_ms * 1000);
+    elapsed_ms += poll_ms;
+  }
+
+  if (elapsed_ms >= ssh_timeout_sec * 1000) {
+    ssh_timed_out = true;
+    std::cerr << "\nERROR: SSH session timed out after " << ssh_timeout_sec
+              << "s, killing..." << std::endl;
+    ::kill(pid, SIGTERM);
+    usleep(200000);
+    if (::waitpid(pid, &status, WNOHANG) == 0) {
+      ::kill(pid, SIGKILL);
+      ::waitpid(pid, &status, 0);
+    }
+  }
+
+  if (ssh_timed_out)
+    return 2; // Special exit code for SSH timeout
   return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
@@ -1938,13 +1973,23 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
     }
 
     if (has_broken || missing_ssh) {
-      // Auto-fix: run update logic before SSH
-      std::cerr << "INFO: auto-fixing project health issues..." << std::endl;
-      if (cmd_update(target_str, verbose) != 0) {
-        std::cerr << "WARNING: auto-fix failed, proceeding with SSH anyway"
-                  << std::endl;
-      } else {
-        std::cerr << "INFO: auto-fix complete" << std::endl;
+      // Auto-fix: run update ONCE, then proceed regardless of result
+      // Never retry — prevents infinite loops
+      std::cerr << "INFO: health issues detected:" << std::endl;
+      if (has_broken)
+        std::cerr << "  - broken/missing mounts" << std::endl;
+      if (missing_ssh)
+        std::cerr << "  - missing SSH authorized_keys" << std::endl;
+      std::cerr << "INFO: running auto-fix (one attempt only)..." << std::endl;
+      try {
+        if (cmd_update(target_str, verbose) != 0) {
+          std::cerr << "WARNING: auto-fix failed, proceeding anyway"
+                    << std::endl;
+        } else {
+          std::cerr << "INFO: auto-fix complete" << std::endl;
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "WARNING: auto-fix exception: " << e.what() << std::endl;
       }
     }
 

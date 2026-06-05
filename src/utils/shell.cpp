@@ -83,7 +83,8 @@ static std::string resolve_command(const std::string &cmd) {
   return "";
 }
 
-static ShellResult do_fork_exec(const std::string &file, char *const argv[]) {
+static ShellResult do_fork_exec(const std::string &file, char *const argv[],
+                                int timeout_sec = EXEC_SAFE_TIMEOUT_DEFAULT) {
   int stdout_pipe[2];
   int stderr_pipe[2];
 
@@ -129,12 +130,61 @@ static ShellResult do_fork_exec(const std::string &file, char *const argv[]) {
   ::close(stdout_pipe[0]);
   ::close(stderr_pipe[0]);
 
+  // Wait with timeout
   int status = 0;
-  ::waitpid(pid, &status, 0);
+  bool timed_out = false;
+
+  if (timeout_sec > 0) {
+    // Poll waitpid with WNOHANG + sleep loop
+    int elapsed = 0;
+    const int poll_ms = 200;
+    while (elapsed < timeout_sec * 1000) {
+      int ret = ::waitpid(pid, &status, WNOHANG);
+      if (ret > 0) {
+        // Child exited
+        break;
+      }
+      if (ret < 0) {
+        // Error
+        break;
+      }
+      // ret == 0: still running
+      usleep(poll_ms * 1000);
+      elapsed += poll_ms;
+    }
+
+    if (elapsed >= timeout_sec * 1000) {
+      // Timeout: kill the child process
+      timed_out = true;
+      ::kill(pid, SIGTERM);
+      usleep(100000); // 100ms grace period
+      // Force kill if still alive
+      if (::waitpid(pid, &status, WNOHANG) == 0) {
+        ::kill(pid, SIGKILL);
+        ::waitpid(pid, &status, 0);
+      }
+
+      std::string cmd_str = file;
+      for (int i = 1; argv[i]; i++) {
+        cmd_str += " ";
+        cmd_str += argv[i];
+      }
+      stderr_out += "\n[TIMEOUT] command killed after " +
+                    std::to_string(timeout_sec) + "s: " + cmd_str;
+      get_logger()->error("exec_safe TIMEOUT after {}s: {}", timeout_sec,
+                          cmd_str);
+    }
+  } else {
+    // No timeout: blocking wait
+    ::waitpid(pid, &status, 0);
+  }
 
   int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  if (timed_out) {
+    exit_code = -2; // Special code for timeout
+  }
 
-  return {exit_code, stdout_out, stderr_out};
+  return {exit_code, stdout_out, stderr_out, timed_out};
 }
 
 ShellResult exec_safe(const std::vector<std::string> &args) {
@@ -146,6 +196,11 @@ ShellResult exec_safe(const std::vector<std::string> &args) {
 
 ShellResult exec_safe(const std::string &file,
                       const std::vector<std::string> &args) {
+  return exec_safe(file, args, EXEC_SAFE_TIMEOUT_DEFAULT);
+}
+
+ShellResult exec_safe(const std::string &file,
+                      const std::vector<std::string> &args, int timeout_sec) {
   if (file.empty()) {
     return {-1, "", "empty command file"};
   }
@@ -167,7 +222,7 @@ ShellResult exec_safe(const std::string &file,
   }
   argv.push_back(nullptr);
 
-  return do_fork_exec(file, argv.data());
+  return do_fork_exec(file, argv.data(), timeout_sec);
 }
 
 bool validate_username(const std::string &username) {

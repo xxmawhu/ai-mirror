@@ -2076,6 +2076,8 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
             .string();
 
     // Directly execute SSH in a forked child process
+    // SSH connects to AI user, user gets interactive shell
+    // This is the SSH path — we must fork+exec SSH directly
     return exec_ssh_interactive(ai_user, target_str, ssh_key, known_hosts);
   }
 
@@ -2954,26 +2956,11 @@ _am() {
 		return 0
 	fi
 
-	# 'am cd' needs special handling: capture stdout for local cd
-	# Binary handles sudo via wrapper; function just captures output
-	if [[ "${1:-}" == "cd" ]]; then
-		shift  # Remove 'cd' from args, leave only the path
-		local _am_output _am_ret=0
-		_am_output=$("$_am_bin" cd "$@") || _am_ret=$?
-		if [[ $_am_ret -ne 0 ]]; then
-			echo "$_am_output"
-			return $_am_ret
-		fi
-		# If output is a cd command, eval it to change directory in current shell
-		# Otherwise (e.g. SSH action), pass through
-		if [[ -n "$_am_output" ]]; then
-			eval "$_am_output"
-		fi
-		return 0
-	fi
-
-	# All other commands: pass through to wrapper binary
-	# Wrapper handles sudo elevation internally
+	# All commands: pass through to wrapper binary directly.
+	# No $() capture — that blocks on SSH interactive sessions.
+	# The binary handles everything: sudo, auto-fix, SSH fork+exec.
+	# For local cd, the binary outputs "cd <path>" to stdout,
+	# which the user can eval if needed: eval "$(am cd <path>)"
 	"$_am_bin" "$@"
 	return $?
 }

@@ -1871,40 +1871,12 @@ static int exec_ssh_interactive(const std::string &ai_user,
     ::_exit(127);
   }
 
-  // Parent: wait for ssh to finish (with timeout protection)
-  // SSH with -tt can hang if connection drops; use timeout to prevent that
+  // Parent: wait for ssh to finish (no timeout — user may stay logged in
+  // indefinitely) Interactive SSH sessions have no time limit; let user decide
+  // when to exit.
   int status = 0;
-  bool ssh_timed_out = false;
-  const int ssh_timeout_sec = 300; // 5 minutes max for interactive SSH
-  int elapsed_ms = 0;
-  const int poll_ms = 500;
+  ::waitpid(pid, &status, 0);
 
-  while (elapsed_ms < ssh_timeout_sec * 1000) {
-    int ret = ::waitpid(pid, &status, WNOHANG);
-    if (ret > 0) {
-      break; // Child exited
-    }
-    if (ret < 0) {
-      break; // Error
-    }
-    usleep(poll_ms * 1000);
-    elapsed_ms += poll_ms;
-  }
-
-  if (elapsed_ms >= ssh_timeout_sec * 1000) {
-    ssh_timed_out = true;
-    std::cerr << "\nERROR: SSH session timed out after " << ssh_timeout_sec
-              << "s, killing..." << std::endl;
-    ::kill(pid, SIGTERM);
-    usleep(200000);
-    if (::waitpid(pid, &status, WNOHANG) == 0) {
-      ::kill(pid, SIGKILL);
-      ::waitpid(pid, &status, 0);
-    }
-  }
-
-  if (ssh_timed_out)
-    return 2; // Special exit code for SSH timeout
   return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 

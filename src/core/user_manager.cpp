@@ -235,8 +235,8 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
           utils::get_logger()->info("State file migrated successfully: {}",
                                     state_path.string());
         } else {
-          utils::get_logger()->warn("Failed to write migrated state file: {}",
-                                    state_path.string());
+          utils::get_logger()->error("Failed to write migrated state file: {}",
+                                     state_path.string());
         }
       }
     }
@@ -541,7 +541,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     return *info;
   }
 
-  fs::path home_dir = proj;
+  fs::path home_dir = abs_proj;
   uid_t base_uid = utils::get_login_uid();
   if (base_uid == 0)
     base_uid = getuid();

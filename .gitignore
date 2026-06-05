@@ -14,8 +14,6 @@ tests/*
 !tests/smoke/
 release.sh
 .dockerignore
-publish-llm-docs.sh
-.gitmodules
 
 # Auto-generated version header (from version.hpp.in via cmake)
 include/ai_mirror/version.hpp

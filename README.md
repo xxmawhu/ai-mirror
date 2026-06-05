@@ -67,8 +67,8 @@ sudo ./install.sh --clean
 | 依赖检查 | 自动检测并安装缺失的系统包（cmake, g++, make, git, openssh-server, sudo） |
 | 构建 | CMake Release 编译，增量构建支持 |
 | 验证 | 检查二进制文件完整性 + `--help` 冒烟测试 |
-| 安装 | 部署 `ai-mirror-bin` 到 `/usr/local/bin/` |
-| Profile | 安装 `am()` bash 函数到 `/etc/profile.d/am.sh`（登录自动加载） |
+| 安装 | 部署 `am` 二进制到 `/usr/local/bin/` |
+| Shell 集成 | `eval "$(am init bash)"` 生成 shell 函数（zoxide 模式） |
 | Completion | 安装 bash 补齐到 `/etc/bash_completion.d/am`（登录自动加载） |
 | Sudoers | 创建 `/etc/ai-mirror/sudoers.d/ai-mirror`，无通配符白名单规则 |
 | 用户组 | 创建 `ai-mirror` 系统组 |
@@ -94,8 +94,8 @@ sudo ./install.sh --clean
 
 - 当前用户必须属于 `ai-mirror` 组：`sudo usermod -aG ai-mirror $USER`
 - AI 用户不能执行任何命令（会被自动拦截）
-- 需要提权的命令通过 `am` shell 函数自动处理 sudo
-- **bash 用户**：安装后新登录自动加载 `am()` shell 函数；或手动 `source /etc/profile.d/am.sh`
+- 需要 sudo 的命令通过 `am` shell 函数自动处理（`eval "$(am init bash)"`）
+- **bash 用户**：在 `~/.bashrc` 中添加 `eval "$(am init bash)"` 即可自动加载 shell 集成
 
 ### Bash 自动补齐
 
@@ -153,12 +153,10 @@ am init
 确保当前用户环境正确配置 am 命令，一键完成所有前置设置。
 
 **执行流程**:
-1. 检查 `ai-mirror` 组成员身份（不在组则提示加入命令）
-2. 创建用户配置文件 `~/.ai-mirror.toml`（不存在时）
-3. 在 `~/.bashrc` 中添加 `source /etc/profile.d/am.sh`（tmux 兼容）
-4. 加载 bash 补齐
+1. 输出 shell 函数供 `eval` 加载（zoxide 模式）
+2. 函数内处理 `am cd` 本地 cd、sudo 包装、newgrp 提示
 
-> **tmux 兼容**: `/etc/profile.d/am.sh` 仅登录 shell 加载，tmux 新窗口是非登录 shell。`init` 通过在 `~/.bashrc` 追加 source 解决此问题。
+> **安装方式**: 在 `~/.bashrc` 中添加 `eval "$(am init bash)"`，新终端/tmux 窗口自动生效。
 
 **适用场景**:
 - 新用户首次使用 ai-mirror

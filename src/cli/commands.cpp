@@ -1851,10 +1851,23 @@ static int exec_ssh_interactive(const std::string &ai_user,
   }
 
   if (pid == 0) {
-    // Child: exec ssh directly. stdin/stdout/stderr are inherited from parent
-    // which is connected to the terminal.
+    // Child: reconnect std fds to the controlling terminal.
+    // When the shell function uses $() to capture stdout, the binary's
+    // stdout is a pipe. SSH must have a real terminal for interactive use,
+    // so we reopen /dev/tty for stdin/stdout/stderr.
+    int tty_fd = ::open("/dev/tty", O_RDWR);
+    if (tty_fd >= 0) {
+      ::dup2(tty_fd, STDIN_FILENO);
+      ::dup2(tty_fd, STDOUT_FILENO);
+      ::dup2(tty_fd, STDERR_FILENO);
+      if (tty_fd > STDERR_FILENO)
+        ::close(tty_fd);
+    }
     ::execv("/usr/bin/ssh", argv.data());
-    std::cerr << "error: execv(ssh) failed: " << strerror(errno) << std::endl;
+    // If execv fails, stderr is now the terminal (or original fd)
+    if (::write(STDERR_FILENO, "error: execv(ssh) failed\n", 25) < 0) {
+      // Ignore write error - nothing we can do
+    }
     ::_exit(127);
   }
 
@@ -2956,13 +2969,21 @@ _am() {
 		return 0
 	fi
 
-	# All commands: pass through to wrapper binary directly.
-	# No $() capture — that blocks on SSH interactive sessions.
-	# The binary handles everything: sudo, auto-fix, SSH fork+exec.
-	# For local cd, the binary outputs "cd <path>" to stdout,
-	# which the user can eval if needed: eval "$(am cd <path>)"
-	"$_am_bin" "$@"
-	return $?
+	# Run the binary and capture stdout
+	# SSH path: fork+exec SSH directly (binary has no stdout output)
+	# Local cd path: binary outputs "cd <path>" to stdout
+	# We must capture to handle local cd, but SSH won't block because
+	# exec_ssh_interactive() forks and waits separately.
+	local output
+	output="$("$_am_bin" "$@")"
+	local ret=$?
+
+	# If output is a cd command, eval it to change directory in current shell
+	if [[ "$output" == cd\ * ]]; then
+		eval "$output"
+	fi
+
+	return $ret
 }
 
 # Override 'am' as a function

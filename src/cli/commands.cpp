@@ -1851,23 +1851,10 @@ static int exec_ssh_interactive(const std::string &ai_user,
   }
 
   if (pid == 0) {
-    // Child: reconnect std fds to the controlling terminal.
-    // When the shell function uses $() to capture stdout, the binary's
-    // stdout is a pipe. SSH must have a real terminal for interactive use,
-    // so we reopen /dev/tty for stdin/stdout/stderr.
-    int tty_fd = ::open("/dev/tty", O_RDWR);
-    if (tty_fd >= 0) {
-      ::dup2(tty_fd, STDIN_FILENO);
-      ::dup2(tty_fd, STDOUT_FILENO);
-      ::dup2(tty_fd, STDERR_FILENO);
-      if (tty_fd > STDERR_FILENO)
-        ::close(tty_fd);
-    }
+    // Child: exec ssh directly. stdin/stdout/stderr are inherited from parent.
+    // No $() capture in shell function, so SSH has raw terminal access.
     ::execv("/usr/bin/ssh", argv.data());
-    // If execv fails, stderr is now the terminal (or original fd)
-    if (::write(STDERR_FILENO, "error: execv(ssh) failed\n", 25) < 0) {
-      // Ignore write error - nothing we can do
-    }
+    std::cerr << "error: execv(ssh) failed: " << strerror(errno) << std::endl;
     ::_exit(127);
   }
 
@@ -2080,9 +2067,19 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
     return 0;
   }
 
-  // Local cd: output shell code for eval
-  std::cout << "cd " << utils::shell_escape(target_str) << std::endl;
-  return 0;
+  // Local cd: write cd command to temp file, use exit code 42 as signal.
+  // The shell function reads the temp file and evals it.
+  // We MUST NOT use stdout (no $() capture) because SSH path needs raw
+  // terminal access.
+  std::string tmpfile = (fs::temp_directory_path() / "_am_cd_tmp").string();
+  std::ofstream ofs(tmpfile);
+  if (!ofs) {
+    std::cerr << "error: cannot write temp file: " << tmpfile << std::endl;
+    return 1;
+  }
+  ofs << "cd " << utils::shell_escape(target_str) << std::endl;
+  ofs.close();
+  return 42; // Special exit code: "read cd path from temp file"
 }
 
 int cmd_list(bool verbose) {
@@ -2941,18 +2938,20 @@ _am() {
 		return 0
 	fi
 
-	# Run the binary and capture stdout
-	# SSH path: fork+exec SSH directly (binary has no stdout output)
-	# Local cd path: binary outputs "cd <path>" to stdout
-	# We must capture to handle local cd, but SSH won't block because
-	# exec_ssh_interactive() forks and waits separately.
-	local output
-	output="$("$_am_bin" "$@")"
+	# Pass through to binary directly (no $() capture).
+	# SSH path: fork+exec SSH with raw terminal access — $() would break it.
+	# Local cd path: binary writes to temp file, exits with code 42.
+	"$_am_bin" "$@"
 	local ret=$?
 
-	# If output is a cd command, eval it to change directory in current shell
-	if [[ "$output" == cd\ * ]]; then
-		eval "$output"
+	# Exit code 42 = "local cd": read cd command from temp file and eval
+	if [[ $ret -eq 42 ]]; then
+		local _am_cd_tmp="${TMPDIR:-/tmp}/_am_cd_tmp"
+		if [[ -f "$_am_cd_tmp" ]]; then
+			eval "$(cat "$_am_cd_tmp")"
+			rm -f "$_am_cd_tmp"
+		fi
+		return 0
 	fi
 
 	return $ret

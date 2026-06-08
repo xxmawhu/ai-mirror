@@ -70,20 +70,18 @@ static bool is_ai_mirror_group_member() {
   if (ngroups <= 0)
     return false;
 
-  gid_t *groups = new gid_t[ngroups];
-  if (getgrouplist(pw->pw_name, pw->pw_gid, groups, &ngroups) < 0) {
-    delete[] groups;
+  // Use vector instead of raw new/delete (Rule 1: prefer unique_ptr/vector)
+  std::vector<gid_t> groups(ngroups);
+  if (getgrouplist(pw->pw_name, pw->pw_gid, groups.data(), &ngroups) < 0) {
     return false;
   }
 
   for (int i = 0; i < ngroups; i++) {
     if (groups[i] == target_gid) {
-      delete[] groups;
       return true;
     }
   }
 
-  delete[] groups;
   return false;
 }
 
@@ -121,6 +119,11 @@ int main(int argc, char **argv) {
       std::cerr << "  fix: sudo usermod -aG ai-mirror $USER" << std::endl;
       return 1;
     }
+    // Set SUDO_UID before exec sudo, since --preserve-env=HOME prevents
+    // sudo from setting SUDO_UID automatically
+    // Avoid temporary object UB: store string in persistent variable
+    std::string sudo_uid_str = std::to_string(getuid());
+    setenv("SUDO_UID", sudo_uid_str.c_str(), 1);
     new_argv.push_back(const_cast<char *>("sudo"));
     new_argv.push_back(const_cast<char *>("--preserve-env=HOME"));
     new_argv.push_back(const_cast<char *>(REAL_BIN));

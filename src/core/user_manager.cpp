@@ -358,9 +358,35 @@ bool UserManager::execute_useradd(const std::string &username,
     return false;
   }
 
+  // Add group write permission to home_dir for collaboration
+  // (同一 main_user 的多个 agents 可以协作创建子项目)
+  auto chmod_result = utils::exec_safe({"chmod", "g+w", home_dir.string()});
+  if (chmod_result.exit_code != 0) {
+    // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
+    // - home_dir 可能已不存在（useradd 失败的罕见场景）
+    // - 文件系统可能不支持 group write
+    // - 权限可能已被设置为 775（重复执行）
+    utils::get_logger()->warn("Failed to add group write permission to {}: {}",
+                              home_dir.string(), chmod_result.stderr_output);
+  } else {
+    utils::get_logger()->info(
+        "Added group write permission to {} (collaboration)",
+        home_dir.string());
+  }
+
   auto unlock = utils::exec_safe({"passwd", "-u", username});
   if (unlock.exit_code != 0) {
     utils::exec_safe({"usermod", "-p", "", username});
+  }
+
+  // Add the new AI user to the ai-mirror group so it can execute `am` commands
+  auto group_add = utils::exec_safe({"usermod", "-aG", "ai-mirror", username});
+  if (group_add.exit_code != 0) {
+    // [log-review] 降级为 warning: ai-mirror 组可能不存在（首次安装未完成时）
+    utils::get_logger()->warn("Failed to add '{}' to ai-mirror group: {}",
+                              username, group_add.stderr_output);
+  } else {
+    utils::get_logger()->info("Added '{}' to ai-mirror group", username);
   }
 
   return true;

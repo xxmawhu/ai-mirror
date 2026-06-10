@@ -584,6 +584,27 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
             err};
   }
 
+  // Change home_dir group to main user's primary group
+  // so that main user can create sub-projects inside AM home
+  struct passwd *main_pw = getpwnam(main_user.c_str());
+  if (main_pw) {
+    struct group *main_grp = getgrgid(main_pw->pw_gid);
+    std::string main_group_name =
+        main_grp ? main_grp->gr_name : std::to_string(main_pw->pw_gid);
+    auto chgrp_result =
+        utils::exec_safe({"chgrp", main_group_name, home_dir.string()});
+    if (chgrp_result.exit_code != 0) {
+      // [log-review] 降级为 warning: chgrp 失败不影响 ai-user 正常使用
+      utils::get_logger()->warn("Failed to chgrp '{}' to '{}': {}",
+                                home_dir.string(), main_group_name,
+                                chgrp_result.stderr_output);
+    } else {
+      utils::get_logger()->info(
+          "Changed group of '{}' to '{}' (main user group)", home_dir.string(),
+          main_group_name);
+    }
+  }
+
   auto info = get_user_info(username);
   if (!info) {
     UserInfo created{username,  home_dir.string(), "",      project_path_str,

@@ -98,7 +98,7 @@ static std::string make_state_content(const UserInfo &info,
 }
 
 static void fix_home_dir_permissions(const fs::path &home_dir,
-                                      const std::string &main_user) {
+                                     const std::string &main_user) {
   // Ensure main user's group has write permission to AM home
   // This allows main user to create sub-projects inside AM home
 
@@ -110,7 +110,8 @@ static void fix_home_dir_permissions(const fs::path &home_dir,
                               home_dir.string(), chmod_result.stderr_output);
   } else {
     utils::get_logger()->info(
-        "Added group write permission to {} (collaboration)", home_dir.string());
+        "Added group write permission to {} (collaboration)",
+        home_dir.string());
   }
 
   // 2. chgrp to main user's primary group
@@ -127,8 +128,9 @@ static void fix_home_dir_permissions(const fs::path &home_dir,
                                 home_dir.string(), main_group_name,
                                 chgrp_result.stderr_output);
     } else {
-      utils::get_logger()->info("Changed group of '{}' to '{}' (main user group)",
-                                home_dir.string(), main_group_name);
+      utils::get_logger()->info(
+          "Changed group of '{}' to '{}' (main user group)", home_dir.string(),
+          main_group_name);
     }
   }
 }

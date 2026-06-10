@@ -2173,6 +2173,25 @@ int cmd_health([[maybe_unused]] bool verbose) {
     }
   }
 
+  // AM home permission check: warn if group write is missing
+  // Old AM homes (created before fix_home_dir_permissions was added) may lack
+  // group write, preventing main user from creating sub-projects inside AM
+  // home.
+  for (const auto &[home_dir, username] : user_home_to_name) {
+    struct stat st;
+    if (stat(home_dir.c_str(), &st) == 0) {
+      if ((st.st_mode & S_IWGRP) == 0) {
+        daemon::HealthStatus perm_status;
+        perm_status.mount_point = home_dir;
+        perm_status.healthy = true; // Not unhealthy, just a warning
+        perm_status.stale = false;
+        perm_status.detail =
+            "AM home lacks group write (run 'am auto-fix-all' to fix)";
+        statuses.push_back(perm_status);
+      }
+    }
+  }
+
   if (statuses.empty()) {
     std::cout << "No mounts to check." << std::endl;
     return 0;
@@ -2180,13 +2199,20 @@ int cmd_health([[maybe_unused]] bool verbose) {
 
   int unhealthy = 0;
   for (const auto &s : statuses) {
-    std::string status = s.stale ? "STALE" : (s.healthy ? "OK" : "FAIL");
-    std::cout << "[" << status << "] " << s.mount_point << " - " << s.detail
-              << std::endl;
-    if (!s.healthy)
-      unhealthy++;
+    if (s.detail.find("lacks group write") != std::string::npos) {
+      // Permission warning - not unhealthy, just advisory
+      std::cout << "[WARN] " << s.mount_point << " - " << s.detail << std::endl;
+    } else {
+      std::string status = s.stale ? "STALE" : (s.healthy ? "OK" : "FAIL");
+      std::cout << "[" << status << "] " << s.mount_point << " - " << s.detail
+                << std::endl;
+      if (!s.healthy)
+        unhealthy++;
+    }
   }
 
+  // Permission warnings don't affect return code - they're advisory
+  // Unhealthy mounts still cause return 1
   return unhealthy > 0 ? 1 : 0;
 }
 
@@ -2622,7 +2648,43 @@ int cmd_auto_fix_all(bool verbose) {
     }
   }
 
-  // Step 4: Re-check health after fixes
+  // Step 4: Fix AM home permissions for all existing ai-users
+  // Old AM homes (created before fix_home_dir_permissions was added) may lack
+  // group write, preventing main user from creating sub-projects inside AM
+  // home.
+  {
+    auto all_users = ctx.user_mgr->list_ai_users();
+    std::string main_user = utils::get_effective_username();
+    std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+    int perm_fixes = 0;
+
+    for (const auto &u : all_users) {
+      if (u.username.size() <= expected_prefix.size() ||
+          u.username.substr(0, expected_prefix.size()) != expected_prefix) {
+        continue;
+      }
+      if (u.home_dir.empty())
+        continue;
+
+      struct stat st;
+      if (stat(u.home_dir.c_str(), &st) == 0) {
+        if ((st.st_mode & S_IWGRP) == 0) {
+          std::cout << "  [PERM] " << u.home_dir
+                    << " lacks group write (fixing...)" << std::endl;
+          core::UserManager::fix_home_dir_permissions(fs::path(u.home_dir),
+                                                      main_user);
+          perm_fixes++;
+        }
+      }
+    }
+
+    if (perm_fixes > 0) {
+      std::cout << "Fixed group write permission for " << perm_fixes
+                << " AM home(s)." << std::endl;
+    }
+  }
+
+  // Step 5: Re-check health after fixes
   std::cout << "\n=== Re-checking health ===" << std::endl;
   graft.invalidate_cache();
   auto remaining = graft.health_check();

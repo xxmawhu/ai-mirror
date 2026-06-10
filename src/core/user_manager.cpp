@@ -97,8 +97,8 @@ static std::string make_state_content(const UserInfo &info,
   }
 }
 
-static void fix_home_dir_permissions(const fs::path &home_dir,
-                                     const std::string &main_user) {
+void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
+                                           const std::string &main_user) {
   // Ensure main user's group has write permission to AM home
   // This allows main user to create sub-projects inside AM home
 

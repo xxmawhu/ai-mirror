@@ -181,6 +181,11 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     }
   }
 
+  // Fix AM home directory permissions for collaboration
+  // This allows main user to create sub-projects inside AM home
+  core::UserManager::fix_home_dir_permissions(home_dir, main_user);
+  fixes++; // Count as a fix even if permissions were already correct
+
   auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, username});
   if (grp_result.exit_code == 0) {
     fixes++;

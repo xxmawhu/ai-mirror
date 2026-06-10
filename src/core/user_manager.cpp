@@ -97,6 +97,44 @@ static std::string make_state_content(const UserInfo &info,
   }
 }
 
+static void fix_home_dir_permissions(const fs::path &home_dir,
+                                     const std::string &main_user) {
+  // Ensure main user's group has write permission to AM home
+  // This allows main user to create sub-projects inside AM home
+
+  // 1. chmod g+w
+  auto chmod_result = utils::exec_safe({"chmod", "g+w", home_dir.string()});
+  if (chmod_result.exit_code != 0) {
+    // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
+    utils::get_logger()->warn("Failed to add group write permission to {}: {}",
+                              home_dir.string(), chmod_result.stderr_output);
+  } else {
+    utils::get_logger()->info(
+        "Added group write permission to {} (collaboration)",
+        home_dir.string());
+  }
+
+  // 2. chgrp to main user's primary group
+  struct passwd *main_pw = getpwnam(main_user.c_str());
+  if (main_pw) {
+    struct group *main_grp = getgrgid(main_pw->pw_gid);
+    std::string main_group_name =
+        main_grp ? main_grp->gr_name : std::to_string(main_pw->pw_gid);
+    auto chgrp_result =
+        utils::exec_safe({"chgrp", main_group_name, home_dir.string()});
+    if (chgrp_result.exit_code != 0) {
+      // [log-review] 降级为 warning: chgrp 失败不影响 ai-user 正常使用
+      utils::get_logger()->warn("Failed to chgrp '{}' to '{}': {}",
+                                home_dir.string(), main_group_name,
+                                chgrp_result.stderr_output);
+    } else {
+      utils::get_logger()->info(
+          "Changed group of '{}' to '{}' (main user group)", home_dir.string(),
+          main_group_name);
+    }
+  }
+}
+
 static bool verify_state_content(const std::string &content) {
   // PoW verification: md5 of content must start with "000"
   // Supports three formats:
@@ -519,6 +557,9 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
         utils::get_logger()->info(
             "User already exists (state file matches): {} (uid={})",
             state->username, state->uid);
+        // Fix permissions for existing AM home so main user can create
+        // sub-projects
+        fix_home_dir_permissions(abs_proj, main_user);
         return *state;
       }
       utils::get_logger()->warn(
@@ -536,6 +577,9 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
         utils::get_logger()->info(
             "Recovered existing user: {} (uid={}), wrote state file",
             existing->username, existing->uid);
+        // Fix permissions for existing AM home so main user can create
+        // sub-projects
+        fix_home_dir_permissions(abs_proj, main_user);
         return *existing;
       }
     }
@@ -564,6 +608,9 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     utils::get_logger()->info(
         "User already exists: {} (uid={}), wrote state file", info->username,
         info->uid);
+    // Fix permissions for existing AM home so main user can create
+    // sub-projects
+    fix_home_dir_permissions(abs_proj, main_user);
     return *info;
   }
 
@@ -584,26 +631,9 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
             err};
   }
 
-  // Change home_dir group to main user's primary group
+  // Change home_dir group to main user's primary group and add group write
   // so that main user can create sub-projects inside AM home
-  struct passwd *main_pw = getpwnam(main_user.c_str());
-  if (main_pw) {
-    struct group *main_grp = getgrgid(main_pw->pw_gid);
-    std::string main_group_name =
-        main_grp ? main_grp->gr_name : std::to_string(main_pw->pw_gid);
-    auto chgrp_result =
-        utils::exec_safe({"chgrp", main_group_name, home_dir.string()});
-    if (chgrp_result.exit_code != 0) {
-      // [log-review] 降级为 warning: chgrp 失败不影响 ai-user 正常使用
-      utils::get_logger()->warn("Failed to chgrp '{}' to '{}': {}",
-                                home_dir.string(), main_group_name,
-                                chgrp_result.stderr_output);
-    } else {
-      utils::get_logger()->info(
-          "Changed group of '{}' to '{}' (main user group)", home_dir.string(),
-          main_group_name);
-    }
-  }
+  fix_home_dir_permissions(home_dir, main_user);
 
   auto info = get_user_info(username);
   if (!info) {

@@ -49,8 +49,9 @@ public:
   // Compute path hash for a canonical path (first 6 hex chars of SHA256)
   static std::string compute_path_hash(const fs::path &canonical_path);
 
-  // Fix AM home directory permissions for collaboration
-  // Ensures main user's group has write permission (chmod g+w + chgrp)
+  // Fix AM home directory permissions per root.md §2.3
+  // AI user home MUST be 0755 (owner rwx, group/other r-x), NO g+w
+  // Main user operates via SSH, not via shared group write permission
   static void fix_home_dir_permissions(const fs::path &home_dir,
                                        const std::string &main_user);
 

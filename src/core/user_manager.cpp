@@ -99,22 +99,24 @@ static std::string make_state_content(const UserInfo &info,
 
 void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
                                            const std::string &main_user) {
-  // Ensure main user's group has write permission to AM home
-  // This allows main user to create sub-projects inside AM home
+  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x)
+  // NO group write permission (g+w) - main user operates via SSH, not via
+  // shared group write
 
-  // 1. chmod g+w
-  auto chmod_result = utils::exec_safe({"chmod", "g+w", home_dir.string()});
+  // 1. Set home_dir to 0755 (remove group write if present)
+  auto chmod_result = utils::exec_safe({"chmod", "0755", home_dir.string()});
   if (chmod_result.exit_code != 0) {
     // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
-    utils::get_logger()->warn("Failed to add group write permission to {}: {}",
+    utils::get_logger()->warn("Failed to set permissions 0755 on {}: {}",
                               home_dir.string(), chmod_result.stderr_output);
   } else {
     utils::get_logger()->info(
-        "Added group write permission to {} (collaboration)",
+        "Set permissions 0755 on {} (AI user home isolation, per root.md §2.3)",
         home_dir.string());
   }
 
-  // 2. chgrp to main user's primary group
+  // 2. chgrp to main user's primary group (for read access via group
+  // membership)
   struct passwd *main_pw = getpwnam(main_user.c_str());
   if (main_pw) {
     struct group *main_grp = getgrgid(main_pw->pw_gid);
@@ -129,8 +131,8 @@ void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
                                 chgrp_result.stderr_output);
     } else {
       utils::get_logger()->info(
-          "Changed group of '{}' to '{}' (main user group)", home_dir.string(),
-          main_group_name);
+          "Changed group of '{}' to '{}' (main user can read via group)",
+          home_dir.string(), main_group_name);
     }
   }
 }
@@ -396,19 +398,20 @@ bool UserManager::execute_useradd(const std::string &username,
     return false;
   }
 
-  // Add group write permission to home_dir for collaboration
-  // (同一 main_user 的多个 agents 可以协作创建子项目)
-  auto chmod_result = utils::exec_safe({"chmod", "g+w", home_dir.string()});
+  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x)
+  // NO group write permission (g+w) - main user operates via SSH, not via
+  // shared group write
+  auto chmod_result = utils::exec_safe({"chmod", "0755", home_dir.string()});
   if (chmod_result.exit_code != 0) {
     // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
     // - home_dir 可能已不存在（useradd 失败的罕见场景）
-    // - 文件系统可能不支持 group write
-    // - 权限可能已被设置为 775（重复执行）
-    utils::get_logger()->warn("Failed to add group write permission to {}: {}",
+    // - 文件系统可能不支持权限设置
+    // - 权限可能已被设置为 0755（重复执行）
+    utils::get_logger()->warn("Failed to set permissions 0755 on {}: {}",
                               home_dir.string(), chmod_result.stderr_output);
   } else {
     utils::get_logger()->info(
-        "Added group write permission to {} (collaboration)",
+        "Set permissions 0755 on {} (AI user home isolation, per root.md §2.3)",
         home_dir.string());
   }
 

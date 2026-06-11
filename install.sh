@@ -306,11 +306,49 @@ phase_verify() {
 	log "Binary verified OK"
 }
 
+# ---- Version Management ----
+get_version() {
+	# Extract version from CMakeLists.txt: project(ai-mirror VERSION <major>.<minor>)
+	local version
+	version=$(grep -oP 'project\([^)]*VERSION\s+\K[0-9]+\.[0-9]+' "${SCRIPT_DIR}/CMakeLists.txt" 2>/dev/null || echo "1.0")
+	echo "$version"
+}
+
+cleanup_old_versions() {
+	local bin_dir="$1"
+	local name="$2"
+	local current_version="$3"
+	local max_keep=2  # Keep at most 2 old versions
+
+	# List all versioned files, sorted by modification time (oldest first)
+	local versions
+	versions=$(ls -t "${bin_dir}/${name}."* 2>/dev/null | grep -E "${name}\.[0-9]+\.[0-9]+$" || true)
+
+	local count=$(echo "$versions" | wc -l)
+	local to_delete=$((count - max_keep))
+
+	if [[ $to_delete -gt 0 ]]; then
+		local old_files
+		old_files=$(echo "$versions" | tail -n $to_delete)
+		for f in $old_files; do
+			if [[ "$f" != "${bin_dir}/${name}.${current_version}" ]]; then
+				log "  Removing old version: $(basename "$f")"
+				sudo rm -f "$f"
+			fi
+		done
+	fi
+}
+
 # ---- Phase: Install ----
 phase_install() {
 	CURRENT_PHASE="install"
 	require_sudo
 	log "Installing binaries to ${PREFIX}/bin/..."
+
+	# Get version from CMakeLists.txt
+	local VERSION
+	VERSION=$(get_version)
+	log "  Version: ${VERSION}"
 
 	if ! sudo install -d "${PREFIX}/bin"; then
 		ERROR_MSG="Failed to create directory: ${PREFIX}/bin"
@@ -324,12 +362,25 @@ phase_install() {
 	fi
 	log "  ${PREFIX}/bin/${WRAPPER_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${WRAPPER_NAME}") bytes)"
 
-	# Install real binary (ai-mirror-bin)
-	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${BIN_NAME}"; then
-		ERROR_MSG="Failed to install binary to ${PREFIX}/bin/${BIN_NAME}"
+	# Install versioned binary (ai-mirror-bin.<version>)
+	local VERSIONED_BIN="${BIN_NAME}.${VERSION}"
+	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${VERSIONED_BIN}"; then
+		ERROR_MSG="Failed to install versioned binary to ${PREFIX}/bin/${VERSIONED_BIN}"
 		return 1
 	fi
-	log "  ${PREFIX}/bin/${BIN_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${BIN_NAME}") bytes)"
+	log "  ${PREFIX}/bin/${VERSIONED_BIN}  ($(sudo stat -c%s "${PREFIX}/bin/${VERSIONED_BIN}") bytes)"
+
+	# Create symlink: ai-mirror-bin -> ai-mirror-bin.<version> (relative path, atomic)
+	cd "${PREFIX}/bin"
+	if ! sudo ln -sfn "${VERSIONED_BIN}" "${BIN_NAME}"; then
+		ERROR_MSG="Failed to create symlink ${BIN_NAME} -> ${VERSIONED_BIN}"
+		return 1
+	fi
+	log "  ${PREFIX}/bin/${BIN_NAME} -> ${VERSIONED_BIN} (symlink)"
+	cd "${SCRIPT_DIR}"
+
+	# Cleanup old versions (keep at most 2 old versions)
+	cleanup_old_versions "${PREFIX}/bin" "${BIN_NAME}" "${VERSION}"
 
 	# Remove old am.sh from /etc/profile.d/ if present (legacy cleanup)
 	if sudo test -f /etc/profile.d/am.sh; then
@@ -407,14 +458,17 @@ SUDOERS
 
 # ---- Phase: Summary ----
 phase_summary() {
+	local VERSION
+	VERSION=$(get_version)
 	separator
-	log "INSTALL COMPLETE"
+	log "INSTALL COMPLETE (v${VERSION})"
 	separator
 	log ""
 	log "Installed binaries:"
-	log "  ${PREFIX}/bin/${WRAPPER_NAME}      (wrapper, auto sudo elevation)"
-	log "  ${PREFIX}/bin/${BIN_NAME}  (implementation)"
-	log "  /etc/bash_completion.d/am  (bash completion, sourced on login)"
+	log "  ${PREFIX}/bin/${WRAPPER_NAME}                (wrapper, auto sudo elevation)"
+	log "  ${PREFIX}/bin/${BIN_NAME}.${VERSION}  (versioned binary)"
+	log "  ${PREFIX}/bin/${BIN_NAME}           -> ${BIN_NAME}.${VERSION} (symlink)"
+	log "  /etc/bash_completion.d/am             (bash completion, sourced on login)"
 	log ""
 	log "Data directory:"
 	log "  ${DATA_DIR}/"
@@ -457,13 +511,26 @@ phase_clean() {
 		log "  Removed ${PREFIX}/bin/${WRAPPER_NAME}"
 	fi
 
-	# Remove real binary
-	if sudo test -f "${PREFIX}/bin/${BIN_NAME}"; then
+	# Remove symlink
+	if sudo test -L "${PREFIX}/bin/${BIN_NAME}"; then
 		if ! sudo rm -f "${PREFIX}/bin/${BIN_NAME}"; then
-			ERROR_MSG="Failed to remove ${PREFIX}/bin/${BIN_NAME}"
+			ERROR_MSG="Failed to remove symlink ${PREFIX}/bin/${BIN_NAME}"
 			return 1
 		fi
-		log "  Removed ${PREFIX}/bin/${BIN_NAME}"
+		log "  Removed symlink ${PREFIX}/bin/${BIN_NAME}"
+	fi
+
+	# Remove all versioned binaries
+	local versioned_bins
+	versioned_bins=$(sudo ls "${PREFIX}/bin/${BIN_NAME}."* 2>/dev/null | grep -E "${BIN_NAME}\.[0-9]+\.[0-9]+$" || true)
+	if [[ -n "$versioned_bins" ]]; then
+		for f in $versioned_bins; do
+			if ! sudo rm -f "$f"; then
+				ERROR_MSG="Failed to remove versioned binary: $f"
+				return 1
+			fi
+			log "  Removed $(basename "$f")"
+		done
 	fi
 
 	# Remove legacy am.sh if present

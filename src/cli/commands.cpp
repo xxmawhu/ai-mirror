@@ -10,6 +10,7 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include "ai_mirror/utils/shell.hpp"
+#include "ai_mirror/utils/unique_fd.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -873,39 +874,21 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                               proj.string());
   }
 
-  // Fix SSH StrictModes compatibility: sshd requires the user's home directory
-  // and ~/.ssh to NOT be group-writable. Since home_dir == proj and we just
-  // set it to 775 (g+rwx) via grant_write_access, we must:
-  //   1. Remove g+w from home_dir to satisfy sshd StrictModes
-  //   2. Ensure .ssh directory is 700
-  //   3. Ensure .ssh/authorized_keys is 600
-  // The main user can still access files via group membership + setgid on
-  // subdirectories created after newgrp.
-  {
-    std::error_code ec;
-    auto hp = fs::status(home_dir, ec);
-    if (!ec && (hp.permissions() & fs::perms::set_gid) != fs::perms::none) {
-      fs::permissions(home_dir, hp.permissions() & ~fs::perms::set_gid, ec);
-      if (!ec) {
-        utils::get_logger()->info("Cleared setgid on home_dir {}", home_dir);
-      }
-    }
-  }
-
-  {
-    // Remove g+w from home_dir for sshd StrictModes compatibility
-    std::error_code ec;
-    auto hp = fs::status(home_dir, ec);
-    if (!ec && (hp.permissions() & fs::perms::group_write) != fs::perms::none) {
-      fs::permissions(home_dir, hp.permissions() & ~fs::perms::group_write, ec);
-      if (!ec) {
-        utils::get_logger()->info(
-            "Removed g+w from home_dir {} (sshd StrictModes compatibility)",
-            home_dir);
-        fixes++;
-      }
-    }
-  }
+  // Fix SSH StrictModes compatibility: sshd requires ~/.ssh and authorized_keys
+  // to be owner-only (700/600). However, sshd does NOT require home_dir to be
+  // non-group-writable (only some configurations warn about it).
+  //
+  // AM home (home_dir) MUST be 0775 (group write) to allow main user to create
+  // sub-projects inside. This is the core design goal of ai-mirror.
+  //
+  // Therefore:
+  //   1. KEEP g+w on home_dir (for main user collaboration)
+  //   2. Ensure .ssh directory is 700 (sshd StrictModes)
+  //   3. Ensure .ssh/authorized_keys is 600 (sshd StrictModes)
+  //
+  // Note: We intentionally DO NOT remove g+w from home_dir, as this would
+  // violate the AM home collaboration design (see issue:
+  // issue-ai-mirror-am-home-permission-20260610).
 
   {
     // Ensure .ssh is 700 and authorized_keys is 600, owned by ai-user
@@ -918,25 +901,26 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     if (fs::exists(ssh_dir, ec) && !ec) {
       // Fix ownership
       if (ai_pw) {
-        int ssh_fd = open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-        if (ssh_fd >= 0) {
+        utils::unique_fd ssh_fd(
+            open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+        if (ssh_fd) {
           struct stat st;
-          if (fstat(ssh_fd, &st) == 0 &&
+          if (fstat(ssh_fd.get(), &st) == 0 &&
               (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
-            if (fchown(ssh_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
+            if (fchown(ssh_fd.get(), ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
               utils::get_logger()->info(
                   "Fixed .ssh ownership to {} (was uid={})", username,
                   st.st_uid);
               fixes++;
             }
           }
-          close(ssh_fd);
         }
       }
       // Fix permissions
-      int ssh_fd = open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-      if (ssh_fd >= 0) {
-        if (fchmod(ssh_fd, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
+      utils::unique_fd ssh_fd(
+          open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW));
+      if (ssh_fd) {
+        if (fchmod(ssh_fd.get(), S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
           utils::get_logger()->warn("Failed to chmod .ssh to 700: {}",
                                     strerror(errno));
         } else {
@@ -944,32 +928,30 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
               "Set .ssh to 700 for StrictModes compatibility");
           fixes++;
         }
-        close(ssh_fd);
       }
     }
 
     if (fs::exists(auth_keys, ec) && !ec) {
       // Fix ownership
       if (ai_pw) {
-        int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
-        if (ak_fd >= 0) {
+        utils::unique_fd ak_fd(open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW));
+        if (ak_fd) {
           struct stat st;
-          if (fstat(ak_fd, &st) == 0 &&
+          if (fstat(ak_fd.get(), &st) == 0 &&
               (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
-            if (fchown(ak_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
+            if (fchown(ak_fd.get(), ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
               utils::get_logger()->info(
                   "Fixed authorized_keys ownership to {} (was uid={})",
                   username, st.st_uid);
               fixes++;
             }
           }
-          close(ak_fd);
         }
       }
       // Fix permissions
-      int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
-      if (ak_fd >= 0) {
-        if (fchmod(ak_fd, S_IRUSR | S_IWUSR) != 0) {
+      utils::unique_fd ak_fd(open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW));
+      if (ak_fd) {
+        if (fchmod(ak_fd.get(), S_IRUSR | S_IWUSR) != 0) {
           utils::get_logger()->warn(
               "Failed to chmod authorized_keys to 600: {}", strerror(errno));
         } else {
@@ -977,7 +959,6 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
               "Set authorized_keys to 600 for StrictModes compatibility");
           fixes++;
         }
-        close(ak_fd);
       }
     }
   }

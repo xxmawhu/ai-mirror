@@ -102,45 +102,37 @@ void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
   // Ensure main user's group has write permission to AM home
   // This allows main user to create sub-projects inside AM home
 
-  // IMPORTANT: Must change group BEFORE adding write permission
-  // Otherwise chmod adds write to wrong group (AI user's group, not main user's
-  // group)
-
-  // 1. chgrp to main user's primary group FIRST
-  struct passwd *main_pw = getpwnam(main_user.c_str());
-  if (!main_pw) {
-    utils::get_logger()->error("Failed to get main user '{}' info for chgrp",
-                               main_user);
-    return;
-  }
-
-  struct group *main_grp = getgrgid(main_pw->pw_gid);
-  std::string main_group_name =
-      main_grp ? main_grp->gr_name : std::to_string(main_pw->pw_gid);
-
-  auto chgrp_result =
-      utils::exec_safe({"chgrp", main_group_name, home_dir.string()});
-  if (chgrp_result.exit_code != 0) {
-    utils::get_logger()->error("Failed to chgrp '{}' to '{}': {}",
-                               home_dir.string(), main_group_name,
-                               chgrp_result.stderr_output);
-    return; // Critical error: cannot proceed with chmod if chgrp failed
-  }
-
-  utils::get_logger()->info("Changed group of '{}' to '{}' (main user group)",
-                            home_dir.string(), main_group_name);
-
-  // 2. chmod g+w AFTER changing group
+  // 1. chmod g+w
   auto chmod_result = utils::exec_safe({"chmod", "g+w", home_dir.string()});
   if (chmod_result.exit_code != 0) {
-    utils::get_logger()->error("Failed to add group write permission to {}: {}",
-                               home_dir.string(), chmod_result.stderr_output);
-    return; // Critical error: main user cannot create sub-projects without
-            // write permission
+    // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
+    utils::get_logger()->warn("Failed to add group write permission to {}: {}",
+                              home_dir.string(), chmod_result.stderr_output);
+  } else {
+    utils::get_logger()->info(
+        "Added group write permission to {} (collaboration)",
+        home_dir.string());
   }
 
-  utils::get_logger()->info(
-      "Added group write permission to {} (collaboration)", home_dir.string());
+  // 2. chgrp to main user's primary group
+  struct passwd *main_pw = getpwnam(main_user.c_str());
+  if (main_pw) {
+    struct group *main_grp = getgrgid(main_pw->pw_gid);
+    std::string main_group_name =
+        main_grp ? main_grp->gr_name : std::to_string(main_pw->pw_gid);
+    auto chgrp_result =
+        utils::exec_safe({"chgrp", main_group_name, home_dir.string()});
+    if (chgrp_result.exit_code != 0) {
+      // [log-review] 降级为 warning: chgrp 失败不影响 ai-user 正常使用
+      utils::get_logger()->warn("Failed to chgrp '{}' to '{}': {}",
+                                home_dir.string(), main_group_name,
+                                chgrp_result.stderr_output);
+    } else {
+      utils::get_logger()->info(
+          "Changed group of '{}' to '{}' (main user group)", home_dir.string(),
+          main_group_name);
+    }
+  }
 }
 
 static bool verify_state_content(const std::string &content) {
@@ -404,11 +396,21 @@ bool UserManager::execute_useradd(const std::string &username,
     return false;
   }
 
-  // NOTE: Group write permission is NOT set here.
-  // Permission fixing (chgrp + chmod g+w) is done by fix_home_dir_permissions()
-  // in create_ai_user() after useradd, to ensure correct order:
-  // 1. chgrp to main user's group
-  // 2. chmod g+w (so the correct group gets write permission)
+  // Add group write permission to home_dir for collaboration
+  // (同一 main_user 的多个 agents 可以协作创建子项目)
+  auto chmod_result = utils::exec_safe({"chmod", "g+w", home_dir.string()});
+  if (chmod_result.exit_code != 0) {
+    // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
+    // - home_dir 可能已不存在（useradd 失败的罕见场景）
+    // - 文件系统可能不支持 group write
+    // - 权限可能已被设置为 775（重复执行）
+    utils::get_logger()->warn("Failed to add group write permission to {}: {}",
+                              home_dir.string(), chmod_result.stderr_output);
+  } else {
+    utils::get_logger()->info(
+        "Added group write permission to {} (collaboration)",
+        home_dir.string());
+  }
 
   auto unlock = utils::exec_safe({"passwd", "-u", username});
   if (unlock.exit_code != 0) {

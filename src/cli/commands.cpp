@@ -181,6 +181,11 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     }
   }
 
+  // Fix AM home directory permissions for collaboration
+  // This allows main user to create sub-projects inside AM home
+  core::UserManager::fix_home_dir_permissions(home_dir, main_user);
+  fixes++; // Count as a fix even if permissions were already correct
+
   auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, username});
   if (grp_result.exit_code == 0) {
     fixes++;
@@ -1851,47 +1856,19 @@ static int exec_ssh_interactive(const std::string &ai_user,
   }
 
   if (pid == 0) {
-    // Child: exec ssh directly. stdin/stdout/stderr are inherited from parent
-    // which is connected to the terminal.
+    // Child: exec ssh directly. stdin/stdout/stderr are inherited from parent.
+    // No $() capture in shell function, so SSH has raw terminal access.
     ::execv("/usr/bin/ssh", argv.data());
     std::cerr << "error: execv(ssh) failed: " << strerror(errno) << std::endl;
     ::_exit(127);
   }
 
-  // Parent: wait for ssh to finish (with timeout protection)
-  // SSH with -tt can hang if connection drops; use timeout to prevent that
+  // Parent: wait for ssh to finish (no timeout — user may stay logged in
+  // indefinitely) Interactive SSH sessions have no time limit; let user decide
+  // when to exit.
   int status = 0;
-  bool ssh_timed_out = false;
-  const int ssh_timeout_sec = 300; // 5 minutes max for interactive SSH
-  int elapsed_ms = 0;
-  const int poll_ms = 500;
+  ::waitpid(pid, &status, 0);
 
-  while (elapsed_ms < ssh_timeout_sec * 1000) {
-    int ret = ::waitpid(pid, &status, WNOHANG);
-    if (ret > 0) {
-      break; // Child exited
-    }
-    if (ret < 0) {
-      break; // Error
-    }
-    usleep(poll_ms * 1000);
-    elapsed_ms += poll_ms;
-  }
-
-  if (elapsed_ms >= ssh_timeout_sec * 1000) {
-    ssh_timed_out = true;
-    std::cerr << "\nERROR: SSH session timed out after " << ssh_timeout_sec
-              << "s, killing..." << std::endl;
-    ::kill(pid, SIGTERM);
-    usleep(200000);
-    if (::waitpid(pid, &status, WNOHANG) == 0) {
-      ::kill(pid, SIGKILL);
-      ::waitpid(pid, &status, 0);
-    }
-  }
-
-  if (ssh_timed_out)
-    return 2; // Special exit code for SSH timeout
   return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
@@ -2095,9 +2072,19 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
     return 0;
   }
 
-  // Local cd: output shell code for eval
-  std::cout << "cd " << utils::shell_escape(target_str) << std::endl;
-  return 0;
+  // Local cd: write cd command to temp file, use exit code 42 as signal.
+  // The shell function reads the temp file and evals it.
+  // We MUST NOT use stdout (no $() capture) because SSH path needs raw
+  // terminal access.
+  std::string tmpfile = (fs::temp_directory_path() / "_am_cd_tmp").string();
+  std::ofstream ofs(tmpfile);
+  if (!ofs) {
+    std::cerr << "error: cannot write temp file: " << tmpfile << std::endl;
+    return 1;
+  }
+  ofs << "cd " << utils::shell_escape(target_str) << std::endl;
+  ofs.close();
+  return 42; // Special exit code: "read cd path from temp file"
 }
 
 int cmd_list(bool verbose) {
@@ -2186,6 +2173,24 @@ int cmd_health([[maybe_unused]] bool verbose) {
     }
   }
 
+  // [root.md §2.3] AM home permission check: warn if group write is PRESENT
+  // AI user home MUST be 0755 (owner rwx, group/other r-x), NO g+w
+  // Main user operates via SSH, not via shared group write permission
+  for (const auto &[home_dir, username] : user_home_to_name) {
+    struct stat st;
+    if (stat(home_dir.c_str(), &st) == 0) {
+      if ((st.st_mode & S_IWGRP) != 0) {
+        daemon::HealthStatus perm_status;
+        perm_status.mount_point = home_dir;
+        perm_status.healthy = true; // Not unhealthy, just a warning
+        perm_status.stale = false;
+        perm_status.detail =
+            "AM home has g+w (violates root.md §2.3, run 'am auto-fix-all' to fix)";
+        statuses.push_back(perm_status);
+      }
+    }
+  }
+
   if (statuses.empty()) {
     std::cout << "No mounts to check." << std::endl;
     return 0;
@@ -2200,6 +2205,8 @@ int cmd_health([[maybe_unused]] bool verbose) {
       unhealthy++;
   }
 
+  // Permission warnings don't affect return code - they're advisory
+  // Unhealthy mounts still cause return 1
   return unhealthy > 0 ? 1 : 0;
 }
 
@@ -2635,7 +2642,42 @@ int cmd_auto_fix_all(bool verbose) {
     }
   }
 
-  // Step 4: Re-check health after fixes
+  // Step 4: Fix AM home permissions for all existing ai-users
+  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x), NO g+w
+  // Main user operates via SSH, not via shared group write permission
+  {
+    auto all_users = ctx.user_mgr->list_ai_users();
+    std::string main_user = utils::get_effective_username();
+    std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+    int perm_fixes = 0;
+
+    for (const auto &u : all_users) {
+      if (u.username.size() <= expected_prefix.size() ||
+          u.username.substr(0, expected_prefix.size()) != expected_prefix) {
+        continue;
+      }
+      if (u.home_dir.empty())
+        continue;
+
+      struct stat st;
+      if (stat(u.home_dir.c_str(), &st) == 0) {
+        if ((st.st_mode & S_IWGRP) != 0) { // HAS g+w → violation
+          std::cout << "  [PERM] " << u.home_dir
+                    << " has g+w (violates root.md §2.3, fixing...)" << std::endl;
+          core::UserManager::fix_home_dir_permissions(fs::path(u.home_dir),
+                                                      main_user);
+          perm_fixes++;
+        }
+      }
+    }
+
+    if (perm_fixes > 0) {
+      std::cout << "Fixed " << perm_fixes
+                << " AM home(s) to 0755 (removed g+w per root.md §2.3)." << std::endl;
+    }
+  }
+
+  // Step 5: Re-check health after fixes
   std::cout << "\n=== Re-checking health ===" << std::endl;
   graft.invalidate_cache();
   auto remaining = graft.health_check();
@@ -2956,13 +2998,23 @@ _am() {
 		return 0
 	fi
 
-	# All commands: pass through to wrapper binary directly.
-	# No $() capture — that blocks on SSH interactive sessions.
-	# The binary handles everything: sudo, auto-fix, SSH fork+exec.
-	# For local cd, the binary outputs "cd <path>" to stdout,
-	# which the user can eval if needed: eval "$(am cd <path>)"
+	# Pass through to binary directly (no $() capture).
+	# SSH path: fork+exec SSH with raw terminal access — $() would break it.
+	# Local cd path: binary writes to temp file, exits with code 42.
 	"$_am_bin" "$@"
-	return $?
+	local ret=$?
+
+	# Exit code 42 = "local cd": read cd command from temp file and eval
+	if [[ $ret -eq 42 ]]; then
+		local _am_cd_tmp="${TMPDIR:-/tmp}/_am_cd_tmp"
+		if [[ -f "$_am_cd_tmp" ]]; then
+			eval "$(cat "$_am_cd_tmp")"
+			rm -f "$_am_cd_tmp"
+		fi
+		return 0
+	fi
+
+	return $ret
 }
 
 # Override 'am' as a function

@@ -6,8 +6,7 @@
 
 namespace ai_mirror::utils {
 
-void init_logger(const std::string &level = "info",
-                 const std::string &log_file = "");
+void init_logger(const std::string &level = "info");
 std::shared_ptr<spdlog::logger> get_logger();
 
 } // namespace ai_mirror::utils

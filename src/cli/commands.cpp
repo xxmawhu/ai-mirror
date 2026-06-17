@@ -1010,16 +1010,7 @@ int cmd_create(const std::string &project_path, bool verbose) {
     return 1;
   }
 
-  // Step 1: Create AI user
-  auto user_info = ctx.user_mgr->create_ai_user(proj.string());
-  if (!user_info.exists) {
-    std::cout << "❌ Create AI user: failed - " << user_info.error << std::endl;
-    return 1;
-  }
-  std::cout << "✅ Create AI user: pass" << std::endl;
-
-  // Step 2: Configure project (SSH, mounts, permissions, write access)
-  // Suppress verbose info-level messages for concise output
+  // Suppress verbose info-level messages for concise step/pass output
   auto logger = utils::get_logger();
   auto saved_level = logger->level();
   if (!verbose) {
@@ -1027,6 +1018,19 @@ int cmd_create(const std::string &project_path, bool verbose) {
     logger->set_level(spdlog::level::warn);
   }
 
+  // Step 1: Create AI user
+  auto user_info = ctx.user_mgr->create_ai_user(proj.string());
+  if (!user_info.exists) {
+    if (!verbose) {
+      logger->flush();
+      logger->set_level(saved_level);
+    }
+    std::cout << "❌ Create AI user: failed - " << user_info.error << std::endl;
+    return 1;
+  }
+  std::cout << "✅ Create AI user: pass" << std::endl;
+
+  // Step 2: Configure project (SSH, mounts, permissions, write access)
   int rc = do_configure(ctx, user_info, proj, main_user);
 
   if (!verbose) {

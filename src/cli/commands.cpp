@@ -198,7 +198,9 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   auto grp_result2 = utils::exec_safe({"usermod", "-aG", username, main_user});
   if (grp_result2.exit_code == 0) {
     fixes++;
-    std::cout << "newgrp=" << username << std::endl;
+    if (ctx.verbose) {
+      std::cout << "newgrp=" << username << std::endl;
+    }
   } else {
     utils::get_logger()->warn("Failed to add {} to {} group: {}", main_user,
                               username, grp_result2.stderr_output);
@@ -1008,19 +1010,34 @@ int cmd_create(const std::string &project_path, bool verbose) {
     return 1;
   }
 
-  utils::get_logger()->info("Creating ai-user for project: {}", proj.string());
-
+  // Step 1: Create AI user
   auto user_info = ctx.user_mgr->create_ai_user(proj.string());
   if (!user_info.exists) {
-    std::cerr << "Failed to create ai-user: " << user_info.error << std::endl;
+    std::cout << "❌ Create AI user: failed - " << user_info.error << std::endl;
     return 1;
+  }
+  std::cout << "✅ Create AI user: pass" << std::endl;
+
+  // Step 2: Configure project (SSH, mounts, permissions, write access)
+  // Suppress verbose info-level messages for concise output
+  auto logger = utils::get_logger();
+  auto saved_level = logger->level();
+  if (!verbose) {
+    logger->flush();
+    logger->set_level(spdlog::level::warn);
   }
 
   int rc = do_configure(ctx, user_info, proj, main_user);
+
+  if (!verbose) {
+    logger->flush();
+    logger->set_level(saved_level);
+  }
+
   if (rc != 0) {
-    utils::get_logger()->warn(
-        "Create completed with configuration issues for {}",
-        user_info.username);
+    std::cout << "❌ Configure project: failed" << std::endl;
+  } else {
+    std::cout << "✅ Configure project: pass" << std::endl;
   }
 
   std::cout << user_info.username << std::endl;

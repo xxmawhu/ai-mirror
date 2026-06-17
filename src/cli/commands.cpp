@@ -198,7 +198,9 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   auto grp_result2 = utils::exec_safe({"usermod", "-aG", username, main_user});
   if (grp_result2.exit_code == 0) {
     fixes++;
-    std::cout << "newgrp=" << username << std::endl;
+    if (ctx.verbose) {
+      std::cout << "newgrp=" << username << std::endl;
+    }
   } else {
     utils::get_logger()->warn("Failed to add {} to {} group: {}", main_user,
                               username, grp_result2.stderr_output);
@@ -1008,19 +1010,34 @@ int cmd_create(const std::string &project_path, bool verbose) {
     return 1;
   }
 
-  utils::get_logger()->info("Creating ai-user for project: {}", proj.string());
-
+  // Step 1: Create AI user
   auto user_info = ctx.user_mgr->create_ai_user(proj.string());
   if (!user_info.exists) {
-    std::cerr << "Failed to create ai-user: " << user_info.error << std::endl;
+    std::cout << "❌ Create AI user: failed - " << user_info.error << std::endl;
     return 1;
+  }
+  std::cout << "✅ Create AI user: pass" << std::endl;
+
+  // Step 2: Configure project (SSH, mounts, permissions, write access)
+  // Suppress verbose info-level messages for concise output
+  auto logger = utils::get_logger();
+  auto saved_level = logger->level();
+  if (!verbose) {
+    logger->flush();
+    logger->set_level(spdlog::level::warn);
   }
 
   int rc = do_configure(ctx, user_info, proj, main_user);
+
+  if (!verbose) {
+    logger->flush();
+    logger->set_level(saved_level);
+  }
+
   if (rc != 0) {
-    utils::get_logger()->warn(
-        "Create completed with configuration issues for {}",
-        user_info.username);
+    std::cout << "❌ Configure project: failed" << std::endl;
+  } else {
+    std::cout << "✅ Configure project: pass" << std::endl;
   }
 
   std::cout << user_info.username << std::endl;
@@ -2184,8 +2201,8 @@ int cmd_health([[maybe_unused]] bool verbose) {
         perm_status.mount_point = home_dir;
         perm_status.healthy = true; // Not unhealthy, just a warning
         perm_status.stale = false;
-        perm_status.detail =
-            "AM home has g+w (violates root.md §2.3, run 'am auto-fix-all' to fix)";
+        perm_status.detail = "AM home has g+w (violates root.md §2.3, run 'am "
+                             "auto-fix-all' to fix)";
         statuses.push_back(perm_status);
       }
     }
@@ -2643,8 +2660,8 @@ int cmd_auto_fix_all(bool verbose) {
   }
 
   // Step 4: Fix AM home permissions for all existing ai-users
-  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x), NO g+w
-  // Main user operates via SSH, not via shared group write permission
+  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x), NO
+  // g+w Main user operates via SSH, not via shared group write permission
   {
     auto all_users = ctx.user_mgr->list_ai_users();
     std::string main_user = utils::get_effective_username();
@@ -2663,7 +2680,8 @@ int cmd_auto_fix_all(bool verbose) {
       if (stat(u.home_dir.c_str(), &st) == 0) {
         if ((st.st_mode & S_IWGRP) != 0) { // HAS g+w → violation
           std::cout << "  [PERM] " << u.home_dir
-                    << " has g+w (violates root.md §2.3, fixing...)" << std::endl;
+                    << " has g+w (violates root.md §2.3, fixing...)"
+                    << std::endl;
           core::UserManager::fix_home_dir_permissions(fs::path(u.home_dir),
                                                       main_user);
           perm_fixes++;
@@ -2673,7 +2691,8 @@ int cmd_auto_fix_all(bool verbose) {
 
     if (perm_fixes > 0) {
       std::cout << "Fixed " << perm_fixes
-                << " AM home(s) to 0755 (removed g+w per root.md §2.3)." << std::endl;
+                << " AM home(s) to 0755 (removed g+w per root.md §2.3)."
+                << std::endl;
     }
   }
 

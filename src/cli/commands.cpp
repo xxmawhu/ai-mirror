@@ -2093,19 +2093,12 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
     return 0;
   }
 
-  // Local cd: write cd command to temp file, use exit code 42 as signal.
-  // The shell function reads the temp file and evals it.
+  // Local cd: output cd path via stderr marker, use exit code 42 as signal.
+  // The shell function parses "__AM_CD__:<path>" from stderr.
   // We MUST NOT use stdout (no $() capture) because SSH path needs raw
-  // terminal access.
-  std::string tmpfile = (fs::temp_directory_path() / "_am_cd_tmp").string();
-  std::ofstream ofs(tmpfile);
-  if (!ofs) {
-    std::cerr << "error: cannot write temp file: " << tmpfile << std::endl;
-    return 1;
-  }
-  ofs << "cd " << utils::shell_escape(target_str) << std::endl;
-  ofs.close();
-  return 42; // Special exit code: "read cd path from temp file"
+  // terminal access. Using stderr avoids all /tmp/ file operations.
+  std::cerr << "__AM_CD__:" << target_str << std::endl;
+  return 42; // Special exit code: "read cd path from stderr marker"
 }
 
 int cmd_list(bool verbose) {
@@ -3022,22 +3015,53 @@ _am() {
 	fi
 
 	# Pass through to binary directly (no $() capture).
-	# SSH path: fork+exec SSH with raw terminal access — $() would break it.
-	# Local cd path: binary writes to temp file, exits with code 42.
-	"$_am_bin" "$@"
-	local ret=$?
+	# SSH path: fork+exec SSH with raw terminal access — process is replaced,
+	#   nothing below runs. No stderr capture needed for SSH.
+	# Local cd path: binary writes "__AM_CD__:<path>" to stderr, exits 42.
+	#   We capture stderr, parse the marker, and cd to the path.
+	if [[ "$1" == "cd" ]]; then
+		local _am_stderr
+		exec 3>&1
+		_am_stderr=$("$_am_bin" "$@" 2>&1 1>&3)
+		local ret=$?
+		exec 3>&-
 
-	# Exit code 42 = "local cd": read cd command from temp file and eval
-	if [[ $ret -eq 42 ]]; then
-		local _am_cd_tmp="${TMPDIR:-/tmp}/_am_cd_tmp"
-		if [[ -f "$_am_cd_tmp" ]]; then
-			eval "$(cat "$_am_cd_tmp")"
-			rm -f "$_am_cd_tmp"
+		# Exit code 42 = "local cd": parse cd path from stderr marker
+		if [[ $ret -eq 42 ]]; then
+			local _am_cd_path=""
+			local _am_line
+			while IFS= read -r _am_line; do
+				if [[ "$_am_line" == __AM_CD__:* ]]; then
+					_am_cd_path="${_am_line#__AM_CD__:}"
+					echo "[pass] cd target: $_am_cd_path"
+				else
+					# Pass through other stderr lines (errors, warnings)
+					[[ -n "$_am_line" ]] && echo "$_am_line" >&2
+				fi
+			done <<< "$_am_stderr"
+
+			if [[ -n "$_am_cd_path" ]]; then
+				if builtin cd "$_am_cd_path" 2>/dev/null; then
+					echo "[pass] cd to: $_am_cd_path"
+				else
+					echo "[fail] cd to: $_am_cd_path (directory not accessible)"
+				fi
+			else
+				echo "[fail] exit code 42 but no __AM_CD__ marker in stderr"
+			fi
+			return 0
 		fi
-		return 0
-	fi
 
-	return $ret
+		# Non-42: print any captured stderr (warnings, info, errors)
+		if [[ -n "$_am_stderr" ]]; then
+			echo "$_am_stderr" >&2
+		fi
+		return $ret
+	else
+		# Non-cd commands: pass through directly (preserves SSH raw terminal)
+		"$_am_bin" "$@"
+		return $?
+	fi
 }
 
 # Override 'am' as a function

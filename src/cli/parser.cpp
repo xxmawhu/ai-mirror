@@ -102,6 +102,7 @@ int parse_and_run(int argc, char **argv) {
 
   // cd
   std::string cd_path;
+  bool cd_dry_run = false;
   auto *cd_cmd = app.add_subcommand(
       "cd",
       "切换身份\n"
@@ -110,6 +111,8 @@ int parse_and_run(int argc, char **argv) {
       "  - ai-user 项目目录：直接执行 SSH 登录到 AI 用户（C++ fork+exec）\n"
       "  跨共享盘支持：ai-user 检测基于路径结构而非 UID");
   cd_cmd->add_option("path", cd_path, "目标路径")->required();
+  cd_cmd->add_flag("--dry-run", cd_dry_run,
+                   "输出 JSON 决策到 stdout，不执行 SSH/cd");
 
   // list
   app.add_subcommand("list",
@@ -252,7 +255,7 @@ int parse_and_run(int argc, char **argv) {
     }
     return ret;
   } else if (cd_cmd->parsed()) {
-    return cmd_cd(cd_path, verbose);
+    return cmd_cd(cd_path, verbose, cd_dry_run);
   } else if (app.got_subcommand("list")) {
     return cmd_list(verbose);
   } else if (app.got_subcommand("health")) {

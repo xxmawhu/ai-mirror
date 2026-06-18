@@ -21,6 +21,7 @@
 #include <grp.h>
 #include <iostream>
 #include <map>
+#include <nlohmann/json.hpp>
 #include <pwd.h>
 #include <set>
 #include <signal.h>
@@ -1893,7 +1894,8 @@ static int exec_ssh_interactive(const std::string &ai_user,
   return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
 
-int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
+int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
+           bool dry_run) {
   auto config = core::ConfigParser::load_default();
   std::string prefix = config.user.prefix;
 
@@ -2073,6 +2075,18 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
         (fs::path(utils::get_effective_home()) / ".ssh" / "known_hosts")
             .string();
 
+    // Dry-run: output JSON decision to stdout, do not exec SSH
+    if (dry_run) {
+      nlohmann::json j;
+      j["action"] = "ssh";
+      j["user"] = ai_user;
+      j["path"] = target_str;
+      j["ssh_key"] = ssh_key;
+      j["known_hosts"] = known_hosts;
+      std::cout << j.dump() << std::endl;
+      return 0;
+    }
+
     // Directly execute SSH in a forked child process
     // SSH connects to AI user, user gets interactive shell
     // This is the SSH path — we must fork+exec SSH directly
@@ -2084,21 +2098,42 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose) {
       core::PathResolver::detect_ai_user_from_path(target, main_user, prefix);
 
   if (!ai_user.empty()) {
-    // Legacy path-detected AI user: output action=ssh for shell eval
+    // Legacy path-detected AI user: output JSON for shell to exec SSH
     // (no .am_status file found, so we don't have enough info to exec ssh
-    // directly)
+    // directly — shell must handle SSH execution)
+    std::string ssh_key = config.ssh.key_path.string();
+    std::string known_hosts =
+        (fs::path(utils::get_effective_home()) / ".ssh" / "known_hosts")
+            .string();
+
+    if (dry_run) {
+      nlohmann::json j;
+      j["action"] = "ssh";
+      j["user"] = ai_user;
+      j["path"] = target_str;
+      j["ssh_key"] = ssh_key;
+      j["known_hosts"] = known_hosts;
+      std::cout << j.dump() << std::endl;
+      return 0;
+    }
+
+    // Non-dry-run legacy: output key=value for backward compat
     std::cout << "action=ssh" << std::endl;
     std::cout << "user=" << ai_user << std::endl;
     std::cout << "path=" << target_str << std::endl;
     return 0;
   }
 
-  // Local cd: output cd path via stderr marker, use exit code 42 as signal.
-  // The shell function parses "__AM_CD__:<path>" from stderr.
-  // We MUST NOT use stdout (no $() capture) because SSH path needs raw
-  // terminal access. Using stderr avoids all /tmp/ file operations.
-  std::cerr << "__AM_CD__:" << target_str << std::endl;
-  return 42; // Special exit code: "read cd path from stderr marker"
+  // Local cd: output JSON decision to stdout.
+  // Shell function parses JSON and executes cd.
+  // No intermediate files, no /tmp/ operations, no stderr markers.
+  {
+    nlohmann::json j;
+    j["action"] = "cd";
+    j["path"] = target_str;
+    std::cout << j.dump() << std::endl;
+  }
+  return 0;
 }
 
 int cmd_list(bool verbose) {
@@ -3014,51 +3049,71 @@ _am() {
 		return 0
 	fi
 
-	# Pass through to binary directly (no $() capture).
-	# SSH path: fork+exec SSH with raw terminal access — process is replaced,
-	#   nothing below runs. No stderr capture needed for SSH.
-	# Local cd path: binary writes "__AM_CD__:<path>" to stderr, exits 42.
-	#   We capture stderr, parse the marker, and cd to the path.
+	# Pass through to binary.
+	# For 'cd': two-phase approach — dry-run gets JSON decision, then execute.
+	#   No intermediate files, no /tmp/ operations, no stderr markers.
+	# For other commands: pass through directly (preserves SSH raw terminal).
 	if [[ "$1" == "cd" ]]; then
-		local _am_stderr
-		exec 3>&1
-		_am_stderr=$("$_am_bin" "$@" 2>&1 1>&3)
+		# Phase 1: get decision as JSON from binary (dry-run)
+		# Pass all original args + --dry-run to binary
+		# Binary outputs JSON: {"action":"cd","path":"..."} or
+		#                      {"action":"ssh","user":"...","path":"...",
+		#                       "ssh_key":"...","known_hosts":"..."}
+		local _am_json
+		_am_json=$("$_am_bin" "$@" --dry-run 2>/dev/null)
 		local ret=$?
-		exec 3>&-
 
-		# Exit code 42 = "local cd": parse cd path from stderr marker
-		if [[ $ret -eq 42 ]]; then
-			local _am_cd_path=""
-			local _am_line
-			while IFS= read -r _am_line; do
-				if [[ "$_am_line" == __AM_CD__:* ]]; then
-					_am_cd_path="${_am_line#__AM_CD__:}"
-					echo "[pass] cd target: $_am_cd_path"
-				else
-					# Pass through other stderr lines (errors, warnings)
-					[[ -n "$_am_line" ]] && echo "$_am_line" >&2
-				fi
-			done <<< "$_am_stderr"
+		if [[ $ret -ne 0 ]]; then
+			# Binary reported error — re-run without --dry-run to show errors
+			"$_am_bin" "$@"
+			return $?
+		fi
 
-			if [[ -n "$_am_cd_path" ]]; then
-				if builtin cd "$_am_cd_path" 2>/dev/null; then
-					echo "[pass] cd to: $_am_cd_path"
-				else
-					echo "[fail] cd to: $_am_cd_path (directory not accessible)"
-				fi
+		# Phase 2: parse JSON and execute
+		# Extract fields using Python (robust JSON parsing, no intermediate files)
+		local _am_action _am_path _am_user _am_ssh_key _am_known_hosts
+		eval "$(echo "$_am_json" | python3 -c "
+import json, shlex, sys
+try:
+    d = json.load(sys.stdin)
+    a = d.get('action', '')
+    print(f'_am_action={shlex.quote(a)}')
+    print(f'_am_path={shlex.quote(d.get(\"path\", \"\"))}')
+    if a == 'ssh':
+        print(f'_am_user={shlex.quote(d.get(\"user\", \"\"))}')
+        print(f'_am_ssh_key={shlex.quote(d.get(\"ssh_key\", \"\"))}')
+        print(f'_am_known_hosts={shlex.quote(d.get(\"known_hosts\", \"\"))}')
+except (json.JSONDecodeError, KeyError) as e:
+    print('_am_action=error')
+    sys.exit(1)
+")"
+
+		if [[ "$_am_action" == "cd" ]]; then
+			if builtin cd "$_am_path" 2>/dev/null; then
+				echo "[pass] cd to: $_am_path"
 			else
-				echo "[fail] exit code 42 but no __AM_CD__ marker in stderr"
+				echo "[fail] cd to: $_am_path (directory not accessible)"
 			fi
 			return 0
+		elif [[ "$_am_action" == "ssh" ]]; then
+			echo "[pass] ssh to: $_am_user @ $_am_path"
+			# Run SSH directly — raw terminal, no capture.
+			# Do NOT use 'exec' (would replace shell, user loses session on exit).
+			ssh -i "$_am_ssh_key" \
+				-o UserKnownHostsFile="$_am_known_hosts" \
+				-o StrictHostKeyChecking=accept-new \
+				"$_am_user@localhost"
+			local _am_ssh_ret=$?
+			if [[ $_am_ssh_ret -ne 0 ]]; then
+				echo "[fail] ssh exited with code $_am_ssh_ret"
+			fi
+			return $_am_ssh_ret
+		else
+			echo "[fail] unknown action: $_am_action"
+			return 1
 		fi
-
-		# Non-42: print any captured stderr (warnings, info, errors)
-		if [[ -n "$_am_stderr" ]]; then
-			echo "$_am_stderr" >&2
-		fi
-		return $ret
 	else
-		# Non-cd commands: pass through directly (preserves SSH raw terminal)
+		# Non-cd commands: pass through directly (preserves raw terminal)
 		"$_am_bin" "$@"
 		return $?
 	fi

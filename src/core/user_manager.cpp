@@ -100,7 +100,8 @@ static std::string make_state_content(const UserInfo &info,
 void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
                                            const std::string &main_user) {
   // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x)
-  // NO group write permission (g+w) - main user operates via SSH, not via shared group write
+  // NO group write permission (g+w) - main user operates via SSH, not via
+  // shared group write
 
   // 1. Set home_dir to 0755 (remove group write if present)
   auto chmod_result = utils::exec_safe({"chmod", "0755", home_dir.string()});
@@ -114,7 +115,8 @@ void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
         home_dir.string());
   }
 
-  // 2. chgrp to main user's primary group (for read access via group membership)
+  // 2. chgrp to main user's primary group (for read access via group
+  // membership)
   struct passwd *main_pw = getpwnam(main_user.c_str());
   if (main_pw) {
     struct group *main_grp = getgrgid(main_pw->pw_gid);
@@ -397,7 +399,8 @@ bool UserManager::execute_useradd(const std::string &username,
   }
 
   // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x)
-  // NO group write permission (g+w) - main user operates via SSH, not via shared group write
+  // NO group write permission (g+w) - main user operates via SSH, not via
+  // shared group write
   auto chmod_result = utils::exec_safe({"chmod", "0755", home_dir.string()});
   if (chmod_result.exit_code != 0) {
     // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用

@@ -3133,13 +3133,13 @@ except (json.JSONDecodeError, KeyError) as e:
 
 		if [[ "$_am_action" == "cd" ]]; then
 			if builtin cd "$_am_path" 2>/dev/null; then
-				echo "[pass] cd to: $_am_path"
+				echo "🪄 $_am_path"
 			else
 				echo "[fail] cd to: $_am_path (directory not accessible)"
 			fi
 			return 0
 		elif [[ "$_am_action" == "ssh" ]]; then
-			echo "[pass] ssh to: $_am_user @ $_am_path"
+			echo "🪄 $_am_path"
 			# Run SSH directly — raw terminal, no capture.
 			# Do NOT use 'exec' (would replace shell, user loses session on exit).
 			# Use remote_cmd from binary if available (has correct ai-user path),

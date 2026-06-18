@@ -52,6 +52,24 @@ fs::path PathResolver::to_ai_user_path(const fs::path &main_path,
                                              : ai_user_home.string();
 
   auto main_str = main_path.string();
+
+  // CRITICAL FIX: If the path is already under ai_user's home directory,
+  // return it as-is. The ai-user's home is the project root (from .am_status),
+  // and paths under it are directly accessible without transformation.
+  // This prevents double-prefixing when ai_home is under main_home.
+  // Example: main_home=/home/user, ai_home=/home/user/project,
+  //          main_path=/home/user/project/subdir
+  //          → return /home/user/project/subdir (not /home/user/project/project/subdir)
+  if (!ai_home.empty() && main_str.length() >= ai_home.length() &&
+      main_str.substr(0, ai_home.length()) == ai_home) {
+    // Verify it's a proper prefix (not just string match)
+    if (main_str.length() == ai_home.length() ||
+        main_str[ai_home.length()] == '/') {
+      return main_path;
+    }
+  }
+
+  // Otherwise, compute relative path from main_home and append to ai_home
   if (!main_home.empty() && main_str.length() >= main_home.length() &&
       main_str.substr(0, main_home.length()) == main_home) {
     std::string relative = main_str.substr(main_home.length());

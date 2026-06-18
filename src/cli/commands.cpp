@@ -2075,12 +2075,34 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
         (fs::path(utils::get_effective_home()) / ".ssh" / "known_hosts")
             .string();
 
+    // Convert main user's target path to ai-user's path
+    // ai-user accesses files via bind mounts in their home directory
+    fs::path ai_user_target = core::PathResolver::to_ai_user_path(
+        target, ai_user, main_user, state->home_dir);
+    std::string ai_user_target_str = ai_user_target.string();
+
+    // Build remote command for SSH interactive session
+    // Configure git safe.directory, cd to target path, then start login shell
+    std::string escaped_ai_path = ai_user_target_str;
+    size_t esc_pos = 0;
+    while ((esc_pos = escaped_ai_path.find('\'', esc_pos)) != std::string::npos) {
+      escaped_ai_path.replace(esc_pos, 1, "'\\''");
+      esc_pos += 4;
+    }
+    std::string remote_cmd = "git config --global --add safe.directory '";
+    remote_cmd += escaped_ai_path;
+    remote_cmd += "' 2>/dev/null || true; cd '";
+    remote_cmd += escaped_ai_path;
+    remote_cmd += "' && exec bash -l";
+
     // Dry-run: output JSON decision to stdout, do not exec SSH
     if (dry_run) {
       nlohmann::json j;
       j["action"] = "ssh";
       j["user"] = ai_user;
       j["path"] = target_str;
+      j["ai_user_path"] = ai_user_target_str;
+      j["remote_cmd"] = remote_cmd;
       j["ssh_key"] = ssh_key;
       j["known_hosts"] = known_hosts;
       std::cout << j.dump() << std::endl;
@@ -2090,7 +2112,8 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
     // Directly execute SSH in a forked child process
     // SSH connects to AI user, user gets interactive shell
     // This is the SSH path — we must fork+exec SSH directly
-    return exec_ssh_interactive(ai_user, target_str, ssh_key, known_hosts);
+    return exec_ssh_interactive(ai_user, ai_user_target_str, ssh_key,
+                                known_hosts);
   }
 
   // Fallback: detect AI user from path component name (legacy method)
@@ -2107,10 +2130,24 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
             .string();
 
     if (dry_run) {
+      // Legacy path: no .am_status, use main user's path for remote command
+      std::string escaped_path = target_str;
+      size_t esc_pos = 0;
+      while ((esc_pos = escaped_path.find('\'', esc_pos)) != std::string::npos) {
+        escaped_path.replace(esc_pos, 1, "'\\''");
+        esc_pos += 4;
+      }
+      std::string legacy_remote_cmd = "git config --global --add safe.directory '";
+      legacy_remote_cmd += escaped_path;
+      legacy_remote_cmd += "' 2>/dev/null || true; cd '";
+      legacy_remote_cmd += escaped_path;
+      legacy_remote_cmd += "' && exec bash -l";
+
       nlohmann::json j;
       j["action"] = "ssh";
       j["user"] = ai_user;
       j["path"] = target_str;
+      j["remote_cmd"] = legacy_remote_cmd;
       j["ssh_key"] = ssh_key;
       j["known_hosts"] = known_hosts;
       std::cout << j.dump() << std::endl;
@@ -3027,6 +3064,7 @@ int cmd_init(const std::string &shell, [[maybe_unused]] bool verbose) {
 #
 # This function provides shell-level features that a binary cannot:
 #   - 'am cd' local: changes directory in the current shell
+#   - 'am cd' remote: SSH to ai-user and cd to target path (via remote_cmd)
 #   - 'am --type': shows whether am is a function or binary
 #
 # Design: function overrides binary (same name). No recursion because
@@ -3058,6 +3096,7 @@ _am() {
 		# Pass all original args + --dry-run to binary
 		# Binary outputs JSON: {"action":"cd","path":"..."} or
 		#                      {"action":"ssh","user":"...","path":"...",
+		#                       "ai_user_path":"...","remote_cmd":"...",
 		#                       "ssh_key":"...","known_hosts":"..."}
 		local _am_json
 		_am_json=$("$_am_bin" "$@" --dry-run 2>/dev/null)
@@ -3071,7 +3110,7 @@ _am() {
 
 		# Phase 2: parse JSON and execute
 		# Extract fields using Python (robust JSON parsing, no intermediate files)
-		local _am_action _am_path _am_user _am_ssh_key _am_known_hosts
+		local _am_action _am_path _am_user _am_ssh_key _am_known_hosts _am_remote_cmd
 		eval "$(echo "$_am_json" | python3 -c "
 import json, shlex, sys
 try:
@@ -3083,6 +3122,7 @@ try:
         print(f'_am_user={shlex.quote(d.get(\"user\", \"\"))}')
         print(f'_am_ssh_key={shlex.quote(d.get(\"ssh_key\", \"\"))}')
         print(f'_am_known_hosts={shlex.quote(d.get(\"known_hosts\", \"\"))}')
+        print(f'_am_remote_cmd={shlex.quote(d.get(\"remote_cmd\", \"\"))}')
 except (json.JSONDecodeError, KeyError) as e:
     print('_am_action=error')
     sys.exit(1)
@@ -3099,10 +3139,22 @@ except (json.JSONDecodeError, KeyError) as e:
 			echo "[pass] ssh to: $_am_user @ $_am_path"
 			# Run SSH directly — raw terminal, no capture.
 			# Do NOT use 'exec' (would replace shell, user loses session on exit).
-			ssh -i "$_am_ssh_key" \
+			# Use remote_cmd from binary if available (has correct ai-user path),
+			# otherwise construct from path (fallback for old binary)
+			if [[ -z "$_am_remote_cmd" ]]; then
+				local _am_escaped_path="${_am_path//\'/\'\\\'\'}"
+				_am_remote_cmd="git config --global --add safe.directory '${_am_escaped_path}' 2>/dev/null || true; cd '${_am_escaped_path}' && exec bash -l"
+			fi
+			ssh -tt -i "$_am_ssh_key" \
+				-o ConnectTimeout=10 \
+				-o ConnectionAttempts=1 \
+				-o ServerAliveInterval=5 \
+				-o ServerAliveCountMax=3 \
+				-o IdentitiesOnly=yes \
 				-o UserKnownHostsFile="$_am_known_hosts" \
 				-o StrictHostKeyChecking=accept-new \
-				"$_am_user@localhost"
+				"$_am_user@localhost" \
+				"$_am_remote_cmd"
 			local _am_ssh_ret=$?
 			if [[ $_am_ssh_ret -ne 0 ]]; then
 				echo "[fail] ssh exited with code $_am_ssh_ret"

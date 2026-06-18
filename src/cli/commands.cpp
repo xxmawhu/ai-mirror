@@ -2085,7 +2085,8 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
     // Configure git safe.directory, cd to target path, then start login shell
     std::string escaped_ai_path = ai_user_target_str;
     size_t esc_pos = 0;
-    while ((esc_pos = escaped_ai_path.find('\'', esc_pos)) != std::string::npos) {
+    while ((esc_pos = escaped_ai_path.find('\'', esc_pos)) !=
+           std::string::npos) {
       escaped_ai_path.replace(esc_pos, 1, "'\\''");
       esc_pos += 4;
     }
@@ -2133,11 +2134,13 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
       // Legacy path: no .am_status, use main user's path for remote command
       std::string escaped_path = target_str;
       size_t esc_pos = 0;
-      while ((esc_pos = escaped_path.find('\'', esc_pos)) != std::string::npos) {
+      while ((esc_pos = escaped_path.find('\'', esc_pos)) !=
+             std::string::npos) {
         escaped_path.replace(esc_pos, 1, "'\\''");
         esc_pos += 4;
       }
-      std::string legacy_remote_cmd = "git config --global --add safe.directory '";
+      std::string legacy_remote_cmd =
+          "git config --global --add safe.directory '";
       legacy_remote_cmd += escaped_path;
       legacy_remote_cmd += "' 2>/dev/null || true; cd '";
       legacy_remote_cmd += escaped_path;
@@ -3130,13 +3133,13 @@ except (json.JSONDecodeError, KeyError) as e:
 
 		if [[ "$_am_action" == "cd" ]]; then
 			if builtin cd "$_am_path" 2>/dev/null; then
-				echo "[pass] cd to: $_am_path"
+				echo "🪄"
 			else
 				echo "[fail] cd to: $_am_path (directory not accessible)"
 			fi
 			return 0
 		elif [[ "$_am_action" == "ssh" ]]; then
-			echo "[pass] ssh to: $_am_user @ $_am_path"
+			echo "🪄"
 			# Run SSH directly — raw terminal, no capture.
 			# Do NOT use 'exec' (would replace shell, user loses session on exit).
 			# Use remote_cmd from binary if available (has correct ai-user path),

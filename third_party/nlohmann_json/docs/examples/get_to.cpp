@@ -1,6 +1,6 @@
 #include <iostream>
-#include <nlohmann/json.hpp>
 #include <unordered_map>
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 
@@ -8,12 +8,18 @@ int main()
 {
     // create a JSON value with different types
     json json_types =
+    {
+        {"boolean", true},
         {
-            {"boolean", true},
-            {"number", {{"integer", 42}, {"floating-point", 17.23}}},
-            {"string", "Hello, world!"},
-            {"array", {1, 2, 3, 4, 5}},
-            {"null", nullptr}};
+            "number", {
+                {"integer", 42},
+                {"floating-point", 17.23}
+            }
+        },
+        {"string", "Hello, world!"},
+        {"array", {1, 2, 3, 4, 5}},
+        {"null", nullptr}
+    };
 
     bool v1;
     int v2;

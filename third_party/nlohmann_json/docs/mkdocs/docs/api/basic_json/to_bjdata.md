@@ -54,13 +54,13 @@ Linear in the size of the JSON value `j`.
 ??? example
 
     The example shows the serialization of a JSON value to a byte vector in BJData format.
-
+     
     ```cpp
     --8<-- "examples/to_bjdata.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/to_bjdata.output"
     ```

@@ -22,13 +22,13 @@ Amortized constant.
 ??? example
 
     The example shows the result of `push_back` for different JSON Pointers.
-
+     
     ```cpp
     --8<-- "examples/json_pointer__push_back.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/json_pointer__push_back.output"
     ```

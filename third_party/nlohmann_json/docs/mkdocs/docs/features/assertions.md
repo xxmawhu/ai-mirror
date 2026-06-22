@@ -33,9 +33,9 @@ See also the documentation on [element access](element_access/index.md).
 
     ```cpp
     #include <nlohmann/json.hpp>
-
+    
     using json = nlohmann::json;
-
+    
     int main()
     {
         const json j = {{"key", "value"}};
@@ -60,9 +60,9 @@ uninitialized iterator is undefined behavior and yields a runtime assertion.
 
     ```cpp
     #include <nlohmann/json.hpp>
-
+    
     using json = nlohmann::json;
-
+    
     int main()
     {
         json::iterator it1, it2;
@@ -87,9 +87,9 @@ behavior and yields a runtime assertion.
 
     ```cpp
     #include <nlohmann/json.hpp>
-
+    
     using json = nlohmann::json;
-
+    
     int main()
     {
       json::iterator it;
@@ -114,9 +114,9 @@ calling `#!cpp std::fopen` on a nonexistent file.
 
     ```cpp
     #include <nlohmann/json.hpp>
-
+    
     using json = nlohmann::json;
-
+    
     int main()
     {
       std::FILE* f = std::fopen("nonexistent_file.json", "r");

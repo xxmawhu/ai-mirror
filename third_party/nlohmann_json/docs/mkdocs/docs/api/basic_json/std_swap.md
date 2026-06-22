@@ -30,13 +30,13 @@ void swap(nlohmann::basic_json& j1, nlohmann::basic_json& j2)
 ??? example
 
     The following code shows how two values are swapped with `std::swap`.
-
+     
     ```cpp
     --8<-- "examples/std_swap.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/std_swap.output"
     ```

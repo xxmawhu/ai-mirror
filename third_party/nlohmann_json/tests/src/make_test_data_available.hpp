@@ -8,12 +8,13 @@
 
 #pragma once
 
-#include <cstdio>  // fopen, fclose, FILE
-#include <doctest.h>
-#include <memory>  // unique_ptr
+#include <cstdio>   // fopen, fclose, FILE
+#include <memory> // unique_ptr
 #include <test_data.hpp>
+#include <doctest.h>
 
-namespace utils {
+namespace utils
+{
 
 inline bool check_testsuite_downloaded()
 {

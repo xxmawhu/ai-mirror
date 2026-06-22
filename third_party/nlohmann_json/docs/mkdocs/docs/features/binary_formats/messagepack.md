@@ -75,7 +75,7 @@ specification:
     ```cpp
     --8<-- "examples/to_msgpack.cpp"
     ```
-
+    
     Output:
 
     ```c

@@ -47,13 +47,13 @@ Constant.
 ??? example
 
     The example shows several calls to `get_ref()`.
-
+    
     ```cpp
     --8<-- "examples/get_ref.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/get_ref.output"
     ```

@@ -26,13 +26,13 @@ Boolean values are stored directly inside a `basic_json` type.
 ??? example
 
     The following code shows that `boolean_t` is by default, a typedef to `#!cpp bool`.
-
+     
     ```cpp
     --8<-- "examples/boolean_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/boolean_t.output"
     ```

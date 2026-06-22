@@ -6,7 +6,7 @@ const char* type_name() const noexcept;
 
 Returns the type name as string to be used in error messages -- usually to indicate that a function was called on a
 wrong JSON type.
-
+    
 ## Return value
 
 a string representation of the type ([`value_t`](value_t.md)):
@@ -35,13 +35,13 @@ Constant.
 ??? example
 
     The following code exemplifies `type_name()` for all JSON types.
-
+    
     ```cpp
     --8<-- "examples/type_name.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/type_name.output"
     ```

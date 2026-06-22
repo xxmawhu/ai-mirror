@@ -40,9 +40,9 @@ bjdata
     ```cpp
     --8<-- "examples/sax_parse__binary.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/sax_parse__binary.output"
     ```

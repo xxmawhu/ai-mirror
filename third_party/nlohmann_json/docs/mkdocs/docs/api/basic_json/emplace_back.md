@@ -37,13 +37,13 @@ Amortized constant.
 
     The example shows how `emplace_back()` can be used to add elements to a JSON array. Note how the `null` value was
     silently converted to a JSON array.
-
+        
     ```cpp
     --8<-- "examples/emplace_back.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/emplace_back.output"
     ```

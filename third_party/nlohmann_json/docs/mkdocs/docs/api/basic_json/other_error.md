@@ -43,13 +43,13 @@ class basic_json::other_error #FFFF00 {}
 ??? example
 
     The following code shows how a `other_error` exception can be caught.
-
+    
     ```cpp
     --8<-- "examples/other_error.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/other_error.output"
     ```

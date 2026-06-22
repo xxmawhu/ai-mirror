@@ -42,13 +42,13 @@ Depends on what `json_serializer<ValueType>` `from_json()` method throws
     Floating-point numbers can be converted to integers, (2) A JSON array can be converted to a standard
     `#!cpp std::vector<short>`, (3) A JSON object can be converted to C++ associative containers such as
     `#cpp std::unordered_map<std::string, json>`.
-
+        
     ```cpp
     --8<-- "examples/get_to.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/get_to.output"
     ```

@@ -27,11 +27,11 @@ When the macro is not defined, the library will define it to its default value.
 
     As of version 3.11.0, this macro is no longer required to be defined consistently throughout a codebase to avoid
     One Definition Rule (ODR) violations, as the value of this macro is encoded in the namespace, resulting in distinct
-    symbol names.
-
+    symbol names. 
+    
     This allows different parts of a codebase to use different versions or configurations of this library without
     causing improper behavior.
-
+    
     Where possible, it is still recommended that all code define this the same way for maximum interoperability.
 
 !!! hint "CMake option"
@@ -47,7 +47,7 @@ When the macro is not defined, the library will define it to its default value.
     ```cpp
     --8<-- "examples/diagnostics_standard.cpp"
     ```
-
+    
     Output:
 
     ```
@@ -61,7 +61,7 @@ When the macro is not defined, the library will define it to its default value.
     ```cpp
     --8<-- "examples/diagnostics_extended.cpp"
     ```
-
+    
     Output:
 
     ```

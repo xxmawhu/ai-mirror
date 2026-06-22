@@ -23,13 +23,13 @@ This function is usually called by the constructors of the [basic_json](../basic
 
     The example below shows how a `to_json` function can be implemented for a user-defined type. This function is called
     by the `adl_serializer` when the constructor `basic_json(ns::person)` is called.
-
+        
     ```cpp
     --8<-- "examples/to_json.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/to_json.output"
     ```

@@ -12,7 +12,7 @@ bool contains(KeyType&& key) const;
 bool contains(const json_pointer& ptr) const;
 ```
 
-1. Check whether an element exists in a JSON object with a key equivalent to `key`. If the element is not found or the
+1. Check whether an element exists in a JSON object with a key equivalent to `key`. If the element is not found or the 
    JSON value is not an object, `#!cpp false` is returned.
 2. See 1. This overload is only available if `KeyType` is comparable with `#!cpp typename object_t::key_type` and
    `#!cpp typename object_comparator_t::is_transparent` denotes a type.
@@ -72,13 +72,13 @@ Logarithmic in the size of the JSON object.
 ??? example "Example: (1) check with key"
 
     The example shows how `contains()` is used.
-
+    
     ```cpp
     --8<-- "examples/contains__object_t_key_type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/contains__object_t_key_type.output"
     ```
@@ -86,13 +86,13 @@ Logarithmic in the size of the JSON object.
 ??? example "Example: (2) check with key using string_view"
 
     The example shows how `contains()` is used.
-
+    
     ```cpp
     --8<-- "examples/contains__keytype.c++17.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/contains__keytype.c++17.output"
     ```
@@ -100,13 +100,13 @@ Logarithmic in the size of the JSON object.
 ??? example "Example: (3) check with JSON pointer"
 
     The example shows how `contains()` is used.
-
+    
     ```cpp
     --8<-- "examples/contains__json_pointer.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/contains__json_pointer.output"
     ```

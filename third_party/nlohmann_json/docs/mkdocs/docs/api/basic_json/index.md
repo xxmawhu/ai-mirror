@@ -227,7 +227,7 @@ Access to the JSON value
 - [**emplace**](emplace.md) - add a value to an object if key does not exist
 - [**erase**](erase.md) - remove elements
 - [**insert**](insert.md) - inserts elements
-- [**update**](update.md) - updates a JSON object from another object, overwriting existing keys
+- [**update**](update.md) - updates a JSON object from another object, overwriting existing keys 
 - [**swap**](swap.md) - exchanges the values
 
 ### Lexicographical comparison operators
@@ -303,13 +303,13 @@ Access to the JSON value
 ??? example
 
     The example shows how the library is used.
-
+    
     ```cpp
     --8<-- "examples/README.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/README.output"
     ```

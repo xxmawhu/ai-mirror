@@ -24,7 +24,7 @@ The exact mapping and its limitations is described on a [dedicated page](../../f
 
 `InputType`
 :   A compatible input, for instance:
-
+    
     - an `std::istream` object
     - a `FILE` pointer
     - a C-style array of characters
@@ -78,13 +78,13 @@ Linear in the size of the input.
 ??? example
 
     The example shows the deserialization of a byte vector in MessagePack format to a JSON value.
-
+     
     ```cpp
     --8<-- "examples/from_msgpack.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/from_msgpack.output"
     ```

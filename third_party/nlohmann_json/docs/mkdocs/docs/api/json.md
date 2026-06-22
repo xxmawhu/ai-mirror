@@ -16,9 +16,9 @@ types.
     ```cpp
     --8<-- "examples/README.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/README.output"
     ```

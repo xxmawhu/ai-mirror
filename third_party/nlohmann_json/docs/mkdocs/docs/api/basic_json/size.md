@@ -5,7 +5,7 @@ size_type size() const noexcept;
 ```
 
 Returns the number of elements in a JSON value.
-
+    
 ## Return value
 
 The return value depends on the different types and is defined as follows:
@@ -40,13 +40,13 @@ JSON value which is `1` in the case of a string.
 ??? example
 
     The following code calls `size()` on the different value types.
-
+    
     ```cpp
     --8<-- "examples/size.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/size.output"
     ```

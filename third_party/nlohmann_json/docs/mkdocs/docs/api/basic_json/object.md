@@ -36,7 +36,7 @@ Linear in the size of `init`.
 This function is only added for symmetry reasons. In contrast to the related function `array(initializer_list_t)`, there
 are no cases which can only be expressed by this function. That is, any initializer list `init` can also be passed to
 the initializer list constructor `basic_json(initializer_list_t, bool, value_t)`.
-
+    
 ## Examples
 
 ??? example
@@ -46,9 +46,9 @@ the initializer list constructor `basic_json(initializer_list_t, bool, value_t)`
     ```cpp
     --8<-- "examples/object.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/object.output"
     ```

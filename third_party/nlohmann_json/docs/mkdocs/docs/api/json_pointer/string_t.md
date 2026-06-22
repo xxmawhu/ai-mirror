@@ -12,13 +12,13 @@ See [`basic_json::string_t`](../basic_json/string_t.md) for more information.
 ??? example
 
     The example shows the type `string_t` and its relation to `basic_json::string_t`.
-
+     
     ```cpp
     --8<-- "examples/json_pointer__string_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/json_pointer__string_t.output"
     ```

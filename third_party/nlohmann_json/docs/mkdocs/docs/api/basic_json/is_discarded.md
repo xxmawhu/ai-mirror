@@ -28,17 +28,17 @@ Constant.
 
     Discarded values are never compared equal with [`operator==`](operator_eq.md). That is, checking whether a JSON
     value `j` is discarded will only work via:
-
+    
     ```cpp
     j.is_discarded()
     ```
-
+    
     because
-
+    
     ```cpp
     j == json::value_t::discarded
     ```
-
+    
     will always be `#!cpp false`.
 
 !!! note "Removal during parsing with callback functions"
@@ -56,13 +56,13 @@ during parsing, but will be removed when inside a structured value or replaced b
 ??? example
 
     The following code exemplifies `is_discarded()` for all JSON types.
-
+    
     ```cpp
     --8<-- "examples/is_discarded.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/is_discarded.output"
     ```

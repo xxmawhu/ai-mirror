@@ -18,7 +18,7 @@ static basic_json parse(IteratorType first, IteratorType last,
 
 1. Deserialize from a compatible input.
 2. Deserialize from a pair of character iterators
-
+    
     The `value_type` of the iterator must be an integral type with size of 1, 2 or 4 bytes, which will be interpreted
     respectively as UTF-8, UTF-16 and UTF-32.
 
@@ -26,7 +26,7 @@ static basic_json parse(IteratorType first, IteratorType last,
 
 `InputType`
 :   A compatible input, for instance:
-
+    
     - an `std::istream` object
     - a `FILE` pointer (must not be null)
     - a C-style array of characters
@@ -102,9 +102,9 @@ super-linear complexity.
     ```cpp
     --8<-- "examples/parse__array__parser_callback_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__array__parser_callback_t.output"
     ```
@@ -116,9 +116,9 @@ super-linear complexity.
     ```cpp
     --8<-- "examples/parse__string__parser_callback_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__string__parser_callback_t.output"
     ```
@@ -130,9 +130,9 @@ super-linear complexity.
     ```cpp
     --8<-- "examples/parse__istream__parser_callback_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__istream__parser_callback_t.output"
     ```
@@ -144,9 +144,9 @@ super-linear complexity.
     ```cpp
     --8<-- "examples/parse__contiguouscontainer__parser_callback_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__contiguouscontainer__parser_callback_t.output"
     ```
@@ -158,9 +158,9 @@ super-linear complexity.
     ```cpp
     --8<-- "examples/parse__pointers.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__pointers.output"
     ```
@@ -172,9 +172,9 @@ super-linear complexity.
     ```cpp
     --8<-- "examples/parse__iterator_pair.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__iterator_pair.output"
     ```
@@ -186,9 +186,9 @@ super-linear complexity.
     ```cpp
     --8<-- "examples/parse__allow_exceptions.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__allow_exceptions.output"
     ```

@@ -18,9 +18,9 @@ and [`default_object_comparator_t`](default_object_comparator_t.md) otherwise.
     ```cpp
     --8<-- "examples/object_comparator_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/object_comparator_t.output"
     ```

@@ -38,10 +38,10 @@ bool operator<(ScalarType lhs, const const_reference rhs) noexcept;  // (2)
 ## Parameters
 
 `lhs` (in)
-:   first value to consider
+:   first value to consider 
 
 `rhs` (in)
-:   second value to consider
+:   second value to consider 
 
 ## Return value
 
@@ -75,13 +75,13 @@ Linear.
 ??? example
 
     The example demonstrates comparing several JSON types.
-
+        
     ```cpp
     --8<-- "examples/operator__less.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator__less.output"
     ```

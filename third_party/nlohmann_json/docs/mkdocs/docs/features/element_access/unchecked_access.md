@@ -8,7 +8,7 @@ similar to a `#!cpp std::map` and a `#!cpp std::vector`, respectively.
 ??? example "Read access"
 
     Consider the following JSON value:
-
+    
     ```json
     {
         "name": "Mary Smith",
@@ -16,7 +16,7 @@ similar to a `#!cpp std::map` and a `#!cpp std::vector`, respectively.
         "hobbies": ["hiking", "reading"]
     }
     ```
-
+    
     Assume the value is parsed to a `json` variable `j`.
 
     | expression              | value                                                                        |
@@ -37,9 +37,9 @@ The return value is a reference, so it can modify the original value. In case th
     j["name"] = "John Smith";
     j["maidenName"] = "Jones";
     ```
-
+    
     This code produces the following JSON value:
-
+    
     ```json
     {
         "name": "John Smith",
@@ -58,9 +58,9 @@ that the passed index is the new maximal index. Intermediate values are filled w
     j["hobbies"][0] = "running";
     j["hobbies"][3] = "cooking";
     ```
-
+    
     This code produces the following JSON value:
-
+    
     ```json
     {
         "name": "John Smith",
@@ -75,10 +75,10 @@ that the passed index is the new maximal index. Intermediate values are filled w
 !!! info "Design rationale"
 
     The library behaves differently to `#!cpp std::vector` and `#!cpp std::map`:
-
+    
     - `#!cpp std::vector::operator[]` never inserts a new element.
     - `#!cpp std::map::operator[]` is not available for const values.
-
+    
     The type `#!cpp json` wraps all JSON value types. It would be impossible to remove
     [`operator[]`](../../api/basic_json/operator%5B%5D.md) for const objects. At the same time, inserting elements for
     non-const objects is really convenient as it avoids awkward `insert` calls. To this end, we decided to have an

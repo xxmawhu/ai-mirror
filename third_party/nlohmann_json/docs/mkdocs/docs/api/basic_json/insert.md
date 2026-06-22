@@ -43,7 +43,7 @@ void insert(const_iterator first, const_iterator last);
 
 `ilist` (in)
 :   initializer list to insert the values from
-
+    
 ## Return value
 
 1. iterator pointing to the inserted `val`.
@@ -103,13 +103,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example (1): insert element into array"
 
     The example shows how `insert()` is used.
-
+    
     ```cpp
     --8<-- "examples/insert.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/insert.output"
     ```
@@ -117,13 +117,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example (2): insert copies of element into array"
 
     The example shows how `insert()` is used.
-
+    
     ```cpp
     --8<-- "examples/insert__count.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/insert__count.output"
     ```
@@ -131,13 +131,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example (3): insert range of elements into array"
 
     The example shows how `insert()` is used.
-
+    
     ```cpp
     --8<-- "examples/insert__range.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/insert__range.output"
     ```
@@ -145,13 +145,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example (4): insert elements from initializer list into array"
 
     The example shows how `insert()` is used.
-
+    
     ```cpp
     --8<-- "examples/insert__ilist.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/insert__ilist.output"
     ```
@@ -159,13 +159,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example (5): insert range of elements into object"
 
     The example shows how `insert()` is used.
-
+    
     ```cpp
     --8<-- "examples/insert__range_object.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/insert__range_object.output"
     ```

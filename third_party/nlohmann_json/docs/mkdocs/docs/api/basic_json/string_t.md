@@ -50,13 +50,13 @@ String values are stored as pointers in a `basic_json` type. That is, for any ac
 ??? example
 
     The following code shows that `string_t` is by default, a typedef to `#!cpp std::string`.
-
+     
     ```cpp
     --8<-- "examples/string_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/string_t.output"
     ```

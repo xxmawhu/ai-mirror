@@ -15,9 +15,9 @@ This type preserves the insertion order of object keys.
     ```cpp
     --8<-- "examples/ordered_json.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/ordered_json.output"
     ```

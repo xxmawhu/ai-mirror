@@ -25,13 +25,13 @@ Constant.
 ??? example
 
     The following code shows an example for `crbegin()`.
-
+    
     ```cpp
     --8<-- "examples/crbegin.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/crbegin.output"
     ```

@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include <iterator>     // iterator, random_access_iterator_tag, bidirectional_iterator_tag, advance, next
-#include <type_traits>  // conditional, is_const, remove_const
+#include <iterator> // iterator, random_access_iterator_tag, bidirectional_iterator_tag, advance, next
+#include <type_traits> // conditional, is_const, remove_const
 
 #include <nlohmann/detail/exceptions.hpp>
 #include <nlohmann/detail/iterators/internal_iterator.hpp>
@@ -20,13 +20,12 @@
 #include <nlohmann/detail/value_t.hpp>
 
 NLOHMANN_JSON_NAMESPACE_BEGIN
-namespace detail {
+namespace detail
+{
 
 // forward declare, to be able to friend it later on
-template<typename IteratorType>
-class iteration_proxy;
-template<typename IteratorType>
-class iteration_proxy_value;
+template<typename IteratorType> class iteration_proxy;
+template<typename IteratorType> class iteration_proxy_value;
 
 /*!
 @brief a template for a bidirectional iterator for the @ref basic_json class
@@ -45,7 +44,7 @@ This class implements a both iterators (iterator and const_iterator) for the
        iterators in version 3.0.0 (see https://github.com/nlohmann/json/issues/593)
 */
 template<typename BasicJsonType>
-class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-special-member-functions)
+class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-special-member-functions)
 {
     /// the iterator with BasicJsonType of different const-ness
     using other_iter_impl = iter_impl<typename std::conditional<std::is_const<BasicJsonType>::value, typename std::remove_const<BasicJsonType>::type, const BasicJsonType>::type>;
@@ -61,7 +60,8 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     static_assert(is_basic_json<typename std::remove_const<BasicJsonType>::type>::value,
                   "iter_impl only accepts (const) basic_json");
     // superficial check for the LegacyBidirectionalIterator named requirement
-    static_assert(std::is_base_of<std::bidirectional_iterator_tag, std::bidirectional_iterator_tag>::value && std::is_base_of<std::bidirectional_iterator_tag, typename std::iterator_traits<typename array_t::iterator>::iterator_category>::value,
+    static_assert(std::is_base_of<std::bidirectional_iterator_tag, std::bidirectional_iterator_tag>::value
+                  &&  std::is_base_of<std::bidirectional_iterator_tag, typename std::iterator_traits<typename array_t::iterator>::iterator_category>::value,
                   "basic_json iterator assumes array and object type iterators satisfy the LegacyBidirectionalIterator named requirement.");
 
   public:
@@ -78,13 +78,13 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     using difference_type = typename BasicJsonType::difference_type;
     /// defines a pointer to the type iterated over (value_type)
     using pointer = typename std::conditional<std::is_const<BasicJsonType>::value,
-                                              typename BasicJsonType::const_pointer,
-                                              typename BasicJsonType::pointer>::type;
+          typename BasicJsonType::const_pointer,
+          typename BasicJsonType::pointer>::type;
     /// defines a reference to the type iterated over (value_type)
     using reference =
         typename std::conditional<std::is_const<BasicJsonType>::value,
-                                  typename BasicJsonType::const_reference,
-                                  typename BasicJsonType::reference>::type;
+        typename BasicJsonType::const_reference,
+        typename BasicJsonType::reference>::type;
 
     iter_impl() = default;
     ~iter_impl() = default;
@@ -97,8 +97,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     @pre object != nullptr
     @post The iterator is initialized; i.e. `m_object != nullptr`.
     */
-    explicit iter_impl(pointer object) noexcept
-      : m_object(object)
+    explicit iter_impl(pointer object) noexcept : m_object(object)
     {
         JSON_ASSERT(m_object != nullptr);
 
@@ -149,8 +148,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
           information refer to: https://github.com/nlohmann/json/issues/1608
     */
     iter_impl(const iter_impl<const BasicJsonType>& other) noexcept
-      : m_object(other.m_object)
-      , m_it(other.m_it)
+        : m_object(other.m_object), m_it(other.m_it)
     {}
 
     /*!
@@ -175,8 +173,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     @note It is not checked whether @a other is initialized.
     */
     iter_impl(const iter_impl<typename std::remove_const<BasicJsonType>::type>& other) noexcept
-      : m_object(other.m_object)
-      , m_it(other.m_it)
+        : m_object(other.m_object), m_it(other.m_it)
     {}
 
     /*!
@@ -185,20 +182,19 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     @return const/non-const iterator
     @note It is not checked whether @a other is initialized.
     */
-    iter_impl& operator=(const iter_impl<typename std::remove_const<BasicJsonType>::type>& other) noexcept  // NOLINT(cert-oop54-cpp)
+    iter_impl& operator=(const iter_impl<typename std::remove_const<BasicJsonType>::type>& other) noexcept // NOLINT(cert-oop54-cpp)
     {
         m_object = other.m_object;
         m_it = other.m_it;
         return *this;
     }
 
-    JSON_PRIVATE_UNLESS_TESTED :
-      /*!
+  JSON_PRIVATE_UNLESS_TESTED:
+    /*!
     @brief set the iterator to the first value
     @pre The iterator is initialized; i.e. `m_object != nullptr`.
     */
-      void
-      set_begin() noexcept
+    void set_begin() noexcept
     {
         JSON_ASSERT(m_object != nullptr);
 
@@ -367,7 +363,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     @brief post-increment (it++)
     @pre The iterator is initialized; i.e. `m_object != nullptr`.
     */
-    iter_impl operator++(int) &  // NOLINT(cert-dcl21-cpp)
+    iter_impl operator++(int)& // NOLINT(cert-dcl21-cpp)
     {
         auto result = *this;
         ++(*this);
@@ -418,7 +414,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     @brief post-decrement (it--)
     @pre The iterator is initialized; i.e. `m_object != nullptr`.
     */
-    iter_impl operator--(int) &  // NOLINT(cert-dcl21-cpp)
+    iter_impl operator--(int)& // NOLINT(cert-dcl21-cpp)
     {
         auto result = *this;
         --(*this);
@@ -469,7 +465,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     @brief comparison: equal
     @pre The iterator is initialized; i.e. `m_object != nullptr`.
     */
-    template<typename IterImpl, detail::enable_if_t<(std::is_same<IterImpl, iter_impl>::value || std::is_same<IterImpl, other_iter_impl>::value), std::nullptr_t> = nullptr>
+    template < typename IterImpl, detail::enable_if_t < (std::is_same<IterImpl, iter_impl>::value || std::is_same<IterImpl, other_iter_impl>::value), std::nullptr_t > = nullptr >
     bool operator==(const IterImpl& other) const
     {
         // if objects are not the same, the comparison is undefined
@@ -505,7 +501,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     @brief comparison: not equal
     @pre The iterator is initialized; i.e. `m_object != nullptr`.
     */
-    template<typename IterImpl, detail::enable_if_t<(std::is_same<IterImpl, iter_impl>::value || std::is_same<IterImpl, other_iter_impl>::value), std::nullptr_t> = nullptr>
+    template < typename IterImpl, detail::enable_if_t < (std::is_same<IterImpl, iter_impl>::value || std::is_same<IterImpl, other_iter_impl>::value), std::nullptr_t > = nullptr >
     bool operator!=(const IterImpl& other) const
     {
         return !operator==(other);
@@ -552,7 +548,7 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     */
     bool operator<=(const iter_impl& other) const
     {
-        return !other.operator<(*this);
+        return !other.operator < (*this);
     }
 
     /*!
@@ -744,11 +740,11 @@ class iter_impl  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         return operator*();
     }
 
-    JSON_PRIVATE_UNLESS_TESTED :
-      /// associated JSON instance
-      pointer m_object = nullptr;
+  JSON_PRIVATE_UNLESS_TESTED:
+    /// associated JSON instance
+    pointer m_object = nullptr;
     /// the actual iterator of the associated instance
-    internal_iterator<typename std::remove_const<BasicJsonType>::type> m_it{};
+    internal_iterator<typename std::remove_const<BasicJsonType>::type> m_it {};
 };
 
 }  // namespace detail

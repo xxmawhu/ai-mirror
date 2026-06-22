@@ -35,10 +35,10 @@ class basic_json {
 ## Parameters
 
 `lhs` (in)
-:   first value to consider
+:   first value to consider 
 
 `rhs` (in)
-:   second value to consider
+:   second value to consider 
 
 ## Return value
 
@@ -70,7 +70,7 @@ Linear.
     `double::operator==` by default. To compare floating-point while respecting an epsilon, an alternative
     [comparison function](https://github.com/mariokonrad/marnav/blob/master/include/marnav/math/floatingpoint.hpp#L34-#L39)
     could be used, for instance
-
+    
     ```cpp
     template<typename T, typename = typename std::enable_if<std::is_floating_point<T>::value, T>::type>
     inline bool is_same(T a, T b, T epsilon = std::numeric_limits<T>::epsilon()) noexcept
@@ -78,9 +78,9 @@ Linear.
         return std::abs(a - b) <= epsilon;
     }
     ```
-
+    
     Or you can self-defined operator equal function like this:
-
+    
     ```cpp
     bool my_equal(const_reference lhs, const_reference rhs)
     {
@@ -125,9 +125,9 @@ Linear.
      ```cpp
      --8<-- "examples/operator__equal__specializations.cpp"
      ```
-
+     
      Output:
-
+     
      ```json
      --8<-- "examples/operator__equal__specializations.output"
      ```
@@ -137,13 +137,13 @@ Linear.
 ??? example
 
     The example demonstrates comparing several JSON types.
-
+        
     ```cpp
     --8<-- "examples/operator__equal.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator__equal.output"
     ```
@@ -151,13 +151,13 @@ Linear.
 ??? example
 
     The example demonstrates comparing several JSON types against the null pointer (JSON `#!json null`).
-
+        
     ```cpp
     --8<-- "examples/operator__equal__nullptr_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator__equal__nullptr_t.output"
     ```

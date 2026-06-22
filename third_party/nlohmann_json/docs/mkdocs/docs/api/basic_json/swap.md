@@ -24,12 +24,12 @@ void swap(typename binary_t::container_type& other);
 ```
 
 1. Exchanges the contents of the JSON value with those of `other`. Does not invoke any move, copy, or swap operations on
-   individual elements. All iterators and references remain valid. The past-the-end iterator is invalidated.
+   individual elements. All iterators and references remain valid. The past-the-end iterator is invalidated. 
 2. Exchanges the contents of the JSON value from `left` with those of `right`. Does not invoke any move, copy, or swap
    operations on individual elements. All iterators and references remain valid. The past-the-end iterator is
    invalidated. Implemented as a friend function callable via ADL.
 3. Exchanges the contents of a JSON array with those of `other`. Does not invoke any move, copy, or swap operations on
-   individual elements. All iterators and references remain valid. The past-the-end iterator is invalidated.
+   individual elements. All iterators and references remain valid. The past-the-end iterator is invalidated. 
 4. Exchanges the contents of a JSON object with those of `other`. Does not invoke any move, copy, or swap operations on
    individual elements. All iterators and references remain valid. The past-the-end iterator is invalidated.
 5. Exchanges the contents of a JSON string with those of `other`. Does not invoke any move, copy, or swap operations on
@@ -75,13 +75,13 @@ Constant.
 ??? example "Example: Swap JSON value (1, 2)"
 
     The example below shows how JSON values can be swapped with `swap()`.
-
+    
     ```cpp
     --8<-- "examples/swap__reference.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/swap__reference.output"
     ```
@@ -89,13 +89,13 @@ Constant.
 ??? example "Example: Swap array (3)"
 
     The example below shows how arrays can be swapped with `swap()`.
-
+    
     ```cpp
     --8<-- "examples/swap__array_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/swap__array_t.output"
     ```
@@ -103,13 +103,13 @@ Constant.
 ??? example "Example: Swap object (4)"
 
     The example below shows how objects can be swapped with `swap()`.
-
+    
     ```cpp
     --8<-- "examples/swap__object_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/swap__object_t.output"
     ```
@@ -117,13 +117,13 @@ Constant.
 ??? example "Example: Swap string (5)"
 
     The example below shows how strings can be swapped with `swap()`.
-
+    
     ```cpp
     --8<-- "examples/swap__string_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/swap__string_t.output"
     ```
@@ -131,13 +131,13 @@ Constant.
 ??? example "Example: Swap string (6)"
 
     The example below shows how binary values can be swapped with `swap()`.
-
+    
     ```cpp
     --8<-- "examples/swap__binary_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/swap__binary_t.output"
     ```

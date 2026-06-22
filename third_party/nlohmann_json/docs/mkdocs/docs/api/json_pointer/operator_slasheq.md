@@ -43,13 +43,13 @@ json_pointer& operator/=(std::size_t array_idx)
 ??? example
 
     The example shows the usage of `operator/=`.
-
+     
     ```cpp
     --8<-- "examples/json_pointer__operator_add.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/json_pointer__operator_add.output"
     ```

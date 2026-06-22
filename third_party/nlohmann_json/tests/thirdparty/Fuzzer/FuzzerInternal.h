@@ -29,172 +29,154 @@ namespace fuzzer {
 
 using namespace std::chrono;
 
-class Fuzzer
-{
-  public:
-    // Aggregates all available coverage measurements.
-    struct Coverage
-    {
-        Coverage()
-        {
-            Reset();
-        }
+class Fuzzer {
+public:
 
-        void Reset()
-        {
-            BlockCoverage = 0;
-            CallerCalleeCoverage = 0;
-            CounterBitmapBits = 0;
-            CounterBitmap.clear();
-            VPMap.Reset();
-        }
+  // Aggregates all available coverage measurements.
+  struct Coverage {
+    Coverage() { Reset(); }
 
-        size_t BlockCoverage;
-        size_t CallerCalleeCoverage;
-        // Precalculated number of bits in CounterBitmap.
-        size_t CounterBitmapBits;
-        std::vector<uint8_t> CounterBitmap;
-        ValueBitMap VPMap;
-    };
-
-    Fuzzer(UserCallback CB, InputCorpus& Corpus, MutationDispatcher& MD, FuzzingOptions Options);
-    ~Fuzzer();
-    void Loop();
-    void MinimizeCrashLoop(const Unit& U);
-    void ShuffleAndMinimize(UnitVector* V);
-    void InitializeTraceState();
-    void RereadOutputCorpus(size_t MaxSize);
-
-    size_t secondsSinceProcessStartUp()
-    {
-        return duration_cast<seconds>(system_clock::now() - ProcessStartTime)
-            .count();
+    void Reset() {
+      BlockCoverage = 0;
+      CallerCalleeCoverage = 0;
+      CounterBitmapBits = 0;
+      CounterBitmap.clear();
+      VPMap.Reset();
     }
 
-    bool TimedOut()
-    {
-        return Options.MaxTotalTimeSec > 0 &&
-               secondsSinceProcessStartUp() >
-                   static_cast<size_t>(Options.MaxTotalTimeSec);
-    }
+    size_t BlockCoverage;
+    size_t CallerCalleeCoverage;
+    // Precalculated number of bits in CounterBitmap.
+    size_t CounterBitmapBits;
+    std::vector<uint8_t> CounterBitmap;
+    ValueBitMap VPMap;
+  };
 
-    size_t execPerSec()
-    {
-        size_t Seconds = secondsSinceProcessStartUp();
-        return Seconds ? TotalNumberOfRuns / Seconds : 0;
-    }
+  Fuzzer(UserCallback CB, InputCorpus &Corpus, MutationDispatcher &MD,
+         FuzzingOptions Options);
+  ~Fuzzer();
+  void Loop();
+  void MinimizeCrashLoop(const Unit &U);
+  void ShuffleAndMinimize(UnitVector *V);
+  void InitializeTraceState();
+  void RereadOutputCorpus(size_t MaxSize);
 
-    size_t getTotalNumberOfRuns()
-    {
-        return TotalNumberOfRuns;
-    }
+  size_t secondsSinceProcessStartUp() {
+    return duration_cast<seconds>(system_clock::now() - ProcessStartTime)
+        .count();
+  }
 
-    static void StaticAlarmCallback();
-    static void StaticCrashSignalCallback();
-    static void StaticInterruptCallback();
+  bool TimedOut() {
+    return Options.MaxTotalTimeSec > 0 &&
+           secondsSinceProcessStartUp() >
+               static_cast<size_t>(Options.MaxTotalTimeSec);
+  }
 
-    void ExecuteCallback(const uint8_t* Data, size_t Size);
-    size_t RunOne(const uint8_t* Data, size_t Size);
+  size_t execPerSec() {
+    size_t Seconds = secondsSinceProcessStartUp();
+    return Seconds ? TotalNumberOfRuns / Seconds : 0;
+  }
 
-    // Merge Corpora[1:] into Corpora[0].
-    void Merge(const std::vector<std::string>& Corpora);
-    void CrashResistantMerge(const std::vector<std::string>& Args,
-                             const std::vector<std::string>& Corpora);
-    void CrashResistantMergeInternalStep(const std::string& ControlFilePath);
-    // Returns a subset of 'Extra' that adds coverage to 'Initial'.
-    UnitVector FindExtraUnits(const UnitVector& Initial, const UnitVector& Extra);
-    MutationDispatcher& GetMD()
-    {
-        return MD;
-    }
-    void PrintFinalStats();
-    void SetMaxInputLen(size_t MaxInputLen);
-    void SetMaxMutationLen(size_t MaxMutationLen);
-    void RssLimitCallback();
+  size_t getTotalNumberOfRuns() { return TotalNumberOfRuns; }
 
-    // Public for tests.
-    void ResetCoverage();
+  static void StaticAlarmCallback();
+  static void StaticCrashSignalCallback();
+  static void StaticInterruptCallback();
 
-    bool InFuzzingThread() const
-    {
-        return IsMyThread;
-    }
-    size_t GetCurrentUnitInFuzzingThead(const uint8_t** Data) const;
-    void TryDetectingAMemoryLeak(const uint8_t* Data, size_t Size, bool DuringInitialCorpusExecution);
+  void ExecuteCallback(const uint8_t *Data, size_t Size);
+  size_t RunOne(const uint8_t *Data, size_t Size);
 
-    void HandleMalloc(size_t Size);
+  // Merge Corpora[1:] into Corpora[0].
+  void Merge(const std::vector<std::string> &Corpora);
+  void CrashResistantMerge(const std::vector<std::string> &Args,
+                           const std::vector<std::string> &Corpora);
+  void CrashResistantMergeInternalStep(const std::string &ControlFilePath);
+  // Returns a subset of 'Extra' that adds coverage to 'Initial'.
+  UnitVector FindExtraUnits(const UnitVector &Initial, const UnitVector &Extra);
+  MutationDispatcher &GetMD() { return MD; }
+  void PrintFinalStats();
+  void SetMaxInputLen(size_t MaxInputLen);
+  void SetMaxMutationLen(size_t MaxMutationLen);
+  void RssLimitCallback();
 
-  private:
-    void AlarmCallback();
-    void CrashCallback();
-    void InterruptCallback();
-    void MutateAndTestOne();
-    void ReportNewCoverage(InputInfo* II, const Unit& U);
-    size_t RunOne(const Unit& U)
-    {
-        return RunOne(U.data(), U.size());
-    }
-    void WriteToOutputCorpus(const Unit& U);
-    void WriteUnitToFileWithPrefix(const Unit& U, const char* Prefix);
-    void PrintStats(const char* Where, const char* End = "\n", size_t Units = 0);
-    void PrintStatusForNewUnit(const Unit& U);
-    void ShuffleCorpus(UnitVector* V);
-    void AddToCorpus(const Unit& U);
-    void CheckExitOnSrcPosOrItem();
+  // Public for tests.
+  void ResetCoverage();
 
-    // Trace-based fuzzing: we run a unit with some kind of tracing
-    // enabled and record potentially useful mutations. Then
-    // We apply these mutations one by one to the unit and run it again.
+  bool InFuzzingThread() const { return IsMyThread; }
+  size_t GetCurrentUnitInFuzzingThead(const uint8_t **Data) const;
+  void TryDetectingAMemoryLeak(const uint8_t *Data, size_t Size,
+                               bool DuringInitialCorpusExecution);
 
-    // Start tracing; forget all previously proposed mutations.
-    void StartTraceRecording();
-    // Stop tracing.
-    void StopTraceRecording();
+  void HandleMalloc(size_t Size);
 
-    void SetDeathCallback();
-    static void StaticDeathCallback();
-    void DumpCurrentUnit(const char* Prefix);
-    void DeathCallback();
+private:
+  void AlarmCallback();
+  void CrashCallback();
+  void InterruptCallback();
+  void MutateAndTestOne();
+  void ReportNewCoverage(InputInfo *II, const Unit &U);
+  size_t RunOne(const Unit &U) { return RunOne(U.data(), U.size()); }
+  void WriteToOutputCorpus(const Unit &U);
+  void WriteUnitToFileWithPrefix(const Unit &U, const char *Prefix);
+  void PrintStats(const char *Where, const char *End = "\n", size_t Units = 0);
+  void PrintStatusForNewUnit(const Unit &U);
+  void ShuffleCorpus(UnitVector *V);
+  void AddToCorpus(const Unit &U);
+  void CheckExitOnSrcPosOrItem();
 
-    void ResetEdgeCoverage();
-    void ResetCounters();
-    void PrepareCounters(Fuzzer::Coverage* C);
-    bool RecordMaxCoverage(Fuzzer::Coverage* C);
+  // Trace-based fuzzing: we run a unit with some kind of tracing
+  // enabled and record potentially useful mutations. Then
+  // We apply these mutations one by one to the unit and run it again.
 
-    void AllocateCurrentUnitData();
-    uint8_t* CurrentUnitData = nullptr;
-    std::atomic<size_t> CurrentUnitSize;
-    uint8_t BaseSha1[kSHA1NumBytes];  // Checksum of the base unit.
-    bool RunningCB = false;
+  // Start tracing; forget all previously proposed mutations.
+  void StartTraceRecording();
+  // Stop tracing.
+  void StopTraceRecording();
 
-    size_t TotalNumberOfRuns = 0;
-    size_t NumberOfNewUnitsAdded = 0;
+  void SetDeathCallback();
+  static void StaticDeathCallback();
+  void DumpCurrentUnit(const char *Prefix);
+  void DeathCallback();
 
-    bool HasMoreMallocsThanFrees = false;
-    size_t NumberOfLeakDetectionAttempts = 0;
+  void ResetEdgeCoverage();
+  void ResetCounters();
+  void PrepareCounters(Fuzzer::Coverage *C);
+  bool RecordMaxCoverage(Fuzzer::Coverage *C);
 
-    UserCallback CB;
-    InputCorpus& Corpus;
-    MutationDispatcher& MD;
-    FuzzingOptions Options;
+  void AllocateCurrentUnitData();
+  uint8_t *CurrentUnitData = nullptr;
+  std::atomic<size_t> CurrentUnitSize;
+  uint8_t BaseSha1[kSHA1NumBytes];  // Checksum of the base unit.
+  bool RunningCB = false;
 
-    system_clock::time_point ProcessStartTime = system_clock::now();
-    system_clock::time_point UnitStartTime, UnitStopTime;
-    long TimeOfLongestUnitInSeconds = 0;
-    long EpochOfLastReadOfOutputCorpus = 0;
+  size_t TotalNumberOfRuns = 0;
+  size_t NumberOfNewUnitsAdded = 0;
 
-    // Maximum recorded coverage.
-    Coverage MaxCoverage;
+  bool HasMoreMallocsThanFrees = false;
+  size_t NumberOfLeakDetectionAttempts = 0;
 
-    size_t MaxInputLen = 0;
-    size_t MaxMutationLen = 0;
+  UserCallback CB;
+  InputCorpus &Corpus;
+  MutationDispatcher &MD;
+  FuzzingOptions Options;
 
-    // Need to know our own thread.
-    static thread_local bool IsMyThread;
+  system_clock::time_point ProcessStartTime = system_clock::now();
+  system_clock::time_point UnitStartTime, UnitStopTime;
+  long TimeOfLongestUnitInSeconds = 0;
+  long EpochOfLastReadOfOutputCorpus = 0;
 
-    bool InMergeMode = false;
+  // Maximum recorded coverage.
+  Coverage MaxCoverage;
+
+  size_t MaxInputLen = 0;
+  size_t MaxMutationLen = 0;
+
+  // Need to know our own thread.
+  static thread_local bool IsMyThread;
+
+  bool InMergeMode = false;
 };
 
-};  // namespace fuzzer
+}; // namespace fuzzer
 
-#endif  // LLVM_FUZZER_INTERNAL_H
+#endif // LLVM_FUZZER_INTERNAL_H

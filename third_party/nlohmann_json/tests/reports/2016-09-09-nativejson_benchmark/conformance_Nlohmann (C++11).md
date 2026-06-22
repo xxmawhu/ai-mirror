@@ -6,23 +6,23 @@
 <html lang="en" class="">
   <head prefix="og: http://ogp.me/ns# fb: http://ogp.me/ns/fb# object: http://ogp.me/ns/object# article: http://ogp.me/ns/article# profile: http://ogp.me/ns/profile#">
     <meta charset='utf-8'>
-
+    
 
     <link crossorigin="anonymous" href="https://assets-cdn.github.com/assets/frameworks-3a71f36dec04358c4f2f42280fb2cf5c38856f935a3f609eab0a1ae31b1d635a.css" media="all" rel="stylesheet" />
     <link crossorigin="anonymous" href="https://assets-cdn.github.com/assets/github-5c885e880e980dc7f119393287b84906d930ccaff83f6bff8ae2c086b87ca4d8.css" media="all" rel="stylesheet" />
-
-
+    
+    
     <link crossorigin="anonymous" href="https://assets-cdn.github.com/assets/site-4ef7bbe907458c89cb1f7f5c5e6c4cd87e03acf66b1817325e644920d2a83330.css" media="all" rel="stylesheet" />
-
+    
 
     <link as="script" href="https://assets-cdn.github.com/assets/frameworks-88471af1fec40ff9418efbe2ddd15b6896af8d772f8179004c254dffc25ea490.js" rel="preload" />
-
+    
     <link as="script" href="https://assets-cdn.github.com/assets/github-e18e11a943ff2eb9394c72d4ec8b76592c454915b5839ae177d422777a046e29.js" rel="preload" />
 
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta http-equiv="Content-Language" content="en">
     <meta name="viewport" content="width=device-width">
-
+    
     <title>nativejson-benchmark/conformance_Nlohmann (C++11).md at master · miloyip/nativejson-benchmark · GitHub</title>
     <link rel="search" type="application/opensearchdescription+xml" href="/opensearch.xml" title="GitHub">
     <link rel="fluid-icon" href="https://github.com/fluidicon.png" title="GitHub">
@@ -43,9 +43,9 @@
       <meta name="browser-stats-url" content="https://api.github.com/_private/browser/stats">
     <meta name="browser-errors-url" content="https://api.github.com/_private/browser/errors">
     <link rel="assets" href="https://assets-cdn.github.com/">
-
+    
     <meta name="pjax-timeout" content="1000">
-
+    
     <meta name="request-id" content="D4563DA7:75ED:525C921:57D6FEBB" data-pjax-transient>
 
     <meta name="msapplication-TileImage" content="/windows-tile.png">
@@ -79,9 +79,9 @@
     <meta content="736eea9d74cf34fe850d2180e8a5f0a1cc7bc0be" name="form-nonce" />
 
     <meta http-equiv="x-pjax-version" content="f302977937abe3fe1c9a4d4bed913565">
+    
 
-
-
+      
   <meta name="description" content="nativejson-benchmark - C/C++ JSON parser/generator benchmark">
   <meta name="go-import" content="github.com/miloyip/nativejson-benchmark git https://github.com/miloyip/nativejson-benchmark.git">
 
@@ -97,9 +97,9 @@
     <div id="js-pjax-loader-bar" class="pjax-loader-bar"><div class="progress"></div></div>
     <a href="#start-of-content" tabindex="1" class="accessibility-aid js-skip-to-content">Skip to content</a>
 
-
-
-
+    
+    
+    
 
 
 
@@ -167,11 +167,11 @@
     <div role="main">
         <div itemscope itemtype="http://schema.org/SoftwareSourceCode">
     <div id="js-repo-pjax-container" data-pjax-container>
-
+      
 <div class="pagehead repohead instapaper_ignore readability-menu experiment-repo-nav">
   <div class="container repohead-details-container">
 
-
+    
 
 <ul class="pagehead-actions">
 
@@ -229,7 +229,7 @@
 
   </div>
   <div class="container">
-
+    
 <nav class="reponav js-repo-nav js-sidenav-container-pjax"
      itemscope
      itemtype="http://schema.org/BreadcrumbList"
@@ -279,17 +279,17 @@
 <div class="container new-discussion-timeline experiment-repo-nav">
   <div class="repository-content">
 
-
+    
 
 <a href="/miloyip/nativejson-benchmark/blob/95f27ebcf9a96c7ca4cee26467ed5420140090fb/sample/conformance_Nlohmann%20(C%2B%2B11).md" class="d-none js-permalink-shortcut" data-hotkey="y">Permalink</a>
 
 <!-- blob contrib key: blob_contributors:v21:0bf9e3593dedd91db6c9dc69e13b7f95 -->
 
 <div class="file-navigation js-zeroclipboard-container">
-
+  
 <div class="select-menu branch-select-menu js-menu-container js-select-menu float-left">
   <button class="btn btn-sm select-menu-button js-menu-target css-truncate" data-hotkey="w"
-
+    
     type="button" aria-label="Switch branches or tags" tabindex="0" aria-haspopup="true">
     <i>Branch:</i>
     <span class="js-select-button css-truncate-target">master</span>
@@ -487,7 +487,7 @@ Fixed #43">Update sample result for 41 libraries</a>
         <strong>1</strong>
          contributor
       </button>
-
+      
     </div>
 
     <div id="blob_contributors_box" style="display:none">
@@ -529,7 +529,7 @@ Fixed #43">Update sample result for 41 libraries</a>
   </div>
 </div>
 
-
+  
   <div id="readme" class="readme blob instapaper_body">
     <article class="markdown-body entry-content" itemprop="text"><h1><a id="user-content-conformance-of-nlohmann-c11" class="anchor" href="#conformance-of-nlohmann-c11" aria-hidden="true"><svg aria-hidden="true" class="octicon octicon-link" height="16" version="1.1" viewBox="0 0 16 16" width="16"><path d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Conformance of Nlohmann (C++11)</h1>
 
@@ -630,7 +630,7 @@ Fixed #43">Update sample result for 41 libraries</a>
 
 
 
-
+    
 
     <div id="ajax-error-message" class="ajax-error-message flash flash-error">
       <svg aria-hidden="true" class="octicon octicon-alert" height="16" version="1.1" viewBox="0 0 16 16" width="16"><path d="M8.865 1.52c-.18-.31-.51-.5-.87-.5s-.69.19-.87.5L.275 13.5c-.18.31-.18.69 0 1 .19.31.52.5.87.5h13.7c.36 0 .69-.19.86-.5.17-.31.18-.69.01-1L8.865 1.52zM8.995 13h-2v-2h2v2zm0-3h-2V6h2v4z"></path></svg>
@@ -644,12 +644,12 @@ Fixed #43">Update sample result for 41 libraries</a>
       <script crossorigin="anonymous" src="https://assets-cdn.github.com/assets/compat-40e365359d1c4db1e36a55be458e60f2b7c24d58b5a00ae13398480e7ba768e0.js"></script>
       <script crossorigin="anonymous" src="https://assets-cdn.github.com/assets/frameworks-88471af1fec40ff9418efbe2ddd15b6896af8d772f8179004c254dffc25ea490.js"></script>
       <script async="async" crossorigin="anonymous" src="https://assets-cdn.github.com/assets/github-e18e11a943ff2eb9394c72d4ec8b76592c454915b5839ae177d422777a046e29.js"></script>
-
-
-
-
-
-
+      
+      
+      
+      
+      
+      
     <div class="js-stale-session-flash stale-session-flash flash flash-warn flash-banner d-none">
       <svg aria-hidden="true" class="octicon octicon-alert" height="16" version="1.1" viewBox="0 0 16 16" width="16"><path d="M8.865 1.52c-.18-.31-.51-.5-.87-.5s-.69.19-.87.5L.275 13.5c-.18.31-.18.69 0 1 .19.31.52.5.87.5h13.7c.36 0 .69-.19.86-.5.17-.31.18-.69.01-1L8.865 1.52zM8.995 13h-2v-2h2v2zm0-3h-2V6h2v4z"></path></svg>
       <span class="signed-in-tab-flash">You signed in with another tab or window. <a href="">Reload</a> to refresh your session.</span>
@@ -667,3 +667,4 @@ Fixed #43">Update sample result for 41 libraries</a>
 
   </body>
 </html>
+

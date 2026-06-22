@@ -7,3 +7,4 @@ RUN: rm -rf %t/CustomCrossover
 
 LLVMFuzzerCustomCrossover: In LLVMFuzzerCustomCrossover
 LLVMFuzzerCustomCrossover: BINGO
+

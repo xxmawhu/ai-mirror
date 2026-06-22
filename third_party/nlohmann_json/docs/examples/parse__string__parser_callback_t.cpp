@@ -1,5 +1,5 @@
-#include <iomanip>
 #include <iostream>
+#include <iomanip>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -29,7 +29,8 @@ int main()
     std::cout << std::setw(4) << j_complete << "\n\n";
 
     // define parser callback
-    json::parser_callback_t cb = [](int depth, json::parse_event_t event, json& parsed) {
+    json::parser_callback_t cb = [](int depth, json::parse_event_t event, json & parsed)
+    {
         // skip object elements with key "Thumbnail"
         if (event == json::parse_event_t::key and parsed == json("Thumbnail"))
         {

@@ -43,13 +43,13 @@ Constant.
 
     The example below shows how pointers to internal values of a JSON value can be requested. Note that no type
     conversions are made and a `#!cpp nullptr` is returned if the value and the requested pointer type does not match.
-
+    
     ```cpp
     --8<-- "examples/get_ptr.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/get_ptr.output"
     ```

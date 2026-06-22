@@ -43,13 +43,13 @@ class basic_json::invalid_iterator #FFFF00 {}
 ??? example
 
     The following code shows how a `invalid_iterator` exception can be caught.
-
+    
     ```cpp
     --8<-- "examples/invalid_iterator.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/invalid_iterator.output"
     ```

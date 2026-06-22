@@ -63,13 +63,13 @@ interpreted as `object_t::value_type` or `std::initializer_list<basic_json>`, se
 
     The example shows how `push_back()` and `+=` can be used to add elements to a JSON array. Note how the `null` value
     was silently converted to a JSON array.
-
+    
     ```cpp
     --8<-- "examples/push_back.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/push_back.output"
     ```
@@ -82,9 +82,9 @@ interpreted as `object_t::value_type` or `std::initializer_list<basic_json>`, se
     ```cpp
     --8<-- "examples/push_back__object_t__value.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/push_back__object_t__value.output"
     ```
@@ -96,9 +96,9 @@ interpreted as `object_t::value_type` or `std::initializer_list<basic_json>`, se
     ```cpp
     --8<-- "examples/push_back__initializer_list.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/push_back__initializer_list.output"
     ```

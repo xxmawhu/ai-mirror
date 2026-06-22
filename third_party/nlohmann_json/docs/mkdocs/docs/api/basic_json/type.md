@@ -36,13 +36,13 @@ Constant.
 ??? example
 
     The following code exemplifies `type()` for all JSON types.
-
+    
     ```cpp
     --8<-- "examples/type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/type.output"
     ```

@@ -41,13 +41,13 @@ All iterators, pointers and references related to this container are invalidated
 
     The example below shows the effect of `clear()` to different
     JSON types.
-
+    
     ```cpp
     --8<-- "examples/clear.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/clear.output"
     ```

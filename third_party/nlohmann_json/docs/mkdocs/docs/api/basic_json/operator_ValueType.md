@@ -30,12 +30,12 @@ Linear in the size of the JSON value.
 !!! note "Definition of `JSON_EXPLICIT`"
 
     By default `JSON_EXPLICIT` is defined to the empty string, so the signature is:
-
+    
     ```cpp
     template<typename ValueType>
     operator ValueType() const;
     ```
-
+    
     If [`JSON_USE_IMPLICIT_CONVERSIONS`](../macros/json_use_implicit_conversions.md) is set to `0`,
     `JSON_EXPLICIT` is defined to `#!cpp explicit`:
 
@@ -43,7 +43,7 @@ Linear in the size of the JSON value.
     template<typename ValueType>
     explicit operator ValueType() const;
     ```
-
+    
     That is, implicit conversions can be switched off by defining
     [`JSON_USE_IMPLICIT_CONVERSIONS`](../macros/json_use_implicit_conversions.md) to `0`.
 
@@ -64,13 +64,13 @@ Linear in the size of the JSON value.
     Floating-point numbers can be converted to integers, (2) A JSON array can be converted to a standard
     `std::vector<short>`, (3) A JSON object can be converted to C++ associative containers such as
     `std::unordered_map<std::string, json>`.
-
+        
     ```cpp
     --8<-- "examples/operator__ValueType.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator__ValueType.output"
     ```

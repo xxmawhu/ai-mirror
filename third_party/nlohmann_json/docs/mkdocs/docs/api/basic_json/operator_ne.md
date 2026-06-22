@@ -35,10 +35,10 @@ class basic_json {
 ## Parameters
 
 `lhs` (in)
-:   first value to consider
+:   first value to consider 
 
 `rhs` (in)
-:   second value to consider
+:   second value to consider 
 
 ## Return value
 
@@ -67,13 +67,13 @@ Linear.
 ??? example
 
     The example demonstrates comparing several JSON types.
-
+        
     ```cpp
     --8<-- "examples/operator__notequal.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator__notequal.output"
     ```
@@ -81,13 +81,13 @@ Linear.
 ??? example
 
     The example demonstrates comparing several JSON types against the null pointer (JSON `#!json null`).
-
+        
     ```cpp
     --8<-- "examples/operator__notequal__nullptr_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator__notequal__nullptr_t.output"
     ```

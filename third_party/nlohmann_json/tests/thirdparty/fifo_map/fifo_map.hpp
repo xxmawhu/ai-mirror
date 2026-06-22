@@ -40,16 +40,15 @@ SOFTWARE.
 @brief namespace for Niels Lohmann
 @see https://github.com/nlohmann
 */
-namespace nlohmann {
+namespace nlohmann
+{
 
 template<class Key>
 class fifo_map_compare
 {
   public:
     /// constructor given a pointer to a key storage
-    fifo_map_compare(std::unordered_map<Key, std::size_t>* k)
-      : keys(k)
-    {}
+    fifo_map_compare(std::unordered_map<Key, std::size_t>* k) : keys(k) {}
 
     /*!
     This function compares two keys with respect to the order in which they
@@ -94,12 +93,13 @@ class fifo_map_compare
     size_t timestamp = 1;
 };
 
-template<
+
+template <
     class Key,
     class T,
     class Compare = fifo_map_compare<Key>,
-    class Allocator = std::allocator<std::pair<const Key, T>>>
-class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-special-member-functions,-warnings-as-errors)
+    class Allocator = std::allocator<std::pair<const Key, T>>
+    > class fifo_map // NOLINT(cppcoreguidelines-special-member-functions,hicpp-special-member-functions,-warnings-as-errors)
 {
   public:
     using key_type = Key;
@@ -123,25 +123,15 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
   public:
     /// default constructor
-    fifo_map()
-      : m_keys()
-      , m_compare(&m_keys)
-      , m_map(m_compare)
-    {}
+    fifo_map() : m_keys(), m_compare(&m_keys), m_map(m_compare) {}
 
     /// copy constructor
-    fifo_map(const fifo_map& f)
-      : m_keys(f.m_keys)
-      , m_compare(&m_keys)
-      , m_map(f.m_map.begin(), f.m_map.end(), m_compare)
-    {}
+    fifo_map(const fifo_map &f) : m_keys(f.m_keys), m_compare(&m_keys), m_map(f.m_map.begin(), f.m_map.end(), m_compare) {}
 
     /// constructor for a range of elements
     template<class InputIterator>
     fifo_map(InputIterator first, InputIterator last)
-      : m_keys()
-      , m_compare(&m_keys)
-      , m_map(m_compare)
+        : m_keys(), m_compare(&m_keys), m_map(m_compare)
     {
         for (auto it = first; it != last; ++it)
         {
@@ -150,14 +140,14 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
     }
 
     /// constructor for a list of elements
-    fifo_map(std::initializer_list<value_type> init)
-      : fifo_map()
+    fifo_map(std::initializer_list<value_type> init) : fifo_map()
     {
         for (auto x : init)
         {
             insert(x);
         }
     }
+
 
     /*
      * Element access
@@ -188,6 +178,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
         m_compare.add_key(key);
         return m_map[key];
     }
+
 
     /*
      * Iterators
@@ -265,6 +256,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
         return m_map.crend();
     }
 
+
     /*
      * Capacity
      */
@@ -287,6 +279,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
         return m_map.max_size();
     }
 
+
     /*
      * Modifiers
      */
@@ -307,7 +300,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /// insert value
     template<class P>
-    std::pair<iterator, bool> insert(P&& value)  // NOLINT(cppcoreguidelines-missing-std-forward)
+    std::pair<iterator, bool> insert( P&& value ) // NOLINT(cppcoreguidelines-missing-std-forward)
     {
         m_compare.add_key(value.first);
         return m_map.insert(value);
@@ -352,7 +345,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /// constructs element in-place
     template<class... Args>
-    std::pair<iterator, bool> emplace(Args&&... args)
+    std::pair<iterator, bool> emplace(Args&& ... args)
     {
         typename fifo_map::value_type value(std::forward<Args>(args)...);
         m_compare.add_key(value.first);
@@ -361,7 +354,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /// constructs element in-place with hint
     template<class... Args>
-    iterator emplace_hint(const_iterator hint, Args&&... args)
+    iterator emplace_hint(const_iterator hint, Args&& ... args)
     {
         typename fifo_map::value_type value(std::forward<Args>(args)...);
         m_compare.add_key(value.first);
@@ -400,12 +393,13 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
     }
 
     /// swaps the contents
-    void swap(fifo_map& other)  // NOLINT(cppcoreguidelines-noexcept-swap,performance-noexcept-swap)
+    void swap(fifo_map& other) // NOLINT(cppcoreguidelines-noexcept-swap,performance-noexcept-swap)
     {
         std::swap(m_map, other.m_map);
         std::swap(m_compare, other.m_compare);
         std::swap(m_keys, other.m_keys);
     }
+
 
     /*
      * Lookup
@@ -465,6 +459,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
         return m_map.upper_bound(key);
     }
 
+
     /*
      * Observers
      */
@@ -474,6 +469,7 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
     {
         return m_compare;
     }
+
 
     /*
      * Non-member functions
@@ -518,17 +514,17 @@ class fifo_map  // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
     internal_map_type m_map;
 };
 
-}  // namespace nlohmann
+} // namespace nlohmann
 
 // specialization of std::swap
-namespace std  // NOLINT(cert-dcl58-cpp,-warnings-as-errors)
+namespace std // NOLINT(cert-dcl58-cpp,-warnings-as-errors)
 {
-template<class Key, class T, class Compare, class Allocator>
-inline void swap(nlohmann::fifo_map<Key, T, Compare, Allocator>& m1,  // NOLINT(cert-dcl58-cpp,cppcoreguidelines-noexcept-swap,performance-noexcept-swap)
+template <class Key, class T, class Compare, class Allocator>
+inline void swap(nlohmann::fifo_map<Key, T, Compare, Allocator>& m1, // NOLINT(cert-dcl58-cpp,cppcoreguidelines-noexcept-swap,performance-noexcept-swap)
                  nlohmann::fifo_map<Key, T, Compare, Allocator>& m2)
 {
     m1.swap(m2);
 }
-}  // namespace std
+} // namespace std
 
 #endif

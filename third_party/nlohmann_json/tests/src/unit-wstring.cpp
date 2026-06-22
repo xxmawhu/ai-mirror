@@ -13,7 +13,8 @@ using nlohmann::json;
 
 // ICPC errors out on multibyte character sequences in source files
 #ifndef __INTEL_COMPILER
-namespace {
+namespace
+{
 bool wstring_is_utf16();
 bool wstring_is_utf16()
 {
@@ -31,7 +32,7 @@ bool u32string_is_utf32()
 {
     return (std::u32string(U"💩") == std::u32string(U"\U0001F4A9"));
 }
-}  // namespace
+} // namespace
 
 TEST_CASE("wide strings")
 {

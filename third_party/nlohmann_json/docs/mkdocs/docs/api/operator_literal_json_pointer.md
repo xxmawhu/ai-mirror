@@ -43,13 +43,13 @@ Linear.
 ??? example
 
     The following code shows how to create JSON Pointers from string literals.
-
+     
     ```cpp
     --8<-- "examples/operator_literal_json_pointer.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_literal_json_pointer.output"
     ```

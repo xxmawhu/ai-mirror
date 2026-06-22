@@ -11,20 +11,20 @@ The default type `nlohmann::json` uses a `std::map` to store JSON objects, and t
     ```cpp
     #include <iostream>
     #include "json.hpp"
-
+    
     using json = nlohmann::json;
-
+    
     int main()
     {
         json j;
         j["one"] = 1;
         j["two"] = 2;
         j["three"] = 3;
-
+        
         std::cout << j.dump(2) << '\n';
     }
     ```
-
+    
     Output:
 
     ```json
@@ -44,9 +44,9 @@ If you do want to preserve the **insertion order**, you can try the type [`nlohm
     ```cpp
     --8<-- "examples/ordered_json.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/ordered_json.output"
     ```

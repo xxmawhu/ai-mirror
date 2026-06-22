@@ -27,7 +27,7 @@ The exact mapping and its limitations is described on a [dedicated page](../../f
 
 `InputType`
 :   A compatible input, for instance:
-
+    
     - an `std::istream` object
     - a `FILE` pointer
     - a C-style array of characters
@@ -68,7 +68,7 @@ deserialized JSON value; in case of a parse error and `allow_exceptions` set to 
 Strong guarantee: if an exception is thrown, there are no changes in the JSON value.
 
 ## Exceptions
-
+ 
 - Throws [parse_error.110](../../home/exceptions.md#jsonexceptionparse_error110) if the given input ends prematurely or
   the end of file was not reached when `strict` was set to true
 - Throws [parse_error.112](../../home/exceptions.md#jsonexceptionparse_error112) if unsupported features from CBOR were
@@ -85,13 +85,13 @@ Linear in the size of the input.
 ??? example
 
     The example shows the deserialization of a byte vector in CBOR format to a JSON value.
-
+     
     ```cpp
     --8<-- "examples/from_cbor.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/from_cbor.output"
     ```

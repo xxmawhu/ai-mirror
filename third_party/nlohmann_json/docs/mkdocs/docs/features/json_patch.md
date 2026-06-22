@@ -13,7 +13,7 @@ by executing all operations from the patch.
     ```cpp
     --8<-- "examples/patch.cpp"
     ```
-
+    
     Output:
 
     ```json
@@ -39,7 +39,7 @@ The library can also calculate a JSON patch (i.e., a **diff**) given two JSON va
     ```cpp
     --8<-- "examples/diff.cpp"
     ```
-
+    
     Output:
 
     ```json

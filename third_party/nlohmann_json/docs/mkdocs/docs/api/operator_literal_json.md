@@ -44,13 +44,13 @@ Linear.
 ??? example
 
     The following code shows how to create JSON values from string literals.
-
+     
     ```cpp
     --8<-- "examples/operator_literal_json.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_literal_json.output"
     ```

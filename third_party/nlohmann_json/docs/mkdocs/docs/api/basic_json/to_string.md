@@ -45,13 +45,13 @@ std::string to_string(const BasicJsonType& j)
 
     The following code shows how the library's `to_string()` function integrates with others, allowing
     argument-dependent lookup.
-
+     
     ```cpp
     --8<-- "examples/to_string.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/to_string.output"
     ```

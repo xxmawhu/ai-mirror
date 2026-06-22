@@ -38,7 +38,7 @@ basic_json(basic_json&& other) noexcept;
 
 1. Create an empty JSON value with a given type. The value will be default initialized with an empty value which depends
    on the type:
-
+   
     | Value type | initial value  |
     |------------|----------------|
     | null       | `#!json null`  |
@@ -58,7 +58,7 @@ basic_json(basic_json&& other) noexcept;
 3. This is a "catch all" constructor for all compatible JSON types; that is, types for which a `to_json()` method
    exists. The constructor forwards the parameter `val` to that method (to `json_serializer<U>::to_json` method with
    `U = uncvref_t<CompatibleType>`, to be exact).
-
+   
     Template type `CompatibleType` includes, but is not limited to, the following types:
 
     - **arrays**: [`array_t`](array_t.md) and all kinds of compatible containers such as `std::vector`, `std::deque`,
@@ -76,7 +76,7 @@ basic_json(basic_json&& other) noexcept;
      distinguished from binary character arrays by the C++ type system, all types compatible with `const char*` will be
      directed to the string constructor instead. This is both for backwards compatibility, and due to the fact that a
      binary type is not a standard JSON type.
-
+    
     See the examples below.
 
 4. This is a constructor for existing `basic_json` types. It does not hijack copy/move constructors, since the parameter
@@ -87,29 +87,29 @@ basic_json(basic_json&& other) noexcept;
 5. Creates a JSON value of type array or object from the passed initializer list `init`. In case `type_deduction` is
    `#!cpp true` (default), the type of the JSON value to be created is deducted from the initializer list `init`
    according to the following rules:
-
+   
     1. If the list is empty, an empty JSON object value `{}` is created.
     2. If the list consists of pairs whose first element is a string, a JSON object value is created where the first
       elements of the pairs are treated as keys and the second elements are as values.
     3. In all other cases, an array is created.
-
+    
     The rules aim to create the best fit between a C++ initializer list and JSON values. The rationale is as follows:
-
+    
     1. The empty initializer list is written as `#!cpp {}` which is exactly an empty JSON object.
     2. C++ has no way of describing mapped types other than to list a list of pairs. As JSON requires that keys must be
        of type string, rule 2 is the weakest constraint one can pose on initializer lists to interpret them as an
        object.
     3. In all other cases, the initializer list could not be interpreted as JSON object type, so interpreting it as JSON
        array type is safe.
-
+    
     With the rules described above, the following JSON values cannot be expressed by an initializer list:
-
+    
     - the empty array (`#!json []`): use `array(initializer_list_t)` with an empty initializer list in this case
     - arrays whose elements satisfy rule 2: use `array(initializer_list_t)` with the same initializer list in this case
-
+   
     Function [`array()`](array.md) and [`object()`](object.md) force array and object creation from initializer lists,
     respectively.
-
+        
 6. Constructs a JSON array value by creating `cnt` copies of a passed value. In case `cnt` is `0`, an empty array is
    created.
 
@@ -255,11 +255,11 @@ basic_json(basic_json&& other) noexcept;
         - Range `[first, last)` is valid. Usually, this precondition cannot be checked efficiently. Only certain edge
           cases are detected; see the description of the exceptions above. A violation of this precondition yields
           undefined behavior.
-
+    
     !!! danger "Runtime assertion"
 
         A precondition is enforced with a [runtime assertion](../../features/assertions.md).
-
+    
 - Overload 8:
 
     !!! info "Postcondition"
@@ -278,13 +278,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (1) create an empty value with a given type"
 
     The following code shows the constructor for different `value_t` values.
-
+     
     ```cpp
     --8<-- "examples/basic_json__value_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__value_t.output"
     ```
@@ -292,13 +292,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (2) create a `#!json null` object"
 
     The following code shows the constructor with and without a null pointer parameter.
-
+     
     ```cpp
     --8<-- "examples/basic_json__nullptr_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__nullptr_t.output"
     ```
@@ -306,13 +306,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (3) create a JSON value from compatible types"
 
     The following code shows the constructor with several compatible types.
-
+     
     ```cpp
     --8<-- "examples/basic_json__CompatibleType.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__CompatibleType.output"
     ```
@@ -322,13 +322,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (5) create a container (array or object) from an initializer list"
 
     The example below shows how JSON values are created from initializer lists.
-
+     
     ```cpp
     --8<-- "examples/basic_json__list_init_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__list_init_t.output"
     ```
@@ -336,13 +336,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (6) construct an array with count copies of given value"
 
     The following code shows examples for creating arrays with several copies of a given value.
-
+     
     ```cpp
     --8<-- "examples/basic_json__size_type_basic_json.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__size_type_basic_json.output"
     ```
@@ -350,13 +350,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (7) construct a JSON container given an iterator range"
 
     The example below shows several ways to create JSON values by specifying a subrange with iterators.
-
+     
     ```cpp
     --8<-- "examples/basic_json__InputIt_InputIt.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__InputIt_InputIt.output"
     ```
@@ -364,13 +364,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (8) copy constructor"
 
     The following code shows an example for the copy constructor.
-
+     
     ```cpp
     --8<-- "examples/basic_json__basic_json.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__basic_json.output"
     ```
@@ -378,13 +378,13 @@ basic_json(basic_json&& other) noexcept;
 ??? example "Example: (9) move constructor"
 
     The code below shows the move constructor explicitly called via `std::move`.
-
+     
     ```cpp
     --8<-- "examples/basic_json__moveconstructor.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/basic_json__moveconstructor.output"
     ```

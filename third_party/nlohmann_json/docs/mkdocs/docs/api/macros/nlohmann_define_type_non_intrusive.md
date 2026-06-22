@@ -65,9 +65,9 @@ See examples below for the concrete generated code.
     ```cpp hl_lines="16"
     --8<-- "examples/nlohmann_define_type_non_intrusive_macro.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_define_type_non_intrusive_macro.output"
     ```
@@ -93,9 +93,9 @@ See examples below for the concrete generated code.
     ```cpp hl_lines="22"
     --8<-- "examples/nlohmann_define_type_non_intrusive_with_default_macro.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_define_type_non_intrusive_with_default_macro.output"
     ```
@@ -124,16 +124,16 @@ See examples below for the concrete generated code.
     ```cpp hl_lines="16"
     --8<-- "examples/nlohmann_define_type_non_intrusive_only_serialize_macro.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_define_type_non_intrusive_only_serialize_macro.output"
     ```
 
     Notes:
 
-    - `ns::person` is non-default-constructible. This allows this macro to be used instead of
+    - `ns::person` is non-default-constructible. This allows this macro to be used instead of 
       `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` and `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT`.
     - `ns::person` has only public member variables. This makes `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE` applicable.
     - The macro `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE` is used _outside_ the class, but _inside_ its namespace `ns`.

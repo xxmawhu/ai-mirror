@@ -37,9 +37,9 @@ Therefore, assertions can be switched off by defining `NDEBUG`.
 
     ```cpp
     #include <nlohmann/json.hpp>
-
+    
     using json = nlohmann::json;
-
+    
     int main()
     {
         const json j = {{"key", "value"}};
@@ -61,11 +61,11 @@ Therefore, assertions can be switched off by defining `NDEBUG`.
     #include <cstdio>
     #include <cstdlib>
     #define JSON_ASSERT(x) if(!(x)){fprintf(stderr, "assertion error in %s\n", __FUNCTION__); std::abort();}
-
+    
     #include <nlohmann/json.hpp>
-
+    
     using json = nlohmann::json;
-
+    
     int main()
     {
         const json j = {{"key", "value"}};

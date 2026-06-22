@@ -29,9 +29,9 @@ Constant.
     ```cpp
     --8<-- "examples/byte_container_with_subtype__set_subtype.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/byte_container_with_subtype__set_subtype.output"
     ```

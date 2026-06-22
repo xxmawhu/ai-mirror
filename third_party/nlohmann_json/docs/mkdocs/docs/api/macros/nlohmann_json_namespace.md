@@ -24,9 +24,9 @@ the library.
     ```cpp
     --8<-- "examples/nlohmann_json_namespace.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_json_namespace.output"
     ```

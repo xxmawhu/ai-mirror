@@ -6,7 +6,7 @@ constexpr bool is_primitive() const noexcept;
 
 This function returns `#!cpp true` if and only if the JSON type is primitive (string, number, boolean, `#!json null`,
 binary).
-
+    
 ## Return value
 
 `#!cpp true` if type is primitive (string, number, boolean, `#!json null`, or binary), `#!cpp false` otherwise.
@@ -43,13 +43,13 @@ This library extends primitive types to binary types, because binary types are  
 ??? example
 
     The following code exemplifies `is_primitive()` for all JSON types.
-
+    
     ```cpp
     --8<-- "examples/is_primitive.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/is_primitive.output"
     ```

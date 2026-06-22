@@ -54,7 +54,7 @@ inline void from_json(const BasicJsonType& j, type& e);
     ```
 
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_json_serialize_enum.output"
     ```
@@ -70,7 +70,7 @@ inline void from_json(const BasicJsonType& j, type& e);
     ```
 
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_json_serialize_enum_2.output"
     ```

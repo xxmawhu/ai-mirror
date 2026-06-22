@@ -50,13 +50,13 @@ is thrown. In any case, the original value is not changed: the patch is applied 
 ??? example
 
     The following code shows how a JSON patch is applied to a value.
-
+     
     ```cpp
     --8<-- "examples/patch.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/patch.output"
     ```

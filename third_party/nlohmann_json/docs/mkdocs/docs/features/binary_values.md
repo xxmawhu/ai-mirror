@@ -105,13 +105,13 @@ is an integer or `null`.
     // create a binary value of subtype 42
     json j;
     j["binary"] = json::binary({0xCA, 0xFE, 0xBA, 0xBE}, 42);
-
+    
     // serialize to standard output
     std::cout << j.dump(2) << std::endl;
     ```
-
+    
     Output:
-
+    
     ```json
     {
       "binary": {
@@ -134,16 +134,16 @@ as array of uint8 values. This translation is implemented by the library.
 ??? example
 
     Code:
-
+    
     ```cpp
     // create a binary value of subtype 42 (will be ignored in BJData)
     json j;
     j["binary"] = json::binary({0xCA, 0xFE, 0xBA, 0xBE}, 42);
 
     // convert to BJData
-    auto v = json::to_bjdata(j);
+    auto v = json::to_bjdata(j);      
     ```
-
+            
     `v` is a `std::vector<std::uint8t>` with the following 20 elements:
 
     ```c
@@ -193,18 +193,18 @@ unsigned 8-bit integer. If no subtype is given, the generic binary subtype 0x00 
 ??? example
 
     Code:
-
+    
     ```cpp
     // create a binary value of subtype 42
     json j;
     j["binary"] = json::binary({0xCA, 0xFE, 0xBA, 0xBE}, 42);
 
     // convert to BSON
-    auto v = json::to_bson(j);
+    auto v = json::to_bson(j);      
     ```
-
+            
     `v` is a `std::vector<std::uint8t>` with the following 22 elements:
-
+    
     ```c
     0x16 0x00 0x00 0x00                         // number of bytes in the document
         0x05                                    // binary value
@@ -235,18 +235,18 @@ byte array.
 ??? example
 
     Code:
-
+    
     ```cpp
     // create a binary value of subtype 42
     json j;
     j["binary"] = json::binary({0xCA, 0xFE, 0xBA, 0xBE}, 42);
 
     // convert to CBOR
-    auto v = json::to_cbor(j);
+    auto v = json::to_cbor(j);      
     ```
-
+            
     `v` is a `std::vector<std::uint8t>` with the following 15 elements:
-
+    
     ```c
     0xA1                                   // map(1)
         0x66                               // text(6)
@@ -279,18 +279,18 @@ If no subtype is given, the bin family (bin8, bin16, bin32) is used.
 ??? example
 
     Code:
-
+    
     ```cpp
     // create a binary value of subtype 42
     json j;
     j["binary"] = json::binary({0xCA, 0xFE, 0xBA, 0xBE}, 42);
 
     // convert to MessagePack
-    auto v = json::to_msgpack(j);
+    auto v = json::to_msgpack(j);      
     ```
-
+            
     `v` is a `std::vector<std::uint8t>` with the following 14 elements:
-
+    
     ```c
     0x81                                   // fixmap1
         0xA6                               // fixstr6
@@ -319,18 +319,18 @@ as array of uint8 values. This translation is implemented by the library.
 ??? example
 
     Code:
-
+    
     ```cpp
     // create a binary value of subtype 42 (will be ignored in UBJSON)
     json j;
     j["binary"] = json::binary({0xCA, 0xFE, 0xBA, 0xBE}, 42);
 
     // convert to UBJSON
-    auto v = json::to_ubjson(j);
+    auto v = json::to_ubjson(j);      
     ```
-
+            
     `v` is a `std::vector<std::uint8t>` with the following 20 elements:
-
+    
     ```c
     0x7B                                             // '{'
         0x69 0x06                                    // i 6 (length of the key)

@@ -19,9 +19,9 @@ Whether parsing should proceed.
     ```cpp
     --8<-- "examples/sax_parse.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/sax_parse.output"
     ```

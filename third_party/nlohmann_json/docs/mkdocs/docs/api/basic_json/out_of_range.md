@@ -44,13 +44,13 @@ class basic_json::out_of_range #FFFF00 {}
 ??? example
 
     The following code shows how a `out_of_range` exception can be caught.
-
+    
     ```cpp
     --8<-- "examples/out_of_range.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/out_of_range.output"
     ```

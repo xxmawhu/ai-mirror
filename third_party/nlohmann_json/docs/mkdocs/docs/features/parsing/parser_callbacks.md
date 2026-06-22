@@ -33,7 +33,7 @@ table describes the values of the parameters `depth`, `event`, and `parsed`.
 ??? example
 
     When parsing the following JSON text,
-
+    
     ```json
     {
         "name": "Berlin",
@@ -43,9 +43,9 @@ table describes the values of the parameters `depth`, `event`, and `parsed`.
         ]
     }
     ```
-
+    
     these calls are made to the callback function:
-
+    
     | event          | depth | parsed |
     | -------------- | ----- | ------ |
     | `object_start` | 0     | *discarded* |
@@ -75,7 +75,7 @@ was called:
     ```cpp
     --8<-- "examples/parse__string__parser_callback_t.cpp"
     ```
-
+    
     Output:
 
     ```json

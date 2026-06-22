@@ -82,13 +82,13 @@ tokens.
 ??? example "Example: (1) Comparing JSON pointers"
 
     The example demonstrates comparing JSON pointers.
-
+        
     ```cpp
     --8<-- "examples/json_pointer__operator__equal.cpp"
     ```
-
+    
     Output:
-
+    
     ```
     --8<-- "examples/json_pointer__operator__equal.output"
     ```
@@ -96,13 +96,13 @@ tokens.
 ??? example "Example: (2) Comparing JSON pointers and strings"
 
     The example demonstrates comparing JSON pointers and strings, and when doing so may raise an exception.
-
+        
     ```cpp
     --8<-- "examples/json_pointer__operator__equal_stringtype.cpp"
     ```
-
+    
     Output:
-
+    
     ```
     --8<-- "examples/json_pointer__operator__equal_stringtype.output"
     ```

@@ -32,9 +32,9 @@ Whether parsing should proceed (**must return `#!cpp false`**).
     ```cpp
     --8<-- "examples/sax_parse.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/sax_parse.output"
     ```

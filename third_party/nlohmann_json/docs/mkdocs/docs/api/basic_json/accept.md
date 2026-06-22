@@ -16,10 +16,10 @@ Checks whether the input is valid JSON.
 
 1. Reads from a compatible input.
 2. Reads from a pair of character iterators
-
+    
     The value_type of the iterator must be an integral type with size of 1, 2 or 4 bytes, which will be interpreted
     respectively as UTF-8, UTF-16 and UTF-32.
-
+    
 Unlike the [`parse`](parse.md) function, this function neither throws an exception in case of invalid JSON input
 (i.e., a parse error) nor creates diagnostic information.
 
@@ -27,7 +27,7 @@ Unlike the [`parse`](parse.md) function, this function neither throws an excepti
 
 `InputType`
 :   A compatible input, for instance:
-
+    
     - an `std::istream` object
     - a `FILE` pointer (must not be null)
     - a C-style array of characters
@@ -86,9 +86,9 @@ Linear in the length of the input. The parser is a predictive LL(1) parser.
     ```cpp
     --8<-- "examples/accept__string.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/accept__string.output"
     ```

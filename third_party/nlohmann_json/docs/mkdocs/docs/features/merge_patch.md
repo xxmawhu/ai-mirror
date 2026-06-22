@@ -12,7 +12,7 @@ Instead of using [JSON Pointer](json_pointer.md) to specify values to be manipul
     ```cpp
     --8<-- "examples/merge_patch.cpp"
     ```
-
+    
     Output:
 
     ```json

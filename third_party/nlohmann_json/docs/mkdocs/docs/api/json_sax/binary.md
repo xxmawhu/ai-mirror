@@ -28,9 +28,9 @@ It is safe to move the passed binary value.
     ```cpp
     --8<-- "examples/sax_parse__binary.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/sax_parse__binary.output"
     ```

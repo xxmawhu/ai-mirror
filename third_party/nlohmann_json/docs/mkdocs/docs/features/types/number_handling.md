@@ -20,7 +20,7 @@ JSON defines the syntax of numbers as follows:
     allowed.
 
     A fraction part is a decimal point followed by one or more digits.
-
+    
     An exponent part begins with the letter E in uppercase or lowercase,
     which may be followed by a plus or minus sign.  The E and optional
     sign are followed by one or more digits.
@@ -46,7 +46,7 @@ On number interoperability, the following remarks are made:
     interoperability problems, since it suggests that the software that
     created it expects receiving software to have greater capabilities
     for numeric magnitude and precision than is widely available.
-
+    
     Note that when such software is used, numbers that are integers and
     are in the range $[-2^{53}+1, 2^{53}-1]$ are interoperable in the
     sense that implementations will agree exactly on their numeric
@@ -59,14 +59,14 @@ This section describes how the above number specification is implemented by this
 ### Number storage
 
 In the default [`json`](../../api/json.md) type, numbers are stored as `#!c std::uint64_t`, `#!c std::int64_t`, and
-`#!c double`,  respectively. Thereby, `#!c std::uint64_t` and `#!c std::int64_t` are used only if they can store the
+`#!c double`,  respectively. Thereby, `#!c std::uint64_t` and `#!c std::int64_t` are used only if they can store the 
 number without loss of  precision. If this is impossible (e.g., if the number is too large), the number is stored as
 `#!c double`.
 
 !!! info "Notes"
 
     - Numbers with a decimal digit or scientific notation are always stored as `#!c double`.
-    - The number types can be changed, see [Template number types](#template-number-types).
+    - The number types can be changed, see [Template number types](#template-number-types). 
     - As of version 3.9.1, the conversion is realized by
       [`std::strtoull`](https://en.cppreference.com/w/cpp/string/byte/strtoul),
       [`std::strtoll`](https://en.cppreference.com/w/cpp/string/byte/strtol), and
@@ -114,7 +114,7 @@ That is, `-0` is stored as a signed integer, but the serialization does not repr
 ### Number serialization
 
 - Integer numbers are serialized as is; that is, no scientific notation is used.
-- Floating-point numbers are serialized as specified by the `#!c %g` printf modifier with
+- Floating-point numbers are serialized as specified by the `#!c %g` printf modifier with 
   [`std::numeric_limits<double>::max_digits10`](https://en.cppreference.com/w/cpp/types/numeric_limits/max_digits10)
   significant digits. The rationale is to use the shortest representation while still allow round-tripping.
 
@@ -125,7 +125,7 @@ That is, `-0` is stored as a signed integer, but the serialization does not repr
 
     - The serialization can have fewer decimal places than the input: `#!c 2555.5599999999999` will be serialized as
       `#!c 2555.56`. The reverse can also be true.
-    - The serialization can be in scientific notation even if the input is not: `#!c 0.0000972439793401814` will be
+    - The serialization can be in scientific notation even if the input is not: `#!c 0.0000972439793401814` will be 
       serialized as `#!c 9.72439793401814e-05`. The reverse can also be true: `#!c 12345E-5` will be serialized as
       `#!c 0.12345`.
     - Conversions from `#!c float` to `#!c double` can also introduce rounding errors:
@@ -171,9 +171,9 @@ This library serializes NaN values  as `#!js null`. This corresponds to the beha
         std::cout << "val=" << val << std::endl;
     }
     ```
-
+    
     output:
-
+    
     ```
     val=nan
     j=null
@@ -190,7 +190,7 @@ Floating-point inside JSON values numbers are compared with `#!c json::number_fl
     To compare floating-point while respecting an epsilon, an alternative
     [comparison function](https://github.com/mariokonrad/marnav/blob/master/include/marnav/math/floatingpoint.hpp#L34-#L39)
     could be used, for instance
-
+    
     ```cpp
     template<typename T, typename = typename std::enable_if<std::is_floating_point<T>::value, T>::type>
     inline bool is_same(T a, T b, T epsilon = std::numeric_limits<T>::epsilon()) noexcept
@@ -199,7 +199,7 @@ Floating-point inside JSON values numbers are compared with `#!c json::number_fl
     }
     ```
     Or you can self-define an operator equal function like this:
-
+    
     ```cpp
     bool my_equal(const_reference lhs, const_reference rhs)
     {
@@ -212,7 +212,7 @@ Floating-point inside JSON values numbers are compared with `#!c json::number_fl
                 // self_defined case
                 case value_t::number_float:
                     return std::abs(lhs - rhs) <= std::numeric_limits<float>::epsilon();
-
+        
                 // other cases remain the same with the original
                 ...
             }
@@ -220,9 +220,9 @@ Floating-point inside JSON values numbers are compared with `#!c json::number_fl
         ...
     }
     ```
-
+    
     (see [#703](https://github.com/nlohmann/json/issues/703) for more information.)
-
+    
 !!! note
 
     NaN values never compare equal to themselves or to other NaN values. See [#514](https://github.com/nlohmann/json/issues/514).

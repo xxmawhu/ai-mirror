@@ -98,13 +98,13 @@ objects.
 ??? example
 
     The following code shows that `object_t` is by default, a typedef to `#!cpp std::map<json::string_t, json>`.
-
+     
     ```cpp
     --8<-- "examples/object_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/object_t.output"
     ```

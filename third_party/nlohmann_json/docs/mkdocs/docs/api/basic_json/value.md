@@ -19,7 +19,7 @@ ValueType value(const json_pointer& ptr,
 
 1. Returns either a copy of an object's element at the specified key `key` or a given default value if no element with
    key `key` exists.
-
+   
     The function is basically equivalent to executing
     ```cpp
     try {
@@ -34,7 +34,7 @@ ValueType value(const json_pointer& ptr,
 
 3. Returns either a copy of an object's element at the specified JSON pointer `ptr` or a given default value if no value
    at `ptr` exists.
-
+   
     The function is basically equivalent to executing
     ```cpp
     try {
@@ -56,7 +56,7 @@ ValueType value(const json_pointer& ptr,
 :   A type for an object key other than [`json_pointer`](../json_pointer/index.md) that is comparable with
     [`string_t`](string_t.md) using  [`object_comparator_t`](object_comparator_t.md).
     This can also be a string view (C++17).
-`ValueType`
+`ValueType` 
 :   type compatible to JSON values, for instance `#!cpp int` for JSON integer numbers, `#!cpp bool` for JSON booleans,
     or `#!cpp std::vector` types for JSON arrays. Note the type of the expected value at `key`/`ptr` and the default
     value `default_value` must be compatible.
@@ -108,13 +108,13 @@ changes to any JSON value.
 ??? example "Example: (1) access specified object element with default value"
 
     The example below shows how object elements can be queried with a default value.
-
+    
     ```cpp
     --8<-- "examples/value__object_t_key_type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/value__object_t_key_type.output"
     ```
@@ -122,13 +122,13 @@ changes to any JSON value.
 ??? example "Example: (2) access specified object element using string_view with default value"
 
     The example below shows how object elements can be queried with a default value.
-
+    
     ```cpp
     --8<-- "examples/value__keytype.c++17.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/value__keytype.c++17.output"
     ```
@@ -136,13 +136,13 @@ changes to any JSON value.
 ??? example "Example: (3) access specified object element via JSON Pointer with default value"
 
     The example below shows how object elements can be queried with a default value.
-
+    
     ```cpp
     --8<-- "examples/value__json_ptr.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/value__json_ptr.output"
     ```

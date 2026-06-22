@@ -59,13 +59,13 @@ All functions can throw the following exception:
 
     The example shows how `push_back()` and `+=` can be used to add elements to a JSON array. Note how the `null` value
     was silently converted to a JSON array.
-
+    
     ```cpp
     --8<-- "examples/push_back.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/push_back.output"
     ```
@@ -78,9 +78,9 @@ All functions can throw the following exception:
     ```cpp
     --8<-- "examples/push_back__object_t__value.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/push_back__object_t__value.output"
     ```
@@ -92,9 +92,9 @@ All functions can throw the following exception:
     ```cpp
     --8<-- "examples/push_back__initializer_list.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/push_back__initializer_list.output"
     ```

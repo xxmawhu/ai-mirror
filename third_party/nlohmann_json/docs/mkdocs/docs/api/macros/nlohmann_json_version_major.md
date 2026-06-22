@@ -23,9 +23,9 @@ The macros are defined according to the current library version.
     ```cpp
     --8<-- "examples/nlohmann_json_version.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_json_version.output"
     ```

@@ -21,30 +21,36 @@ TEST_CASE("algorithms")
     {
         SECTION("std::all_of")
         {
-            CHECK(std::all_of(j_array.begin(), j_array.end(), [](const json& value) {
+            CHECK(std::all_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
                 return !value.empty();
             }));
-            CHECK(std::all_of(j_object.begin(), j_object.end(), [](const json& value) {
+            CHECK(std::all_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
                 return value.type() == json::value_t::number_integer;
             }));
         }
 
         SECTION("std::any_of")
         {
-            CHECK(std::any_of(j_array.begin(), j_array.end(), [](const json& value) {
+            CHECK(std::any_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
                 return value.is_string() && value.get<std::string>() == "foo";
             }));
-            CHECK(std::any_of(j_object.begin(), j_object.end(), [](const json& value) {
+            CHECK(std::any_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
                 return value.get<int>() > 1;
             }));
         }
 
         SECTION("std::none_of")
         {
-            CHECK(std::none_of(j_array.begin(), j_array.end(), [](const json& value) {
+            CHECK(std::none_of(j_array.begin(), j_array.end(), [](const json & value)
+            {
                 return value.empty();
             }));
-            CHECK(std::none_of(j_object.begin(), j_object.end(), [](const json& value) {
+            CHECK(std::none_of(j_object.begin(), j_object.end(), [](const json & value)
+            {
                 return value.get<int>() <= 0;
             }));
         }
@@ -55,7 +61,8 @@ TEST_CASE("algorithms")
             {
                 int sum = 0;
 
-                std::for_each(j_array.cbegin(), j_array.cend(), [&sum](const json& value) {
+                std::for_each(j_array.cbegin(), j_array.cend(), [&sum](const json & value)
+                {
                     if (value.is_number())
                     {
                         sum += static_cast<int>(value);
@@ -67,7 +74,8 @@ TEST_CASE("algorithms")
 
             SECTION("writing")
             {
-                auto add17 = [](json& value) {
+                auto add17 = [](json & value)
+                {
                     if (value.is_array())
                     {
                         value.push_back(17);
@@ -87,12 +95,14 @@ TEST_CASE("algorithms")
 
         SECTION("std::count_if")
         {
-            CHECK(std::count_if(j_array.begin(), j_array.end(), [](const json& value) {
-                      return (value.is_number());
-                  }) == 3);
-            CHECK(std::count_if(j_array.begin(), j_array.end(), [](const json&) {
-                      return true;
-                  }) == 9);
+            CHECK(std::count_if(j_array.begin(), j_array.end(), [](const json & value)
+            {
+                return (value.is_number());
+            }) == 3);
+            CHECK(std::count_if(j_array.begin(), j_array.end(), [](const json&)
+            {
+                return true;
+            }) == 9);
         }
 
         SECTION("std::mismatch")
@@ -117,7 +127,9 @@ TEST_CASE("algorithms")
                 // compare objects only by size of its elements
                 json j_array2 = {13, 29, 3, {"Hello", "World"}, true, false, {{"one", 1}, {"two", 2}, {"three", 3}}, "foo", "baz"};
                 CHECK(!std::equal(j_array.begin(), j_array.end(), j_array2.begin()));
-                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(), [](const json& a, const json& b) {
+                CHECK(std::equal(j_array.begin(), j_array.end(), j_array2.begin(),
+                                 [](const json & a, const json & b)
+                {
                     return (a.size() == b.size());
                 }));
             }
@@ -131,7 +143,9 @@ TEST_CASE("algorithms")
 
         SECTION("std::find_if")
         {
-            auto it = std::find_if(j_array.begin(), j_array.end(), [](const json& value) {
+            auto it = std::find_if(j_array.begin(), j_array.end(),
+                                   [](const json & value)
+            {
                 return value.is_boolean();
             });
             CHECK(std::distance(j_array.begin(), it) == 4);
@@ -139,7 +153,9 @@ TEST_CASE("algorithms")
 
         SECTION("std::find_if_not")
         {
-            auto it = std::find_if_not(j_array.begin(), j_array.end(), [](const json& value) {
+            auto it = std::find_if_not(j_array.begin(), j_array.end(),
+                                       [](const json & value)
+            {
                 return value.is_number();
             });
             CHECK(std::distance(j_array.begin(), it) == 3);
@@ -148,9 +164,11 @@ TEST_CASE("algorithms")
         SECTION("std::adjacent_find")
         {
             CHECK(std::adjacent_find(j_array.begin(), j_array.end()) == j_array.end());
-            CHECK(std::adjacent_find(j_array.begin(), j_array.end(), [](const json& v1, const json& v2) {
-                      return v1.type() == v2.type();
-                  }) == j_array.begin());
+            CHECK(std::adjacent_find(j_array.begin(), j_array.end(),
+                                     [](const json & v1, const json & v2)
+            {
+                return v1.type() == v2.type();
+            }) == j_array.begin());
         }
     }
 
@@ -170,7 +188,8 @@ TEST_CASE("algorithms")
 
         SECTION("std::partition")
         {
-            auto it = std::partition(j_array.begin(), j_array.end(), [](const json& v) {
+            auto it = std::partition(j_array.begin(), j_array.end(), [](const json & v)
+            {
                 return v.is_string();
             });
             CHECK(std::distance(j_array.begin(), it) == 2);
@@ -192,7 +211,8 @@ TEST_CASE("algorithms")
             SECTION("with user-defined comparison")
             {
                 json j = {3, {{"one", 1}, {"two", 2}}, {1, 2, 3}, nullptr};
-                std::sort(j.begin(), j.end(), [](const json& a, const json& b) {
+                std::sort(j.begin(), j.end(), [](const json & a, const json & b)
+                {
                     return a.size() < b.size();
                 });
                 CHECK(j == json({nullptr, 3, {{"one", 1}, {"two", 2}}, {1, 2, 3}}));
@@ -315,7 +335,8 @@ TEST_CASE("algorithms")
             json dest_arr;
             const json source_arr = {0, 3, 6, 9, 12, 15, 20};
 
-            std::copy_if(source_arr.begin(), source_arr.end(), std::back_inserter(dest_arr), [](const json& _value) {
+            std::copy_if(source_arr.begin(), source_arr.end(), std::back_inserter(dest_arr), [](const json & _value)
+            {
                 return _value.get<int>() % 3 == 0;
             });
             CHECK(dest_arr == json({0, 3, 6, 9, 12, 15}));
@@ -328,6 +349,7 @@ TEST_CASE("algorithms")
 
             std::copy_n(source_arr.begin(), numToCopy, std::back_inserter(dest_arr));
             CHECK(dest_arr == json{0, 1});
+
         }
         SECTION("copy n chars")
         {
@@ -339,4 +361,5 @@ TEST_CASE("algorithms")
             CHECK(dest_arr == json{'1', '2', '3', '4'});
         }
     }
+
 }

@@ -52,13 +52,13 @@ Arrays are stored as pointers in a `basic_json` type. That is, for any access to
 ??? example
 
     The following code shows that `array_t` is by default, a typedef to `#!cpp std::vector<nlohmann::json>`.
-
+     
     ```cpp
     --8<-- "examples/array_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/array_t.output"
     ```

@@ -30,9 +30,9 @@ store
     ```cpp
     --8<-- "examples/cbor_tag_handler_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/cbor_tag_handler_t.output"
     ```

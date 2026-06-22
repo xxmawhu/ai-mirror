@@ -28,9 +28,9 @@ It is safe to move the passed string value.
     ```cpp
     --8<-- "examples/sax_parse.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/sax_parse.output"
     ```

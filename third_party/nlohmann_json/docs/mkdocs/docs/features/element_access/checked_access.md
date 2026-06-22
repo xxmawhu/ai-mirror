@@ -9,7 +9,7 @@ otherwise.
 ??? example "Read access"
 
     Consider the following JSON value:
-
+    
     ```json
     {
         "name": "Mary Smith",
@@ -17,7 +17,7 @@ otherwise.
         "hobbies": ["hiking", "reading"]
     }
     ```
-
+    
     Assume the value is parsed to a `json` variable `j`.
 
     | expression                    | value                                                                        |
@@ -36,9 +36,9 @@ The return value is a reference, so it can be modified by the original value.
     ```cpp
     j.at("name") = "John Smith";
     ```
-
+    
     This code produces the following JSON value:
-
+    
     ```json
     {
         "name": "John Smith",
@@ -55,9 +55,9 @@ non-existing, an exception is thrown.
     ```cpp
     j.at("hobbies").at(3) = "cooking";
     ```
-
+    
     This code produces the following exception:
-
+    
     ```
     [json.exception.out_of_range.401] array index 3 is out of range
     ```
@@ -65,7 +65,7 @@ non-existing, an exception is thrown.
     When you [extended diagnostic messages](../../home/exceptions.md#extended-diagnostic-messages) are enabled by
     defining [`JSON_DIAGNOSTICS`](../../api/macros/json_diagnostics.md), the exception further gives information where
     the key or index is missing or out of range.
-
+    
     ```
     [json.exception.out_of_range.401] (/hobbies) array index 3 is out of range
     ```

@@ -47,13 +47,13 @@ function throws an exception.
 ??? example
 
     The following code shows how a JSON patch is applied to a value.
-
+     
     ```cpp
     --8<-- "examples/patch_inplace.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/patch_inplace.output"
     ```

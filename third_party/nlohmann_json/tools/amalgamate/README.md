@@ -63,3 +63,4 @@ Python v.2.7.0 or higher is required.
 
  * The `-p, --prologue` option should specify the path to a file which will be
    added to the beginning of the amalgamation. It is optional.
+

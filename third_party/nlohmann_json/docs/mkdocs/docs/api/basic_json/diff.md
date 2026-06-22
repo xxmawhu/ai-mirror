@@ -36,19 +36,19 @@ Linear in the lengths of `source` and `target`.
 ## Notes
 
 Currently, only `remove`, `add`, and `replace` operations are generated.
-
+          
 ## Examples
 
 ??? example
 
     The following code shows how a JSON patch is created as a diff for two JSON values.
-
+     
     ```cpp
     --8<-- "examples/diff.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/diff.output"
     ```

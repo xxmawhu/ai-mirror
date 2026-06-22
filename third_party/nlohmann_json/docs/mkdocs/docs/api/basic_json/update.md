@@ -55,13 +55,13 @@ function.
 ??? example
 
     The example shows how `update()` is used.
-
+    
     ```cpp
     --8<-- "examples/update.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/update.output"
     ```
@@ -69,13 +69,13 @@ function.
 ??? example
 
     The example shows how `update()` is used.
-
+    
     ```cpp
     --8<-- "examples/update__range.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/update__range.output"
     ```
@@ -103,13 +103,13 @@ function.
     ```
 
     Then `update` manages the merging of default settings and user settings:
-
+ 
     ```cpp
     auto user_settings = json::parse("config.json");
     auto effective_settings = get_default_settings();
     effective_settings.update(user_settings);
     ```
-
+    
     Now `effective_settings` contains the default settings, but those keys set by the user are overwritten:
 
     ```json
@@ -121,7 +121,7 @@ function.
     ```
 
     Note existing keys were just overwritten. To merge objects, `merge_objects` setting should be set to `#!c true`:
-
+    
     ```cpp
     auto user_settings = json::parse("config.json");
     auto effective_settings = get_default_settings();

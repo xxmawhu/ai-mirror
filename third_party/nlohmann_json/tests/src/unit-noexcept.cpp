@@ -16,15 +16,12 @@ DOCTEST_GCC_SUPPRESS_WARNING("-Wnoexcept")
 
 using nlohmann::json;
 
-namespace {
-enum test
+namespace
 {
-};
+enum test {};
 
-struct pod
-{};
-struct pod_bis
-{};
+struct pod {};
+struct pod_bis {};
 
 void to_json(json& /*unused*/, pod /*unused*/) noexcept;
 void to_json(json& /*unused*/, pod_bis /*unused*/);
@@ -48,15 +45,15 @@ static_assert(noexcept(json(pod{})), "");
 static_assert(noexcept(std::declval<json>().get<pod>()), "");
 static_assert(!noexcept(std::declval<json>().get<pod_bis>()), "");
 static_assert(noexcept(json(pod{})), "");
-}  // namespace
+} // namespace
 
 TEST_CASE("noexcept")
 {
     // silence -Wunneeded-internal-declaration errors
-    static_cast<void>(static_cast<void (*)(json&, pod)>(&to_json));
-    static_cast<void>(static_cast<void (*)(json&, pod_bis)>(&to_json));
-    static_cast<void>(static_cast<void (*)(const json&, pod)>(&from_json));
-    static_cast<void>(static_cast<void (*)(const json&, pod_bis)>(&from_json));
+    static_cast<void>(static_cast<void(*)(json&, pod)>(&to_json));
+    static_cast<void>(static_cast<void(*)(json&, pod_bis)>(&to_json));
+    static_cast<void>(static_cast<void(*)(const json&, pod)>(&from_json));
+    static_cast<void>(static_cast<void(*)(const json&, pod_bis)>(&from_json));
 
     SECTION("nothrow-copy-constructible exceptions")
     {

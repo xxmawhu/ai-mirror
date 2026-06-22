@@ -73,13 +73,13 @@ When iterating over an array, `key()` will return the index of the element as st
 ??? example
 
     The following code shows an example for `items()`.
-
+    
     ```cpp
     --8<-- "examples/items.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/items.output"
     ```

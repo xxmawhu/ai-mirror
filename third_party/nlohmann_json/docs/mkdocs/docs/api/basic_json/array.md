@@ -43,9 +43,9 @@ This function is only needed to express two edge cases that cannot be realized w
     ```cpp
     --8<-- "examples/array.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/array.output"
     ```

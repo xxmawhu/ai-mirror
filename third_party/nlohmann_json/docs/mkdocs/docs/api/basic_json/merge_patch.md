@@ -42,13 +42,13 @@ Linear in the lengths of `apply_patch`.
 ??? example
 
     The following code shows how a JSON Merge Patch is applied to a JSON document.
-
+     
     ```cpp
     --8<-- "examples/merge_patch.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/merge_patch.output"
     ```

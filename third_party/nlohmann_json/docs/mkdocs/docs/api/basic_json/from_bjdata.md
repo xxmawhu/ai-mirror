@@ -77,13 +77,13 @@ Linear in the size of the input.
 ??? example
 
     The example shows the deserialization of a byte vector in BJData format to a JSON value.
-
+     
     ```cpp
     --8<-- "examples/from_bjdata.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/from_bjdata.output"
     ```

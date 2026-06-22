@@ -19,7 +19,7 @@ class basic_json {
       For instance, comparing an integer and a floating-point value will 3-way compare the first value converted to
       floating-point with the second value.
     - Otherwise, yields a result by comparing the type (see [`value_t`](value_t.md)).
-
+  
 2. 3-way compares a JSON value and a scalar or a scalar and a JSON value by converting the scalar to a JSON value and
    3-way comparing both JSON values (see 1).
 
@@ -31,7 +31,7 @@ class basic_json {
 ## Parameters
 
 `rhs` (in)
-:   second value to consider
+:   second value to consider 
 
 ## Return value
 
@@ -60,13 +60,13 @@ Linear.
 ??? example "Example: (1) comparing JSON values"
 
     The example demonstrates comparing several JSON values.
-
+    
     ```cpp
     --8<-- "examples/operator_spaceship__const_reference.c++20.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_spaceship__const_reference.c++20.output"
     ```
@@ -74,13 +74,13 @@ Linear.
 ??? example "Example: (2) comparing JSON values and scalars"
 
     The example demonstrates comparing several JSON values and scalars.
-
+    
     ```cpp
     --8<-- "examples/operator_spaceship__scalartype.c++20.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_spaceship__scalartype.c++20.output"
     ```

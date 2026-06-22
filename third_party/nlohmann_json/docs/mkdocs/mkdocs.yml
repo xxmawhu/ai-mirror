@@ -21,7 +21,7 @@ theme:
       primary: indigo
       accent: indigo
       toggle:
-        icon: material/brightness-7
+        icon: material/brightness-7 
         name: Switch to dark mode
     - media: '(prefers-color-scheme: dark)'
       scheme: slate

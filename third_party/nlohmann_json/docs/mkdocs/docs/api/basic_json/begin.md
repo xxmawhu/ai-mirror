@@ -26,13 +26,13 @@ Constant.
 ??? example
 
     The following code shows an example for `begin()`.
-
+    
     ```cpp
     --8<-- "examples/begin.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/begin.output"
     ```

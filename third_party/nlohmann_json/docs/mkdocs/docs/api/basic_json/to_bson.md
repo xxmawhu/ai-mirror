@@ -43,13 +43,13 @@ Linear in the size of the JSON value `j`.
 ??? example
 
     The example shows the serialization of a JSON value to a byte vector in BSON format.
-
+     
     ```cpp
     --8<-- "examples/to_bson.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/to_bson.output"
     ```

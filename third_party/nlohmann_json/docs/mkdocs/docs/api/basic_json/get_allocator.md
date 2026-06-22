@@ -5,7 +5,7 @@ static allocator_type get_allocator();
 ```
 
 Returns the allocator associated with the container.
-
+    
 ## Return value
 
 associated allocator
@@ -15,13 +15,13 @@ associated allocator
 ??? example
 
     The example shows how `get_allocator()` is used to created `json` values.
-
+    
     ```cpp
     --8<-- "examples/get_allocator.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/get_allocator.output"
     ```

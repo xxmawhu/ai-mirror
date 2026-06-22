@@ -69,13 +69,13 @@ type `#!cpp binary_t*` must be dereferenced.
 
     The following code shows that `binary_t` is by default, a typedef to
     `#!cpp nlohmann::byte_container_with_subtype<std::vector<std::uint8_t>>`.
-
+     
     ```cpp
     --8<-- "examples/binary_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/binary_t.output"
     ```

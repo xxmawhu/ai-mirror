@@ -46,11 +46,11 @@ The default value is `0`.
         first,
         second,
     };
-
+    
     int main()
     {
         // normally invokes to_json serialization function but with JSON_DISABLE_ENUM_SERIALIZATION defined, it does not
-        const json j = Choice::first;
+        const json j = Choice::first; 
 
         // normally invokes from_json parse function but with JSON_DISABLE_ENUM_SERIALIZATION defined, it does not
         Choice ch = j.template get<Choice>();
@@ -79,11 +79,11 @@ The default value is `0`.
         { Choice::first, "first" },
         { Choice::second, "second" },
     })
-
+    
     int main()
     {
         // uses user-defined to_json function defined by macro
-        const json j = Choice::first;
+        const json j = Choice::first; 
 
         // uses user-defined from_json function defined by macro
         Choice ch = j.template get<Choice>();
@@ -132,11 +132,11 @@ The default value is `0`.
             ch = Choice::second;
         }
     }
-
+    
     int main()
     {
         // uses user-defined to_json function
-        const json j = Choice::first;
+        const json j = Choice::first; 
 
         // uses user-defined from_json function
         Choice ch = j.template get<Choice>();

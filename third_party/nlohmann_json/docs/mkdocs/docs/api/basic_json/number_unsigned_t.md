@@ -30,7 +30,7 @@ With the default values for `NumberUnsignedType` (`std::uint64_t`), the default 
 #### Default behavior
 
 - The restrictions about leading zeros is not enforced in C++. Instead, leading zeros in integer literals lead to an
-  interpretation as octal number. Internally, the value will be stored as decimal number. For instance, the C++ integer
+  interpretation as octal number. Internally, the value will be stored as decimal number. For instance, the C++ integer 
   literal `010` will be serialized to `8`. During deserialization, leading zeros yield an error.
 - Not-a-number (NaN) values will be serialized to `null`.
 
@@ -60,13 +60,13 @@ Integer number values are stored directly inside a `basic_json` type.
 ??? example
 
     The following code shows that `number_unsigned_t` is by default, a typedef to `#!cpp std::uint64_t`.
-
+     
     ```cpp
     --8<-- "examples/number_unsigned_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/number_unsigned_t.output"
     ```

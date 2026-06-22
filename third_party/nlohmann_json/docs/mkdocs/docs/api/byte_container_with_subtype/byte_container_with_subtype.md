@@ -34,9 +34,9 @@ byte_container_with_subtype(container_type&& container, subtype_type subtype);
     ```cpp
     --8<-- "examples/byte_container_with_subtype__byte_container_with_subtype.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/byte_container_with_subtype__byte_container_with_subtype.output"
     ```

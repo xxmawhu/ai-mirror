@@ -17,9 +17,9 @@ and use the namespaced imported target from the generated package configuration:
     ```cmake title="CMakeLists.txt"
     cmake_minimum_required(VERSION 3.1)
     project(ExampleProject LANGUAGES CXX)
-
+    
     find_package(nlohmann_json 3.11.3 REQUIRED)
-
+    
     add_executable(example example.cpp)
     target_link_libraries(example PRIVATE nlohmann_json::nlohmann_json)
     ```
@@ -41,7 +41,7 @@ To embed the library directly into an existing CMake project, place the entire s
     # If you only include this third party in PRIVATE source files, you do not need to install it
     # when your main project gets installed.
     set(JSON_Install OFF CACHE INTERNAL "")
-
+    
     add_subdirectory(nlohmann_json)
 
     add_executable(example example.cpp)
@@ -74,7 +74,7 @@ to the following.
     # Note that the namespaced target will always be available regardless of the import method
     target_link_libraries(example PRIVATE nlohmann_json::nlohmann_json)
     ```
-
+    
     ```cmake title="thirdparty/CMakeLists.txt"
     if(EXAMPLE_USE_EXTERNAL_JSON)
         find_package(nlohmann_json 3.11.3 REQUIRED)
@@ -83,7 +83,7 @@ to the following.
         add_subdirectory(nlohmann_json)
     endif()
     ```
-
+    
     `thirdparty/nlohmann_json` is then a complete copy of this source tree.
 
 
@@ -99,10 +99,10 @@ automatically download a release as a dependency at configure type.
     project(ExampleProject LANGUAGES CXX)
 
     include(FetchContent)
-
+    
     FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz)
     FetchContent_MakeAvailable(json)
-
+    
     add_executable(example example.cpp)
     target_link_libraries(example PRIVATE nlohmann_json::nlohmann_json)
     ```

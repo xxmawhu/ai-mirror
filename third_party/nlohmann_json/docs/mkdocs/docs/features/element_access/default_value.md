@@ -7,14 +7,14 @@ In many situations such as configuration files, missing values are not exception
 ??? example
 
     Consider the following JSON value:
-
+    
     ```json
     {
         "logOutput": "result.log",
         "append": true
     }
     ```
-
+    
     Assume the value is parsed to a `json` variable `j`.
 
     | expression | value |

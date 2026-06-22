@@ -43,13 +43,13 @@ A UTF-8 byte order mark is silently ignored.
 ??? example
 
     The example below shows how a JSON value is constructed by reading a serialization from a stream.
-
+        
     ```cpp
     --8<-- "examples/operator_deserialize.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_deserialize.output"
     ```

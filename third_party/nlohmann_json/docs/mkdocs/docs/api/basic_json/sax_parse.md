@@ -22,7 +22,7 @@ Read from input and generate SAX events
 
 1. Read from a compatible input.
 2. Read from a pair of character iterators
-
+    
     The value_type of the iterator must be an integral type with size of 1, 2 or 4 bytes, which will be interpreted
     respectively as UTF-8, UTF-16 and UTF-32.
 
@@ -32,7 +32,7 @@ The SAX event lister must follow the interface of [`json_sax`](../json_sax/index
 
 `InputType`
 :   A compatible input, for instance:
-
+    
     - an `std::istream` object
     - a `FILE` pointer
     - a C-style array of characters
@@ -92,13 +92,13 @@ A UTF-8 byte order mark is silently ignored.
 
     The example below demonstrates the `sax_parse()` function reading from string and processing the events with a
     user-defined SAX event consumer.
-
+    
     ```cpp
     --8<-- "examples/sax_parse.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/sax_parse.output"
     ```

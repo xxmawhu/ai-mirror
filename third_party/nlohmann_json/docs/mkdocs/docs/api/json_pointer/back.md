@@ -23,13 +23,13 @@ Constant.
 ??? example
 
     The example shows the usage of `back`.
-
+     
     ```cpp
     --8<-- "examples/json_pointer__back.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/json_pointer__back.output"
     ```

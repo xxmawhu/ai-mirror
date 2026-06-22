@@ -6,8 +6,7 @@
 // SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
-#include "Foo.hpp"
 #include <nlohmann/json.hpp>
+#include "Foo.hpp"
 
-class Bar : public Foo
-{};
+class Bar : public Foo {};

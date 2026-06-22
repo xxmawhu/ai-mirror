@@ -23,12 +23,12 @@ void erase(const size_type idx);
 1. Removes an element from a JSON value specified by iterator `pos`. The iterator `pos` must be valid and
    dereferenceable. Thus, the `end()` iterator (which is valid, but is not dereferenceable) cannot be used as a value for
    `pos`.
-
+   
     If called on a primitive type other than `#!json null`, the resulting JSON value will be `#!json null`.
 
 2. Remove an element range specified by `[first; last)` from a JSON value. The iterator `first` does not need to be
    dereferenceable if `first == last`: erasing an empty range is a no-op.
-
+   
     If called on a primitive type other than `#!json null`, the resulting JSON value will be `#!json null`.
 
 3. Removes an element from a JSON object by key.
@@ -58,10 +58,10 @@ void erase(const size_type idx);
 
 `key` (in)
 :   object key of the elements to remove
-
+    
 `idx` (in)
 :   array index of the element to remove
-
+    
 ## Return value
 
 1. Iterator following the last removed element. If the iterator `pos` refers to the last element, the `end()` iterator
@@ -135,13 +135,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (1) remove element given an iterator"
 
     The example shows the effect of `erase()` for different JSON types using an iterator.
-
+    
     ```cpp
     --8<-- "examples/erase__IteratorType.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/erase__IteratorType.output"
     ```
@@ -149,13 +149,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (2) remove elements given an iterator range"
 
     The example shows the effect of `erase()` for different JSON types using an iterator range.
-
+    
     ```cpp
     --8<-- "examples/erase__IteratorType_IteratorType.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/erase__IteratorType_IteratorType.output"
     ```
@@ -163,13 +163,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (3) remove element from a JSON object given a key"
 
     The example shows the effect of `erase()` for different JSON types using an object key.
-
+    
     ```cpp
     --8<-- "examples/erase__object_t_key_type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/erase__object_t_key_type.output"
     ```
@@ -177,13 +177,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (4) remove element from a JSON object given a key using string_view"
 
     The example shows the effect of `erase()` for different JSON types using an object key.
-
+    
     ```cpp
     --8<-- "examples/erase__keytype.c++17.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/erase__keytype.c++17.output"
     ```
@@ -191,13 +191,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (5) remove element from a JSON array given an index"
 
     The example shows the effect of `erase()` using an array index.
-
+    
     ```cpp
     --8<-- "examples/erase__size_type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/erase__size_type.output"
     ```

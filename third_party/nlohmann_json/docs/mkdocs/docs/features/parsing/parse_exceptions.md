@@ -71,16 +71,16 @@ The return value indicates whether the parsing should continue, so the function 
     ```cpp
     #include <iostream>
     #include "json.hpp"
-
+    
     using json = nlohmann::json;
-
+    
     class sax_no_exception : public nlohmann::detail::json_sax_dom_parser<json>
     {
       public:
         sax_no_exception(json& j)
           : nlohmann::detail::json_sax_dom_parser<json>(j, false)
         {}
-
+        
         bool parse_error(std::size_t position,
                          const std::string& last_token,
                          const json::exception& ex)
@@ -92,26 +92,26 @@ The return value indicates whether the parsing should continue, so the function 
             return false;
         }
     };
-
+    
     int main()
     {
         std::string myinput = "[1,2,3,]";
-
+    
         json result;
         sax_no_exception sax(result);
-
+        
         bool parse_result = json::sax_parse(myinput, &sax);
         if (!parse_result)
         {
             std::cerr << "parsing unsuccessful!" << std::endl;
         }
-
+        
         std::cout << "parsed value: " << result << std::endl;
     }
     ```
 
     Output:
-
+    
     ```
     parse error at input byte 8
     [json.exception.parse_error.101] parse error at line 1, column 8: syntax error while parsing value - unexpected ']'; expected '[', '{', or a literal

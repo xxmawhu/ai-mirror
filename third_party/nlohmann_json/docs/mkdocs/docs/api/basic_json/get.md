@@ -23,7 +23,7 @@ constexpr const PointerType get_ptr() const noexcept;
    [CopyConstructible](https://en.cppreference.com/w/cpp/named_req/CopyConstructible) and
    [DefaultConstructible](https://en.cppreference.com/w/cpp/named_req/DefaultConstructible). The value is converted by
    calling the `json_serializer<ValueType>` `from_json()` method.
-
+   
     The function is equivalent to executing
     ```cpp
     ValueType ret;
@@ -32,7 +32,7 @@ constexpr const PointerType get_ptr() const noexcept;
     ```
 
     This overload is chosen if:
-
+    
     - `ValueType` is not `basic_json`,
     - `json_serializer<ValueType>` has a `from_json()` method of the form
       `void from_json(const basic_json&, ValueType&)`, and
@@ -42,14 +42,14 @@ constexpr const PointerType get_ptr() const noexcept;
     If the type is **not** [CopyConstructible](https://en.cppreference.com/w/cpp/named_req/CopyConstructible) and
     **not** [DefaultConstructible](https://en.cppreference.com/w/cpp/named_req/DefaultConstructible), the value is
     converted by calling the `json_serializer<ValueType>` `from_json()` method.
-
+   
     The function is then equivalent to executing
     ```cpp
     return JSONSerializer<ValueTypeCV>::from_json(*this);
-    ```
-
+    ``` 
+   
     This overload is chosen if:
-
+    
     - `ValueType` is not `basic_json` and
     - `json_serializer<ValueType>` has a `from_json()` method of the form
      `ValueType from_json(const basic_json&)`
@@ -103,13 +103,13 @@ Depends on what `json_serializer<ValueType>` `from_json()` method throws
     be converted to integers, (2) A JSON array can be converted to a standard
     `std::vector<short>`, (3) A JSON object can be converted to C++
     associative containers such as `std::unordered_map<std::string, json>`.
-
+        
     ```cpp
     --8<-- "examples/get__ValueType_const.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/get__ValueType_const.output"
     ```
@@ -118,13 +118,13 @@ Depends on what `json_serializer<ValueType>` `from_json()` method throws
 
     The example below shows how pointers to internal values of a JSON value can be requested. Note that no type
     conversions are made and a `#cpp nullptr` is returned if the value and the requested pointer type does not match.
-
+        
     ```cpp
     --8<-- "examples/get__PointerType.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/get__PointerType.output"
     ```

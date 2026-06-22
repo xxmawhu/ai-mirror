@@ -27,7 +27,7 @@ JSON Lines input with more than one value is treated as invalid JSON by the [`pa
     ```cpp
     --8<-- "examples/json_lines.cpp"
     ```
-
+    
     Output:
 
     ```json
@@ -37,7 +37,7 @@ JSON Lines input with more than one value is treated as invalid JSON by the [`pa
 !!! warning "Note"
 
     Using [`operator>>`](../../api/operator_gtgt.md) like
-
+    
     ```cpp
     json j;
     while (input >> j)
@@ -45,5 +45,5 @@ JSON Lines input with more than one value is treated as invalid JSON by the [`pa
         std::cout << j << std::endl;
     }
     ```
-
+    
     with a JSON Lines input does not work, because the parser will try to parse one value after the last one.

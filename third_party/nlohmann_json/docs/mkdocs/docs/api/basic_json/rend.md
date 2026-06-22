@@ -27,13 +27,13 @@ Constant.
 ??? example
 
     The following code shows an example for `eend()`.
-
+    
     ```cpp
     --8<-- "examples/rend.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/rend.output"
     ```

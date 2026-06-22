@@ -10,7 +10,7 @@ string_t dump(const int indent = -1,
 Serialization function for JSON values. The function tries to mimic Python's
 [`json.dumps()` function](https://docs.python.org/2/library/json.html#json.dump), and currently  supports its `indent`
 and `ensure_ascii` parameters.
-
+    
 ## Parameters
 
 `indent` (in)
@@ -29,7 +29,7 @@ and `ensure_ascii` parameters.
     `strict` (throws and exception in case a decoding error occurs; default), `replace` (replace invalid UTF-8 sequences
     with U+FFFD), and `ignore` (ignore invalid UTF-8 sequences during serialization; all bytes are copied to the output
     unchanged)).
-
+    
 ## Return value
 
 string containing the serialization of the JSON value
@@ -64,9 +64,9 @@ Binary values are serialized as object containing two keys:
     ```cpp
     --8<-- "examples/dump.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/dump.output"
     ```

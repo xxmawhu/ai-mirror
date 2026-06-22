@@ -28,7 +28,7 @@ const_iterator find(KeyType&& key) const;
 
 `key` (in)
 :   key value of the element to search for.
-
+    
 ## Return value
 
 Iterator to an element with a key equivalent to `key`. If no such element is found or the JSON value is not an object,
@@ -51,13 +51,13 @@ This method always returns `end()` when executed on a JSON type that is not an o
 ??? example "Example: (1) find object element by key"
 
     The example shows how `find()` is used.
-
+    
     ```cpp
     --8<-- "examples/find__object_t_key_type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/find__object_t_key_type.output"
     ```
@@ -65,13 +65,13 @@ This method always returns `end()` when executed on a JSON type that is not an o
 ??? example "Example: (2) find object element by key using string_view"
 
     The example shows how `find()` is used.
-
+    
     ```cpp
     --8<-- "examples/find__keytype.c++17.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/find__keytype.c++17.output"
     ```

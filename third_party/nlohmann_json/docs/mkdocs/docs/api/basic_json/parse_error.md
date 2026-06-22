@@ -50,13 +50,13 @@ or the end of file. This also holds true when reading a byte vector for binary f
 ??? example
 
     The following code shows how a `parse_error` exception can be caught.
-
+    
     ```cpp
     --8<-- "examples/parse_error.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse_error.output"
     ```

@@ -61,9 +61,9 @@ the latter case, it is either skipped completely or replaced by an empty discard
     ```cpp
     --8<-- "examples/parse__string__parser_callback_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/parse__string__parser_callback_t.output"
     ```

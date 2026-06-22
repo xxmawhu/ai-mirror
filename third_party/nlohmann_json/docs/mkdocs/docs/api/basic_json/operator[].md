@@ -41,10 +41,10 @@ const_reference operator[](const json_pointer& ptr) const;
 
 `key` (in)
 :   object key of the element to access
-
+    
 `ptr` (in)
 :   JSON pointer to the desired element
-
+    
 ## Return value
 
 1. (const) reference to the element at index `idx`
@@ -100,7 +100,7 @@ Strong exception safety: if an exception occurs, the original value stays intact
 3. See 2.
 
 4. `null` values are created in arrays and objects if necessary.
-
+   
     In particular:
 
     - If the JSON pointer points to an object key that does not exist, it is created and filled with a `#!json null`
@@ -116,13 +116,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 
     The example below shows how array elements can be read and written using `[]` operator. Note the addition of
     `#!json null` values.
-
+        
     ```cpp
     --8<-- "examples/operator_array__size_type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__size_type.output"
     ```
@@ -134,9 +134,9 @@ Strong exception safety: if an exception occurs, the original value stays intact
     ```cpp
     --8<-- "examples/operator_array__size_type_const.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__size_type_const.output"
     ```
@@ -144,13 +144,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (2) access specified object element"
 
     The example below shows how object elements can be read and written using the `[]` operator.
-
+    
     ```cpp
     --8<-- "examples/operator_array__object_t_key_type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__object_t_key_type.output"
     ```
@@ -158,13 +158,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (2) access specified object element (const)"
 
     The example below shows how object elements can be read using the `[]` operator.
-
+    
     ```cpp
     --8<-- "examples/operator_array__object_t_key_type_const.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__object_t_key_type_const.output"
     ```
@@ -172,13 +172,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (3) access specified object element using string_view"
 
     The example below shows how object elements can be read using the `[]` operator.
-
+    
     ```cpp
     --8<-- "examples/operator_array__keytype.c++17.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__keytype.c++17.output"
     ```
@@ -186,13 +186,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (3) access specified object element using string_view (const)"
 
     The example below shows how object elements can be read using the `[]` operator.
-
+    
     ```cpp
     --8<-- "examples/operator_array__keytype_const.c++17.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__keytype_const.c++17.output"
     ```
@@ -200,13 +200,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (4) access specified element via JSON Pointer"
 
     The example below shows how values can be read and written using JSON Pointers.
-
+    
     ```cpp
     --8<-- "examples/operator_array__json_pointer.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__json_pointer.output"
     ```
@@ -214,13 +214,13 @@ Strong exception safety: if an exception occurs, the original value stays intact
 ??? example "Example: (4) access specified element via JSON Pointer (const)"
 
     The example below shows how values can be read using JSON Pointers.
-
+    
     ```cpp
     --8<-- "examples/operator_array__json_pointer_const.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator_array__json_pointer_const.output"
     ```

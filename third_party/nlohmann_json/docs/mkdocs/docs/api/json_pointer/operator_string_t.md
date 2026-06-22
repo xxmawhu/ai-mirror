@@ -31,13 +31,13 @@ operator string_t() const
 ??? example
 
     The example shows how JSON Pointers can be implicitly converted to strings.
-
+     
     ```cpp
     --8<-- "examples/json_pointer__operator_string_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/json_pointer__operator_string_t.output"
     ```

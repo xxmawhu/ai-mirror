@@ -63,13 +63,13 @@ functions [`is_null`](is_null.md), [`is_object`](is_object.md), [`is_array`](is_
 ??? example
 
     The following code how `type()` queries the `value_t` for all JSON types.
-
+    
     ```cpp
     --8<-- "examples/type.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/type.output"
     ```

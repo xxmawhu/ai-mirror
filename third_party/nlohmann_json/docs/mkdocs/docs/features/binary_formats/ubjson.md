@@ -50,7 +50,7 @@ The library uses the following mapping from JSON values types to UBJSON types ac
 !!! info "Unused UBJSON markers"
 
     The following markers are not used in the conversion:
-
+    
     - `Z`: no-op values are not created.
     - `C`: single-byte strings are serialized with `S` markers.
 

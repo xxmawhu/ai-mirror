@@ -29,13 +29,13 @@ The type `CustomBaseClass` has to be a default-constructible class.
 ??? example
 
     The following code shows how to inject custom data and methods for each node.
-
+     
     ```cpp
     --8<-- "examples/json_base_class_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/json_base_class_t.output"
     ```

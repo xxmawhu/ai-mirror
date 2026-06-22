@@ -6,7 +6,7 @@ size_type max_size() const noexcept;
 
 Returns the maximum number of elements a JSON value is able to hold due to system or library implementation limitations,
 i.e. `std::distance(begin(), end())` for the JSON value.
-
+    
 ## Return value
 
 The return value depends on the different types and is defined as follows:
@@ -41,13 +41,13 @@ string elements the JSON value can store which is `1`.
 ??? example
 
     The following code calls `max_size()` on the different value types.
-
+        
     ```cpp
     --8<-- "examples/max_size.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/max_size.output"
     ```

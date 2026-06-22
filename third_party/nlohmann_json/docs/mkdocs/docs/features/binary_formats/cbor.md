@@ -95,7 +95,7 @@ see "binary" cells in the table above.
     ```cpp
     --8<-- "examples/to_cbor.cpp"
     ```
-
+    
     Output:
 
     ```c

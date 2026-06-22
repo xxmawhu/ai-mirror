@@ -8,14 +8,15 @@
 
 #pragma once
 
-#include <cstddef>   // ptrdiff_t
-#include <iterator>  // reverse_iterator
-#include <utility>   // declval
+#include <cstddef> // ptrdiff_t
+#include <iterator> // reverse_iterator
+#include <utility> // declval
 
 #include <nlohmann/detail/abi_macros.hpp>
 
 NLOHMANN_JSON_NAMESPACE_BEGIN
-namespace detail {
+namespace detail
+{
 
 //////////////////////
 // reverse_iterator //
@@ -51,16 +52,13 @@ class json_reverse_iterator : public std::reverse_iterator<Base>
 
     /// create reverse iterator from iterator
     explicit json_reverse_iterator(const typename base_iterator::iterator_type& it) noexcept
-      : base_iterator(it)
-    {}
+        : base_iterator(it) {}
 
     /// create reverse iterator from base class
-    explicit json_reverse_iterator(const base_iterator& it) noexcept
-      : base_iterator(it)
-    {}
+    explicit json_reverse_iterator(const base_iterator& it) noexcept : base_iterator(it) {}
 
     /// post-increment (it++)
-    json_reverse_iterator operator++(int) &  // NOLINT(cert-dcl21-cpp)
+    json_reverse_iterator operator++(int)& // NOLINT(cert-dcl21-cpp)
     {
         return static_cast<json_reverse_iterator>(base_iterator::operator++(1));
     }
@@ -72,7 +70,7 @@ class json_reverse_iterator : public std::reverse_iterator<Base>
     }
 
     /// post-decrement (it--)
-    json_reverse_iterator operator--(int) &  // NOLINT(cert-dcl21-cpp)
+    json_reverse_iterator operator--(int)& // NOLINT(cert-dcl21-cpp)
     {
         return static_cast<json_reverse_iterator>(base_iterator::operator--(1));
     }
@@ -124,7 +122,7 @@ class json_reverse_iterator : public std::reverse_iterator<Base>
     reference value() const
     {
         auto it = --this->base();
-        return it.operator*();
+        return it.operator * ();
     }
 };
 

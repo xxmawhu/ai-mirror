@@ -8,7 +8,7 @@ representation of data types that are not part of the JSON spec. For example, BS
 
     - [BSON Website](http://bsonspec.org) - the main source on BSON
     - [BSON Specification](http://bsonspec.org/spec.html) - the specification
-
+   
 
 ## Serialization
 
@@ -43,7 +43,7 @@ The library uses the following mapping from JSON values types to BSON types:
     ```cpp
     --8<-- "examples/to_bson.cpp"
     ```
-
+    
     Output:
 
     ```c

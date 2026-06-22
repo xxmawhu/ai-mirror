@@ -43,9 +43,9 @@ When these macros are not defined, the library will define them to their default
     ```cpp
     --8<-- "examples/nlohmann_json_namespace_begin.c++17.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/nlohmann_json_namespace_begin.c++17.output"
     ```

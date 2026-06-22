@@ -13,15 +13,15 @@ function to use instead.
 
 - Function `friend std::istream& operator<<(basic_json&, std::istream&)` is deprecated since 3.0.0. Please use
   [`friend std::istream&  operator>>(std::istream&, basic_json&)`](../api/operator_gtgt.md) instead.
-
+  
     === "Deprecated"
-
+    
         ```cpp
         nlohmann::json j;
         std::stringstream ss("[1,2,3]");
         j << ss;
         ```
-
+    
     === "Future-proof"
 
         ```cpp
@@ -38,14 +38,14 @@ function to use instead.
   `from_cbor({ptr, len})`.
 
     === "Deprecated"
-
+  
           ```cpp
           const char* s = "[1,2,3]";
           bool ok = nlohmann::json::accept({s, s + std::strlen(s)});
           ```
-
+  
     === "Future-proof"
-
+  
           ```cpp
           const char* s = "[1,2,3]";
           bool ok = nlohmann::json::accept(s, s + std::strlen(s));
@@ -58,14 +58,14 @@ function to use instead.
   [`json_pointer`](../api/json_pointer/index.md) `p` with a string `s`, convert `s` to a `json_pointer` first and use
   [`json_pointer::operator==`](../api/json_pointer/operator_eq.md) or
   [`json_pointer::operator!=`](../api/json_pointer/operator_ne.md).
-
+    
     === "Deprecated"
-
+  
         ```cpp
         nlohmann::json::json_pointer lhs("/foo/bar/1");
         assert(lhs == "/foo/bar/1");
         ```
-
+  
     === "Future-proof"
 
         ```cpp
@@ -76,16 +76,16 @@ function to use instead.
 - The implicit conversion from JSON Pointers to string
   ([`json_pointer::operator string_t`](../api/json_pointer/operator_string_t.md)) is deprecated since 3.11.0. Use
   [`json_pointer::to_string`](../api/json_pointer/to_string.md) instead.
-
+  
     === "Deprecated"
-
+  
           ```cpp
           nlohmann::json::json_pointer ptr("/foo/bar/1");
           std::string s = ptr;
           ```
-
+  
     === "Future-proof"
-
+  
           ```cpp
           nlohmann::json::json_pointer ptr("/foo/bar/1");
           std::string s = ptr.to_string();
@@ -94,28 +94,28 @@ function to use instead.
 - Passing a `basic_json` specialization as template parameter `RefStringType` to
   [`json_pointer`](../api/json_pointer/index.md) is deprecated since 3.11.0. The string type can now be directly
   provided.
-
+  
     === "Deprecated"
-
+  
           ```cpp
           using my_json = nlohmann::basic_json<std::map, std::vector, my_string_type>;
           nlohmann::json_pointer<my_json> ptr("/foo/bar/1");
           ```
-
+  
     === "Future-proof"
-
+  
           ```cpp
           nlohmann::json_pointer<my_string_type> ptr("/foo/bar/1");
           ```
-
-    Thereby, `nlohmann::my_json::json_pointer` is an alias for `nlohmann::json_pointer<my_string_type>` and is always an
+  
+    Thereby, `nlohmann::my_json::json_pointer` is an alias for `nlohmann::json_pointer<my_string_type>` and is always an 
     alias to the `json_pointer` with the appropriate string type for all specializations of `basic_json`.
 
 #### Miscellaneous functions
 
 - The function `iterator_wrapper` is deprecated since 3.1.0. Please use the member function
   [`items`](../api/basic_json/items.md) instead.
-
+  
     === "Deprecated"
 
           ```cpp
@@ -136,7 +136,7 @@ function to use instead.
 
 - Function `friend std::ostream& operator>>(const basic_json&, std::ostream&)` is deprecated since 3.0.0. Please use
   [`friend operator<<(std::ostream&, const basic_json&)`](../api/operator_ltlt.md) instead.
-
+  
     === "Deprecated"
 
           ```cpp
@@ -152,7 +152,7 @@ function to use instead.
 - The legacy comparison behavior for discarded values is deprecated since 3.11.0. It is already disabled by default and
   can still be enabled by defining
   [`JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON`](../api/macros/json_use_legacy_discarded_value_comparison.md) to `1`.
-
+  
     === "Deprecated"
 
           ```cpp

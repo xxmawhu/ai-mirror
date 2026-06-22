@@ -121,7 +121,7 @@ If you are using [vcpkg](https://github.com/Microsoft/vcpkg/) on your project fo
         ```cmake title="CMakeLists.txt"
         --8<-- "integration/vcpkg/CMakeLists.txt"
         ```
-
+    
         ```cpp title="example.cpp"
         --8<-- "integration/vcpkg/example.cpp"
         ```

@@ -29,7 +29,7 @@ json array = {1, 2, 3, 4};
 for arrays and
 
 ```cpp
-json object = {{"one", 1}, {"two", 2}};
+json object = {{"one", 1}, {"two", 2}}; 
 ```
 
 for objects.
@@ -83,25 +83,25 @@ As described [above](#parse-errors-reading-non-ascii-characters), the library as
     ```cpp
     #include <codecvt> // codecvt_utf8
     #include <locale>  // wstring_convert
-
+    
     // encoding function
     std::string to_utf8(std::wstring& wide_string)
     {
         static std::wstring_convert<std::codecvt_utf8<wchar_t>> utf8_conv;
         return utf8_conv.to_bytes(wide_string);
     }
-
+    
     json j;
     std::wstring ws = L"車B1234 こんにちは";
-
+    
     j["original"] = ws;
     j["encoded"] = to_utf8(ws);
-
+    
     std::cout << j << std::endl;
     ```
-
+    
     The result is:
-
+    
     ```json
     {
       "encoded": "車B1234 こんにちは",
@@ -143,7 +143,7 @@ The library uses `std::numeric_limits<number_float_t>::digits10` (15 for IEEE `d
 
 !!! quote "[cppreference.com](https://en.cppreference.com/w/cpp/types/numeric_limits/digits10)"
 
-    The value of `std::numeric_limits<T>::digits10` is the number of base-10 digits that can be represented by the type T without change, that is, any number with this many significant decimal digits can be converted to a value of type T and back to decimal form, without change due to rounding or overflow.
+    The value of `std::numeric_limits<T>::digits10` is the number of base-10 digits that can be represented by the type T without change, that is, any number with this many significant decimal digits can be converted to a value of type T and back to decimal form, without change due to rounding or overflow. 
 
 !!! tip
 

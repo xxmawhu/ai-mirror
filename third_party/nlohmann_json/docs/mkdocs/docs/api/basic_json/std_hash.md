@@ -15,13 +15,13 @@ type of the JSON value is taken into account to have different hash values for `
 ??? example
 
     The example shows how to calculate hash values for different JSON values.
-
+     
     ```cpp
     --8<-- "examples/std_hash.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/std_hash.output"
     ```

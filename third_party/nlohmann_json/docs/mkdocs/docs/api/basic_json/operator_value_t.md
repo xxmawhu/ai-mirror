@@ -5,7 +5,7 @@ constexpr operator value_t() const noexcept;
 ```
 
 Return the type of the JSON value as a value from the [`value_t`](value_t.md) enumeration.
-
+    
 ## Return value
 
 the type of the JSON value
@@ -36,13 +36,13 @@ Constant.
 ??? example
 
     The following code exemplifies `operator value_t()` for all JSON types.
-
+    
     ```cpp
     --8<-- "examples/operator__value_t.cpp"
     ```
-
+    
     Output:
-
+    
     ```json
     --8<-- "examples/operator__value_t.output"
     ```

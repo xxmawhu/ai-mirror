@@ -86,40 +86,20 @@ target_link_options(am PRIVATE
     -Wl,--strip-all
 )
 
-include(FetchContent)
-
-FetchContent_Declare(cli11
-    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-    GIT_TAG v2.4.2
-)
-FetchContent_MakeAvailable(cli11)
+# Use vendored dependencies from third_party/ (no network downloads)
+add_subdirectory(third_party/CLI11)
 target_link_libraries(ai-mirror-bin PRIVATE CLI11::CLI11)
 
-FetchContent_Declare(toml11
-    URL "https://github.com/ToruNiina/toml11/archive/refs/tags/v4.2.0.tar.gz"
-)
-FetchContent_MakeAvailable(toml11)
+add_subdirectory(third_party/toml11)
 target_link_libraries(ai-mirror-bin PRIVATE toml11::toml11)
 
-FetchContent_Declare(spdlog
-    GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG v1.15.0
-)
-FetchContent_MakeAvailable(spdlog)
+add_subdirectory(third_party/spdlog)
 target_link_libraries(ai-mirror-bin PRIVATE spdlog::spdlog)
 
-FetchContent_Declare(nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
-)
-FetchContent_MakeAvailable(nlohmann_json)
+add_subdirectory(third_party/nlohmann_json)
 target_link_libraries(ai-mirror-bin PRIVATE nlohmann_json::nlohmann_json)
 
-FetchContent_Declare(ftxui
-    GIT_REPOSITORY https://github.com/ArthurSonzogni/ftxui
-    GIT_TAG v6.1.9
-)
-FetchContent_MakeAvailable(ftxui)
+add_subdirectory(third_party/ftxui)
 target_link_libraries(ai-mirror-bin PRIVATE ftxui::component)
 
 target_link_libraries(ai-mirror-bin PRIVATE pthread)
@@ -127,3 +107,57 @@ target_link_libraries(ai-mirror-bin PRIVATE pthread)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(ai-mirror-bin PRIVATE OpenSSL::Crypto)
 
+if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
+    enable_testing()
+    set(COMMON_SOURCES ${AI_MIRROR_SOURCES})
+    list(FILTER COMMON_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
+
+    # Unit tests for watch_stats (standalone binary, no main.cpp)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_watch_stats.cpp")
+        add_executable(test_watch_stats tests/unit/test_watch_stats.cpp
+            src/daemon/watch_stats.cpp
+            src/utils/shell.cpp
+            src/utils/logger.cpp
+            src/security/path_validator.cpp
+        )
+        target_include_directories(test_watch_stats PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        target_link_libraries(test_watch_stats PRIVATE
+            CLI11::CLI11
+            toml11::toml11
+            spdlog::spdlog
+            nlohmann_json::nlohmann_json
+            pthread
+        )
+        target_compile_options(test_watch_stats PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+        )
+        target_link_options(test_watch_stats PRIVATE
+            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+        )
+        add_test(NAME test_watch_stats COMMAND test_watch_stats)
+    endif()
+
+    # Additional tests can be added here following the same pattern
+
+    # Unit tests for parse_known_hosts_hosts (standalone binary)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_known_hosts.cpp")
+        add_executable(test_known_hosts tests/unit/test_known_hosts.cpp)
+        target_include_directories(test_known_hosts PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        target_link_libraries(test_known_hosts PRIVATE
+            CLI11::CLI11
+            toml11::toml11
+            spdlog::spdlog
+            nlohmann_json::nlohmann_json
+            pthread
+        )
+        target_compile_options(test_known_hosts PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+        )
+        target_link_options(test_known_hosts PRIVATE
+            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+        )
+        add_test(NAME test_known_hosts COMMAND test_known_hosts)
+    endif()
+endif()

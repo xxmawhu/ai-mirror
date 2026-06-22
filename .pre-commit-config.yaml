@@ -1,6 +1,9 @@
 # ai-mirror C++ project pre-commit config
 # Auto-installed by scripts/setup-hooks.sh
 
+# Exclude vendored dependencies from all hooks
+exclude: ^third_party/
+
 repos:
   # General hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks

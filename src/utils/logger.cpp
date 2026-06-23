@@ -1,7 +1,8 @@
 #include "ai_mirror/utils/logger.hpp"
 #include <memory>
 #include <mutex>
-#include <spdlog/sinks/stdout_color_sinks.h>
+// spdlog 1.15.x removed stderr_color_sink.h; use ansicolor_sink.h instead
+#include <spdlog/sinks/ansicolor_sink.h>
 #include <string>
 #include <vector>
 
@@ -11,8 +12,13 @@ static std::shared_ptr<spdlog::logger> g_logger;
 static std::once_flag g_logger_once;
 
 void init_logger(const std::string &level) {
-  // Always use stdout as the sole logging sink (no file logging for CLI tools)
-  auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+  // Use stderr as the sole logging sink.
+  // Rationale: CLI commands emit machine-readable output (e.g. JSON from
+  // `am cd --dry-run`) on stdout. Logging to stdout corrupts that output and
+  // breaks the shell integration's JSON parser (root cause of the
+  // "[fail] unknown action: error" bug). All diagnostic/info logging MUST go
+  // to stderr so stdout stays clean for data.
+  auto sink = std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
 
   g_logger = std::make_shared<spdlog::logger>("ai-mirror", sink);
 

@@ -1,5 +1,6 @@
 #include "ai_mirror/core/user_manager.hpp"
 #include "ai_mirror/security/path_validator.hpp"
+#include "ai_mirror/utils/hash_utils.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include "ai_mirror/utils/unique_fd.hpp"
@@ -16,35 +17,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include <openssl/evp.h>
-
 namespace ai_mirror::core {
 
 static const std::string STATE_FILE = ".am_status";
 
 static std::string sha256_hex(const std::string &input) {
-  unsigned char hash[32];
-  unsigned int hash_len = 0;
-  EVP_Digest(input.c_str(), input.size(), hash, &hash_len, EVP_sha256(),
-             nullptr);
-  std::ostringstream oss;
-  for (unsigned int i = 0; i < hash_len; ++i) {
-    oss << std::hex << std::setfill('0') << std::setw(2)
-        << static_cast<int>(hash[i]);
-  }
-  return oss.str();
+  return utils::SHA256::hash(input);
 }
 
 static std::string md5_hex(const std::string &input) {
-  unsigned char hash[16];
-  unsigned int hash_len = 0;
-  EVP_Digest(input.c_str(), input.size(), hash, &hash_len, EVP_md5(), nullptr);
-  std::ostringstream oss;
-  for (unsigned int i = 0; i < hash_len; ++i) {
-    oss << std::hex << std::setfill('0') << std::setw(2)
-        << static_cast<int>(hash[i]);
-  }
-  return oss.str();
+  return utils::MD5::hash(input);
 }
 
 static std::string make_state_content(const UserInfo &info,

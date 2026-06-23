@@ -1,4 +1,7 @@
-cmake_minimum_required(VERSION 3.28)
+# cmake 3.16 is the minimum required by the most demanding vendored dep
+# (toml11). Lowering from 3.28 to 3.16 broadens compatibility (Ubuntu 20.04
+# ships cmake 3.16) without losing any feature used by this project.
+cmake_minimum_required(VERSION 3.16)
 project(ai-mirror VERSION 0.1.0 LANGUAGES CXX)
 
 # Get git short hash for BUILD version

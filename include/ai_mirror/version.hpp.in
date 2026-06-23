@@ -8,8 +8,8 @@
 // - BUILD updated with each commit (git short hash or build number)
 // - Commit hook checks if version.hpp.in changed since last commit
 //
-// Last updated: 2026-06-23 (fix: stale mount inode mismatch false positive on
-//               BeeGFS — remove inode comparison, use target stat failure only)
+// Last updated: 2026-06-23 (improve: cmake_minimum_required 3.28→3.16 for
+//               broader compatibility; third-party vendored, no subtree)
 
 #define AI_MIRROR_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
 #define AI_MIRROR_VERSION_MINOR @PROJECT_VERSION_MINOR@

@@ -1970,51 +1970,88 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
         if (!mounted_targets.count(tgt.string())) {
           has_broken = true;
         } else {
-          // Check for stale mount by comparing inode/device
-          // This detects when source file was deleted and recreated (new inode)
-          // but mount still exists in /proc/mounts
-          struct stat source_st, target_st;
-          bool source_stat_ok = (stat(src->c_str(), &source_st) == 0);
+          // Only check for stale mount when target is inaccessible
+          // (beegfs scenario — stat() fails on stale bind mount target).
+          // Skip inode/device comparison because it is unreliable on
+          // distributed filesystems: BeeGFS bind mount targets do not
+          // preserve source inode numbers, causing false positives.
+          struct stat target_st;
           bool target_stat_ok = (stat(tgt.c_str(), &target_st) == 0);
 
           if (!target_stat_ok) {
-            // Target inaccessible (beegfs scenario)
+            // Target inaccessible — truly stale mount
             has_broken = true;
             utils::get_logger()->info(
                 "Health check: stale mount detected (target inaccessible): {}",
                 tgt.string());
-          } else if (source_stat_ok) {
-            // Check inode/device mismatch (ext4/xfs scenario)
-            if (source_st.st_ino != target_st.st_ino ||
-                source_st.st_dev != target_st.st_dev) {
-              has_broken = true;
-              utils::get_logger()->info(
-                  "Health check: stale mount detected (inode mismatch): {}",
-                  tgt.string());
-            }
           }
         }
       }
     }
 
     if (has_broken || missing_ssh) {
-      // Auto-fix: run update ONCE, then proceed regardless of result
-      // Never retry — prevents infinite loops
+      // Lightweight fix: remount missing mounts + fix SSH only.
+      // Do NOT call cmd_update()/do_configure() — full update with recursive
+      // chown takes ~10 minutes and is not needed for cd.
       std::cerr << "INFO: health issues detected:" << std::endl;
       if (has_broken)
         std::cerr << "  - broken/missing mounts" << std::endl;
       if (missing_ssh)
         std::cerr << "  - missing SSH authorized_keys" << std::endl;
-      std::cerr << "INFO: running auto-fix (one attempt only)..." << std::endl;
-      try {
-        if (cmd_update(target_str, verbose) != 0) {
-          std::cerr << "WARNING: auto-fix failed, proceeding anyway"
-                    << std::endl;
-        } else {
-          std::cerr << "INFO: auto-fix complete" << std::endl;
+      std::cerr << "INFO: running lightweight fix..." << std::endl;
+
+      bool fix_ok = true;
+
+      // Remount only missing mounts (skip inode check — unreliable on BeeGFS)
+      if (has_broken) {
+        auto fix_graft = core::Graft(prefix);
+        auto existing_mounts = fix_graft.list_mounts(ai_user);
+        std::set<std::string> mounted_targets;
+        for (const auto &m : existing_mounts) {
+          mounted_targets.insert(m.target.string());
         }
-      } catch (const std::exception &e) {
-        std::cerr << "WARNING: auto-fix exception: " << e.what() << std::endl;
+        for (const auto &mount_path : config.mount.paths) {
+          auto src = core::PathResolver::resolve(mount_path.string());
+          if (!src || !fs::exists(*src))
+            continue;
+          fs::path tgt = core::PathResolver::to_ai_user_path(
+              *src, ai_user, main_user, state->home_dir);
+          if (!mounted_targets.count(tgt.string())) {
+            utils::get_logger()->info(
+                "cd fix: remounting missing mount: {} -> {}", src->string(),
+                tgt.string());
+            if (!fix_graft.bind_mount(*src, tgt, true, state->uid, state->gid,
+                                      state->home_dir)) {
+              std::cerr << "  WARNING: failed to remount " << tgt.string()
+                        << std::endl;
+              fix_ok = false;
+            } else {
+              std::cerr << "  [OK] remounted: " << src->string() << " -> "
+                        << tgt.string() << std::endl;
+            }
+          }
+        }
+      }
+
+      // Fix SSH authorized_keys if missing (fast operation)
+      if (missing_ssh) {
+        auto fix_ssh = core::SSHManager();
+        fix_ssh.set_key_path(config.ssh.key_path);
+        fix_ssh.set_key_type(config.ssh.key_type);
+        if (fix_ssh.setup_passwordless(main_user, ai_user)) {
+          std::cerr << "  [OK] SSH authorized_keys fixed" << std::endl;
+        } else {
+          std::cerr << "  WARNING: failed to fix SSH authorized_keys"
+                    << std::endl;
+          fix_ok = false;
+        }
+      }
+
+      if (fix_ok) {
+        std::cerr << "INFO: lightweight fix complete" << std::endl;
+      } else {
+        std::cerr << "WARNING: lightweight fix had issues, proceeding anyway"
+                  << std::endl;
       }
     }
 

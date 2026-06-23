@@ -1946,114 +1946,15 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
   if (state) {
     std::string ai_user = state->username;
 
-    // Health check
-    auto graft = core::Graft(prefix);
-    auto mounts = graft.list_mounts(ai_user);
-    bool has_broken = false;
-    std::set<std::string> mounted_targets;
-    for (const auto &m : mounts) {
-      mounted_targets.insert(m.target.string());
-      if (!m.active)
-        has_broken = true;
-    }
-
-    bool missing_ssh =
-        !fs::exists(fs::path(state->home_dir) / ".ssh" / "authorized_keys", ec);
-
-    size_t expected_mounts = 0;
-    for (const auto &mp : config.mount.paths) {
-      auto src = core::PathResolver::resolve(mp.string());
-      if (src && fs::exists(*src)) {
-        expected_mounts++;
-        fs::path tgt = core::PathResolver::to_ai_user_path(
-            *src, ai_user, main_user, state->home_dir);
-        if (!mounted_targets.count(tgt.string())) {
-          has_broken = true;
-        } else {
-          // Only check for stale mount when target is inaccessible
-          // (beegfs scenario — stat() fails on stale bind mount target).
-          // Skip inode/device comparison because it is unreliable on
-          // distributed filesystems: BeeGFS bind mount targets do not
-          // preserve source inode numbers, causing false positives.
-          struct stat target_st;
-          bool target_stat_ok = (stat(tgt.c_str(), &target_st) == 0);
-
-          if (!target_stat_ok) {
-            // Target inaccessible — truly stale mount
-            has_broken = true;
-            utils::get_logger()->info(
-                "Health check: stale mount detected (target inaccessible): {}",
-                tgt.string());
-          }
-        }
-      }
-    }
-
-    if (has_broken || missing_ssh) {
-      // Lightweight fix: remount missing mounts + fix SSH only.
-      // Do NOT call cmd_update()/do_configure() — full update with recursive
-      // chown takes ~10 minutes and is not needed for cd.
-      std::cerr << "INFO: health issues detected:" << std::endl;
-      if (has_broken)
-        std::cerr << "  - broken/missing mounts" << std::endl;
-      if (missing_ssh)
-        std::cerr << "  - missing SSH authorized_keys" << std::endl;
-      std::cerr << "INFO: running lightweight fix..." << std::endl;
-
-      bool fix_ok = true;
-
-      // Remount only missing mounts (skip inode check — unreliable on BeeGFS)
-      if (has_broken) {
-        auto fix_graft = core::Graft(prefix);
-        auto existing_mounts = fix_graft.list_mounts(ai_user);
-        std::set<std::string> mounted_targets;
-        for (const auto &m : existing_mounts) {
-          mounted_targets.insert(m.target.string());
-        }
-        for (const auto &mount_path : config.mount.paths) {
-          auto src = core::PathResolver::resolve(mount_path.string());
-          if (!src || !fs::exists(*src))
-            continue;
-          fs::path tgt = core::PathResolver::to_ai_user_path(
-              *src, ai_user, main_user, state->home_dir);
-          if (!mounted_targets.count(tgt.string())) {
-            utils::get_logger()->info(
-                "cd fix: remounting missing mount: {} -> {}", src->string(),
-                tgt.string());
-            if (!fix_graft.bind_mount(*src, tgt, true, state->uid, state->gid,
-                                      state->home_dir)) {
-              std::cerr << "  WARNING: failed to remount " << tgt.string()
-                        << std::endl;
-              fix_ok = false;
-            } else {
-              std::cerr << "  [OK] remounted: " << src->string() << " -> "
-                        << tgt.string() << std::endl;
-            }
-          }
-        }
-      }
-
-      // Fix SSH authorized_keys if missing (fast operation)
-      if (missing_ssh) {
-        auto fix_ssh = core::SSHManager();
-        fix_ssh.set_key_path(config.ssh.key_path);
-        fix_ssh.set_key_type(config.ssh.key_type);
-        if (fix_ssh.setup_passwordless(main_user, ai_user)) {
-          std::cerr << "  [OK] SSH authorized_keys fixed" << std::endl;
-        } else {
-          std::cerr << "  WARNING: failed to fix SSH authorized_keys"
-                    << std::endl;
-          fix_ok = false;
-        }
-      }
-
-      if (fix_ok) {
-        std::cerr << "INFO: lightweight fix complete" << std::endl;
-      } else {
-        std::cerr << "WARNING: lightweight fix had issues, proceeding anyway"
-                  << std::endl;
-      }
-    }
+    // NOTE: am cd deliberately does NOT perform health check or mount repair.
+    // Background: stat()/fs::canonical() on a stale BeeGFS bind mount target
+    // enters uninterruptible D (uninterruptible sleep) state and hangs
+    // indefinitely — not even SIGKILL can interrupt it mid-syscall. This
+    // caused `am cd` to hang when any ai-user bind mount was stale.
+    // Health checks and mount repair belong to `am health` / `am auto-fix-all`
+    // which run in a context where a hang is tolerable. cd must remain a
+    // pure, fast switch operation so users can always reach their ai-user
+    // (SSH itself does not depend on bind mounts).
 
     // Validate SSH key exists
     std::string ssh_key = config.ssh.key_path.string();
@@ -2107,8 +2008,10 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
       }
     }
 
-    // Debug line for SSH troubleshooting (only when issues detected)
-    if (has_broken || missing_ssh || !key_authorized) {
+    // Debug line for SSH troubleshooting (only when key not authorized).
+    // NOTE: only stat ai-user's ~/.ssh here (never bind-mount targets) —
+    // stat() on a stale BeeGFS bind mount hangs in D state (see note above).
+    if (!key_authorized) {
       bool ssh_dir_exists = fs::exists(ssh_dir, ec) && !ec;
       bool auth_keys_exists = fs::exists(auth_keys, ec) && !ec;
       std::string ssh_dir_perms = "missing";

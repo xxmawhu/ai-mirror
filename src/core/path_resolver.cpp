@@ -59,7 +59,8 @@ fs::path PathResolver::to_ai_user_path(const fs::path &main_path,
   // This prevents double-prefixing when ai_home is under main_home.
   // Example: main_home=/home/user, ai_home=/home/user/project,
   //          main_path=/home/user/project/subdir
-  //          → return /home/user/project/subdir (not /home/user/project/project/subdir)
+  //          → return /home/user/project/subdir (not
+  //          /home/user/project/project/subdir)
   if (!ai_home.empty() && main_str.length() >= ai_home.length() &&
       main_str.substr(0, ai_home.length()) == ai_home) {
     // Verify it's a proper prefix (not just string match)

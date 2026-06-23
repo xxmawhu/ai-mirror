@@ -815,7 +815,7 @@ std::vector<MountEntry> Graft::health_check() const {
     bool is_virtual_device = !m.source.empty() && m.source.string()[0] != '/';
 
     if (is_virtual_device) {
-      // Virtual device: check if target (mount point) exists
+      // Virtual device: check if target (mount point) exists and is accessible
       if (!fs::exists(m.target, ec)) {
         MountEntry broken = m;
         broken.active = false;
@@ -827,6 +827,29 @@ std::vector<MountEntry> Graft::health_check() const {
         MountEntry broken = m;
         broken.active = false;
         issues.push_back(broken);
+        continue;
+      }
+
+      // Stale mount detection: compare inode/device between source and target
+      // This detects when source file was deleted and recreated (new inode)
+      // but mount still exists in /proc/mounts
+      struct stat source_st, target_st;
+      bool source_stat_ok = (stat(m.source.c_str(), &source_st) == 0);
+      bool target_stat_ok = (stat(m.target.c_str(), &target_st) == 0);
+
+      if (!target_stat_ok) {
+        // Target inaccessible (beegfs scenario)
+        MountEntry broken = m;
+        broken.active = false;
+        issues.push_back(broken);
+      } else if (source_stat_ok) {
+        // Check inode/device mismatch (ext4/xfs scenario)
+        if (source_st.st_ino != target_st.st_ino ||
+            source_st.st_dev != target_st.st_dev) {
+          MountEntry broken = m;
+          broken.active = false;
+          issues.push_back(broken);
+        }
       }
     }
   }

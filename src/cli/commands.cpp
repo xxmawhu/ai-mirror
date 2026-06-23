@@ -2710,7 +2710,7 @@ int cmd_auto_fix_all(bool verbose) {
     return 1;
   }
 
-  // Step 1: Get all unhealthy mounts
+  // Step 1: Get all unhealthy mounts (including stale mounts with inode mismatch)
   core::Graft graft(ctx.config.user.prefix);
   auto unhealthy = graft.health_check();
 
@@ -2724,6 +2724,44 @@ int cmd_auto_fix_all(bool verbose) {
   for (const auto &m : unhealthy) {
     std::cout << "  [FAIL] " << m.target.string() << std::endl;
   }
+
+  // Step 2: Force unmount all unhealthy mounts before remounting
+  std::cout << "\nForce unmounting unhealthy mounts..." << std::endl;
+  int unmount_failures = 0;
+  for (const auto &m : unhealthy) {
+    // Try lazy unmount first (handles busy mounts)
+    auto umount_result = utils::exec_safe({"umount", "-l", m.target.string()});
+    if (umount_result.exit_code == 0) {
+      std::cout << "  [OK] Unmounted: " << m.target.string() << std::endl;
+      // Remove the empty mount point file if it exists
+      std::error_code rm_ec;
+      fs::remove(m.target, rm_ec);
+      if (!rm_ec) {
+        std::cout << "  [OK] Removed mount point: " << m.target.string()
+                  << std::endl;
+      }
+    } else {
+      // Try force unmount as fallback
+      auto force_result =
+          utils::exec_safe({"umount", "-f", m.target.string()});
+      if (force_result.exit_code == 0) {
+        std::cout << "  [OK] Force unmounted: " << m.target.string()
+                  << std::endl;
+      } else {
+        std::cerr << "  [FAIL] Cannot unmount: " << m.target.string()
+                  << " - " << umount_result.stderr_output << std::endl;
+        unmount_failures++;
+      }
+    }
+  }
+
+  if (unmount_failures > 0) {
+    std::cerr << "Warning: " << unmount_failures
+              << " mount(s) could not be unmounted" << std::endl;
+  }
+
+  // Invalidate cache after unmounting
+  graft.invalidate_cache();
 
   // Step 2: Find unique project paths from unhealthy mount targets
   std::set<fs::path> projects_to_fix;
@@ -3157,11 +3195,7 @@ except (json.JSONDecodeError, KeyError) as e:
 ")"
 
 		if [[ "$_am_action" == "cd" ]]; then
-			if builtin cd "$_am_path" 2>/dev/null; then
-				echo "🪄🪄🪄🪄🪄🪄🪄🪄🪄🪄🪄🪄"
-			else
-				echo "[fail] cd to: $_am_path (directory not accessible)"
-			fi
+			builtin cd "$_am_path" 2>/dev/null
 			return 0
 		elif [[ "$_am_action" == "ssh" ]]; then
 			echo "🪄🪄🪄🪄🪄🪄🪄🪄🪄🪄🪄🪄"

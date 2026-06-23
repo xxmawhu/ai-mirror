@@ -19,6 +19,15 @@ main() {
 	echo "=== post-merge: deploying ai-mirror ==="
 	cd "$PROJECT_DIR"
 
+	# Sync submodules to the commit recorded in the main repo.
+	# Without this, `git pull` advances the main repo HEAD (and thus the
+	# submodule gitlink pointers) but leaves the submodule working trees at
+	# their old commits — `git status` then shows "modified: <submodule>
+	# (new commits)" and the repo appears dirty. `--init` handles a freshly
+	# cloned release checkout; `--recursive` covers nested submodules.
+	# [bash-code-review Rule 39] sudo not needed: submodules are user-writable.
+	git submodule update --init --recursive 2>&1 || true
+
 	# Re-run setup-hooks to ensure hooks are up-to-date
 	if [[ -f "scripts/setup-hooks.sh" ]]; then
 		bash scripts/setup-hooks.sh 2>&1 || true

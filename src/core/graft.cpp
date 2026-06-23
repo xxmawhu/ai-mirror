@@ -830,26 +830,24 @@ std::vector<MountEntry> Graft::health_check() const {
         continue;
       }
 
-      // Stale mount detection: compare inode/device between source and target
-      // This detects when source file was deleted and recreated (new inode)
-      // but mount still exists in /proc/mounts
-      struct stat source_st, target_st;
-      bool source_stat_ok = (stat(m.source.c_str(), &source_st) == 0);
+      // Stale mount detection.
+      // Background: a bind mount becomes stale when its source is deleted.
+      // The reliable, filesystem-agnostic signal is that stat() on the target
+      // fails (target becomes inaccessible). We intentionally do NOT compare
+      // inode/device numbers: on distributed filesystems such as BeeGFS, bind
+      // mount targets do not preserve the source's inode, so an inode
+      // comparison would flag every healthy BeeGFS mount as stale and trigger
+      // spurious umount + mount-point removal (data-loss risk). See issue
+      // 2026-06-23-2026-06-23-09-10-42-810-info-Stale-mount.md for the
+      // false-positive that destroyed /mnt/beegfs_data/.../.local/bin.
+      struct stat target_st;
       bool target_stat_ok = (stat(m.target.c_str(), &target_st) == 0);
 
       if (!target_stat_ok) {
-        // Target inaccessible (beegfs scenario)
+        // Target inaccessible — truly stale mount (all filesystems).
         MountEntry broken = m;
         broken.active = false;
         issues.push_back(broken);
-      } else if (source_stat_ok) {
-        // Check inode/device mismatch (ext4/xfs scenario)
-        if (source_st.st_ino != target_st.st_ino ||
-            source_st.st_dev != target_st.st_dev) {
-          MountEntry broken = m;
-          broken.active = false;
-          issues.push_back(broken);
-        }
       }
     }
   }

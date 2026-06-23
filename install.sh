@@ -34,6 +34,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ---- Helpers ----
+# Screen + log (key status lines only)
 _log() {
 	local ts
 	ts=$(date '+%Y-%m-%d %H:%M:%S')
@@ -41,14 +42,19 @@ _log() {
 	echo -e "$msg"
 	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$msg" >>"$INSTALL_LOG"
 }
+# Log only (verbose steps — never shown on screen)
+_log_file() {
+	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$(date '+%Y-%m-%d %H:%M:%S') $1" >>"$INSTALL_LOG"
+}
 
 log() { _log "${GREEN}[install]${NC} $*"; }
 # warn:降级自error——安装过程中某些步骤失败不影响整体流程（如可选组件缺失），属于预期内可容忍的异常
 warn() { _log "${YELLOW}[warn]${NC} $*"; }
 error() { _log "${RED}[error]${NC} $*" >&2; }
 info() { _log "${CYAN}[info]${NC} $*"; }
-
-separator() { _log "============================================================"; }
+# Key step status: the ONLY lines a user sees for routine progress
+ok()   { _log "${GREEN}[OK]${NC}   $*"; }
+fail() { _log "${RED}[FAIL]${NC} $*"; }
 
 require_sudo() {
 	if ! command -v sudo &>/dev/null; then
@@ -162,21 +168,14 @@ phase_setup() {
 
 	: >"$INSTALL_LOG"
 
-	separator
-	info "ai-mirror installer v0.1.0"
-	info "Log file: ${INSTALL_LOG}"
-	separator
-
-	log "Install started at $(date)"
-	log "PREFIX=${PREFIX}"
-	log "CONFIG_DIR=${CONFIG_DIR}"
-	log "DATA_DIR=${DATA_DIR}"
+	info "ai-mirror installer v0.1.0 (log: ${INSTALL_LOG})"
+	_log_file "Install started at $(date)"
+	_log_file "PREFIX=${PREFIX} CONFIG_DIR=${CONFIG_DIR} DATA_DIR=${DATA_DIR}"
 }
 
 # ---- Phase: Install system deps ----
 phase_system_deps() {
 	CURRENT_PHASE="system_deps"
-	log "Checking system dependencies..."
 
 	local -A pkg_cmd=(
 		[cmake]=cmake
@@ -196,52 +195,40 @@ phase_system_deps() {
 
 	if [[ ${#missing[@]} -gt 0 ]]; then
 		require_sudo
-		log "Installing missing packages: ${missing[*]}"
-		if ! sudo apt-get update -qq 2>&1 | tee -a "$INSTALL_LOG"; then
+		info "Installing missing packages: ${missing[*]}"
+		if ! sudo apt-get update -qq >>"$INSTALL_LOG" 2>&1; then
 			ERROR_MSG="apt-get update failed"
+			fail "依赖安装失败 (apt-get update)"
 			return 1
 		fi
-		if ! sudo apt-get install -y -qq "${missing[@]}" 2>&1 | tee -a "$INSTALL_LOG"; then
+		if ! sudo apt-get install -y -qq "${missing[@]}" >>"$INSTALL_LOG" 2>&1; then
 			ERROR_MSG="apt-get install failed for: ${missing[*]}"
+			fail "依赖安装失败: ${missing[*]}"
 			return 1
 		fi
 	fi
 
-	local gxx_version
-	gxx_version=$(g++ -dumpversion 2>/dev/null || echo "unknown")
-	local cmake_version
-	cmake_version=$(cmake --version 2>/dev/null | head -1 || echo "unknown")
+	# Versions go to log only
+	_log_file "g++=$(g++ -dumpversion 2>/dev/null || echo unknown) cmake=$(cmake --version 2>/dev/null | head -1 || echo unknown) git=$(git --version 2>/dev/null || echo unknown)"
 
-	log "  g++:    ${gxx_version}"
-	log "  cmake:  ${cmake_version}"
-	log "  git:    $(git --version 2>/dev/null || echo 'unknown')"
-
-	if [[ "$(ssh -V 2>&1)" ]]; then
-		log "  ssh:    $(ssh -V 2>&1)"
-	fi
-
-	log "System dependencies OK"
+	ok "系统依赖"
 }
 
 # ---- Phase: Build ----
 phase_build() {
 	CURRENT_PHASE="build"
-	log "Building ai-mirror (C++20)..."
+	info "构建中 (C++20)..."
 
 	mkdir -p "${BUILD_DIR}"
 
 	local need_configure=false
 	if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
-		log "  No CMake cache found, running full configure..."
 	elif [[ ! -f "${BUILD_DIR}/Makefile" ]]; then
 		need_configure=true
-		log "  CMake cache exists but Makefile missing, reconfiguring..."
 	elif [[ "${SCRIPT_DIR}/CMakeLists.txt" -nt "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
-		log "  CMakeLists.txt changed, reconfiguring..."
 	else
-		# Check if any header or source file is newer than the build cache
 		local cache_mtime
 		cache_mtime=$(stat -c '%Y' "${BUILD_DIR}/CMakeCache.txt")
 		local newer_src
@@ -250,60 +237,56 @@ phase_build() {
 			-newer "${BUILD_DIR}/CMakeCache.txt" -print -quit 2>/dev/null)
 		if [[ -n "$newer_src" ]]; then
 			need_configure=true
-			log "  Source/header changed ($(basename "$newer_src")), reconfiguring..."
 		fi
 	fi
+	_log_file "need_configure=$need_configure"
 
 	if $need_configure; then
-		log "  Running cmake..."
 		if ! cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
 			-DCMAKE_CXX_COMPILER=g++ \
 			-DCMAKE_BUILD_TYPE=Release \
-			2>&1 | tee -a "$INSTALL_LOG"; then
+			>>"$INSTALL_LOG" 2>&1; then
 			ERROR_MSG="CMake configure failed"
+			fail "构建失败 (cmake configure)"
+			tail -20 "$INSTALL_LOG" >&2
 			return 1
 		fi
-	else
-		log "  CMake cache exists, skipping configure..."
 	fi
 
-	log "  Compiling..."
-	if ! cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1 | tee -a "$INSTALL_LOG"; then
+	if ! cmake --build "${BUILD_DIR}" -j"$(nproc)" >>"$INSTALL_LOG" 2>&1; then
 		ERROR_MSG="Build compilation failed"
+		fail "构建失败 (编译)"
+		tail -20 "$INSTALL_LOG" >&2
 		return 1
 	fi
 
-	log "Build successful"
+	ok "构建"
 }
 
 # ---- Phase: Verify ----
 phase_verify() {
 	CURRENT_PHASE="verify"
-	log "Verifying binary..."
 
 	local bin="${BUILD_DIR}/bin/${BIN_NAME}"
 
 	if [[ ! -x "$bin" ]]; then
 		ERROR_MSG="Binary not found or not executable: ${bin}"
+		fail "验证失败 (二进制缺失)"
 		return 1
 	fi
 
-	log "  ${BIN_NAME} ($(stat -c%s "$bin") bytes)"
+	_log_file "binary=$(stat -c%s "$bin") bytes"
 
-	log "  Testing --help output..."
-	local help_output
-	local help_exit
+	local help_output help_exit
 	help_output=$("$bin" --help 2>&1) && help_exit=0 || help_exit=$?
 
 	if [[ $help_exit -ne 0 ]]; then
-		warn "  ${BIN_NAME} --help returned non-zero (exit=$help_exit)"
-		warn "  Output: ${help_output}"
-		warn "  This may indicate a crash or terminal compatibility issue"
+		_log_file "${BIN_NAME} --help returned non-zero (exit=$help_exit): ${help_output}"
+		# warn:降级自error——--help 非零退出可能是终端兼容问题，不影响安装
+		warn "验证: --help 返回非零 (exit=$help_exit，可能终端兼容问题)"
 	else
-		log "  --help works correctly"
+		ok "验证"
 	fi
-
-	log "Binary verified OK"
 }
 
 # ---- Version Management ----
@@ -343,80 +326,71 @@ cleanup_old_versions() {
 phase_install() {
 	CURRENT_PHASE="install"
 	require_sudo
-	log "Installing binaries to ${PREFIX}/bin/..."
 
-	# Get version from CMakeLists.txt
 	local VERSION
 	VERSION=$(get_version)
-	log "  Version: ${VERSION}"
 
 	if ! sudo install -d "${PREFIX}/bin"; then
 		ERROR_MSG="Failed to create directory: ${PREFIX}/bin"
+		fail "安装失败 (创建 ${PREFIX}/bin)"
 		return 1
 	fi
 
-	# Install wrapper (am)
 	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${WRAPPER_NAME}" "${PREFIX}/bin/${WRAPPER_NAME}"; then
 		ERROR_MSG="Failed to install wrapper to ${PREFIX}/bin/${WRAPPER_NAME}"
+		fail "安装失败 (${WRAPPER_NAME})"
 		return 1
 	fi
-	log "  ${PREFIX}/bin/${WRAPPER_NAME}  ($(sudo stat -c%s "${PREFIX}/bin/${WRAPPER_NAME}") bytes)"
 
-	# Install versioned binary (ai-mirror-bin.<version>)
 	local VERSIONED_BIN="${BIN_NAME}.${VERSION}"
 	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${VERSIONED_BIN}"; then
 		ERROR_MSG="Failed to install versioned binary to ${PREFIX}/bin/${VERSIONED_BIN}"
+		fail "安装失败 (${VERSIONED_BIN})"
 		return 1
 	fi
-	log "  ${PREFIX}/bin/${VERSIONED_BIN}  ($(sudo stat -c%s "${PREFIX}/bin/${VERSIONED_BIN}") bytes)"
 
 	# Create symlink: ai-mirror-bin -> ai-mirror-bin.<version> (relative path, atomic)
 	cd "${PREFIX}/bin"
 	if ! sudo ln -sfn "${VERSIONED_BIN}" "${BIN_NAME}"; then
 		ERROR_MSG="Failed to create symlink ${BIN_NAME} -> ${VERSIONED_BIN}"
+		fail "安装失败 (symlink)"
+		cd "${SCRIPT_DIR}"
 		return 1
 	fi
-	log "  ${PREFIX}/bin/${BIN_NAME} -> ${VERSIONED_BIN} (symlink)"
 	cd "${SCRIPT_DIR}"
 
-	# Cleanup old versions (keep at most 2 old versions)
+	_log_file "installed: ${PREFIX}/bin/${WRAPPER_NAME}, ${PREFIX}/bin/${VERSIONED_BIN} -> ${BIN_NAME}"
+
 	cleanup_old_versions "${PREFIX}/bin" "${BIN_NAME}" "${VERSION}"
 
 	# Remove old am.sh from /etc/profile.d/ if present (legacy cleanup)
 	if sudo test -f /etc/profile.d/am.sh; then
 		sudo rm -f /etc/profile.d/am.sh
-		log "  Removed legacy /etc/profile.d/am.sh"
+		_log_file "Removed legacy /etc/profile.d/am.sh"
 	fi
 
 	# Configure git safe.directory for project repository (fix dubious ownership)
-	log "Configuring git safe.directory..."
 	local project_repo
 	project_repo=$(cd "${SCRIPT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}")
 	if [[ -d "$project_repo" ]]; then
-		# Add to system-wide git config (requires sudo)
 		sudo git config --system --add safe.directory "$project_repo" 2>/dev/null || true
-		log "  Added $project_repo to git safe.directory (system config)"
+		_log_file "git safe.directory += $project_repo"
 	fi
 
 	# Install bash completion
-	log "Installing bash completion..."
 	local completion_src="${SCRIPT_DIR}/completions/am-completion.bash"
 	if [[ -f "$completion_src" ]]; then
 		sudo install -d /etc/bash_completion.d
 		sudo install -m 0644 "$completion_src" /etc/bash_completion.d/am
-		log "  /etc/bash_completion.d/am"
+		_log_file "bash completion -> /etc/bash_completion.d/am"
 	else
-		warn "  completions/am-completion.bash not found, skipping bash completion install"
+		# warn:降级自error——补全文件缺失不影响核心功能
+		warn "bash 补全文件缺失，跳过"
 	fi
 
-	log "Setting up data directory ${DATA_DIR}/..."
-	sudo install -d "${DATA_DIR}"
-	sudo chmod 0755 "${DATA_DIR}"
+	sudo install -d "${DATA_DIR}"; sudo chmod 0755 "${DATA_DIR}"
+	sudo install -d "${CONFIG_DIR}"; sudo install -d "${CONFIG_DIR}/sudoers.d"
 
-	log "Setting up config directory ${CONFIG_DIR}/..."
-	sudo install -d "${CONFIG_DIR}"
-
-	sudo install -d "${CONFIG_DIR}/sudoers.d"
 	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
 	sudo tee "$sudoers_file" >/dev/null <<SUDOERS
 # ai-mirror sudo rules
@@ -450,50 +424,17 @@ SUDOERS
 
 	if ! sudo getent group ai-mirror &>/dev/null; then
 		sudo groupadd --system ai-mirror 2>/dev/null || true
-		log "  Created system group: ai-mirror"
 	fi
 
-	log "Install phase complete"
+	ok "安装 v${VERSION}"
 }
 
 # ---- Phase: Summary ----
 phase_summary() {
 	local VERSION
 	VERSION=$(get_version)
-	separator
-	log "INSTALL COMPLETE (v${VERSION})"
-	separator
-	log ""
-	log "Installed binaries:"
-	log "  ${PREFIX}/bin/${WRAPPER_NAME}                (wrapper, auto sudo elevation)"
-	log "  ${PREFIX}/bin/${BIN_NAME}.${VERSION}  (versioned binary)"
-	log "  ${PREFIX}/bin/${BIN_NAME}           -> ${BIN_NAME}.${VERSION} (symlink)"
-	log "  /etc/bash_completion.d/am             (bash completion, sourced on login)"
-	log ""
-	log "Data directory:"
-	log "  ${DATA_DIR}/"
-	log ""
-	log "Sudoers:"
-	log "  ${CONFIG_DIR}/sudoers.d/ai-mirror"
-	log ""
-	log "Architecture:"
-	log "  User calls:        am create /path"
-	log "  Wrapper checks:    non-root → sudo ai-mirror-bin create /path"
-	log "  Wrapper checks:    root → ai-mirror-bin create /path"
-	log ""
-	log "Quick start:"
-	log "  1. Add user to group:     sudo usermod -aG ai-mirror \$USER"
-	log "  2. Create project user:   am create /path/to/project"
-	log "  3. Change directory:      am cd /path/to/project   (SSH to AI user)"
-	log "  4. Grant write access:    am mkdir /path/to/dir <ai-user>"
-	log "  5. List users:            am list"
-	log "  6. Remove project:        am rm /path/to/project"
-	log ""
-	log "Uninstall:"
-	log "  bash ${SCRIPT_DIR}/install.sh --clean"
-	log ""
-	log "Full log: ${INSTALL_LOG}"
-	separator
+	ok "安装完成 v${VERSION}: ${PREFIX}/bin/${WRAPPER_NAME}  (source ~/.bashrc 生效)"
+	_log_file "Full log: ${INSTALL_LOG}"
 }
 
 # ---- Phase: Clean ----
@@ -565,9 +506,10 @@ phase_clean() {
 
 	if sudo test -d "${DATA_DIR}"; then
 		if ! sudo rmdir "${DATA_DIR}" 2>/dev/null; then
-			warn "  Data dir ${DATA_DIR}/ not empty, skipping removal"
+			# warn:降级自error——data dir 非空可能是运行中产生的数据，跳过删除不影响卸载
+			warn "Data dir ${DATA_DIR}/ 非空，跳过删除"
 		else
-			log "  Removed data dir ${DATA_DIR}/"
+			_log_file "Removed data dir ${DATA_DIR}/"
 		fi
 	fi
 
@@ -584,7 +526,7 @@ main() {
 		phase_system_deps || return $?
 		phase_build || return $?
 		phase_verify || return $?
-		log "Build-only complete. Binary in ${BUILD_DIR}/bin/"
+		ok "构建完成: ${BUILD_DIR}/bin/"
 		;;
 	--clean)
 		CURRENT_PHASE="clean"

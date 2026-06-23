@@ -1967,8 +1967,33 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
         expected_mounts++;
         fs::path tgt = core::PathResolver::to_ai_user_path(
             *src, ai_user, main_user, state->home_dir);
-        if (!mounted_targets.count(tgt.string()))
+        if (!mounted_targets.count(tgt.string())) {
           has_broken = true;
+        } else {
+          // Check for stale mount by comparing inode/device
+          // This detects when source file was deleted and recreated (new inode)
+          // but mount still exists in /proc/mounts
+          struct stat source_st, target_st;
+          bool source_stat_ok = (stat(src->c_str(), &source_st) == 0);
+          bool target_stat_ok = (stat(tgt.c_str(), &target_st) == 0);
+
+          if (!target_stat_ok) {
+            // Target inaccessible (beegfs scenario)
+            has_broken = true;
+            utils::get_logger()->info(
+                "Health check: stale mount detected (target inaccessible): {}",
+                tgt.string());
+          } else if (source_stat_ok) {
+            // Check inode/device mismatch (ext4/xfs scenario)
+            if (source_st.st_ino != target_st.st_ino ||
+                source_st.st_dev != target_st.st_dev) {
+              has_broken = true;
+              utils::get_logger()->info(
+                  "Health check: stale mount detected (inode mismatch): {}",
+                  tgt.string());
+            }
+          }
+        }
       }
     }
 

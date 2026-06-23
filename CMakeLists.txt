@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.28)
 project(ai-mirror VERSION 0.1.0 LANGUAGES CXX)
 
 # Get git short hash for BUILD version
@@ -103,6 +103,9 @@ add_subdirectory(third_party/ftxui)
 target_link_libraries(ai-mirror-bin PRIVATE ftxui::component)
 
 target_link_libraries(ai-mirror-bin PRIVATE pthread)
+
+find_package(OpenSSL REQUIRED)
+target_link_libraries(ai-mirror-bin PRIVATE OpenSSL::Crypto)
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     enable_testing()

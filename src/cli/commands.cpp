@@ -438,40 +438,24 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     fs::path target = core::PathResolver::to_ai_user_path(source, username,
                                                           main_user, home_dir);
 
-    // Check if target is mounted and whether it's stale
-    // A bind mount becomes stale when the source file is deleted and recreated
-    // (new inode) On beegfs: target becomes inaccessible (stat fails) On
-    // ext4/xfs: target is still accessible but inode/device mismatch with
-    // source
+    // Check if target is mounted and whether it's stale.
+    // A bind mount becomes stale when its source is deleted, making the
+    // target inaccessible (stat fails). We do NOT compare inode/device:
+    // on BeeGFS, bind mount targets do not preserve source inodes, so an
+    // inode comparison flags every healthy mount as stale (false positive
+    // that caused spurious umount + mount-point deletion — see issue
+    // 2026-06-23-2026-06-23-09-10-42-810-info-Stale-mount.md).
     bool is_mounted = ctx.graft->is_mounted(target);
 
-    // Check for stale mount by comparing inode/device
     bool is_stale = false;
-    struct stat source_st, target_st;
-    bool source_stat_ok = (stat(source.c_str(), &source_st) == 0);
+    struct stat target_st;
     bool target_stat_ok = (stat(target.c_str(), &target_st) == 0);
 
-    if (is_mounted) {
-      if (!target_stat_ok) {
-        // Case 1: Target inaccessible (beegfs scenario)
-        // Mount exists in /proc/mounts but stat() fails
-        is_stale = true;
-        utils::get_logger()->info(
-            "Stale mount detected (target inaccessible): {}", target.string());
-      } else if (source_stat_ok) {
-        // Case 2: Target accessible but inode/device mismatch (ext4/xfs
-        // scenario) This happens when source file was deleted and recreated
-        // (new inode)
-        if (source_st.st_ino != target_st.st_ino ||
-            source_st.st_dev != target_st.st_dev) {
-          is_stale = true;
-          utils::get_logger()->info(
-              "Stale mount detected (inode mismatch): source ino={} dev={}, "
-              "target ino={} dev={}",
-              source_st.st_ino, source_st.st_dev, target_st.st_ino,
-              target_st.st_dev);
-        }
-      }
+    if (is_mounted && !target_stat_ok) {
+      // Target inaccessible — truly stale mount (all filesystems).
+      is_stale = true;
+      utils::get_logger()->info(
+          "Stale mount detected (target inaccessible): {}", target.string());
     }
 
     if (is_stale) {

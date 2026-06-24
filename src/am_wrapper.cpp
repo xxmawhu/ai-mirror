@@ -35,7 +35,7 @@ static const char *REAL_BIN = "/usr/local/bin/ai-mirror-bin";
 static bool needs_sudo(const std::string &cmd) {
   static const char *sudo_cmds[] = {
       "create", "update",       "rm", "force-destroy", "mkdir", "touch", "cp",
-      "mv",     "auto-fix-all", "cd", "frz",          nullptr,
+      "mv",     "auto-fix-all", "cd", "frz",           nullptr,
   };
   for (int i = 0; sudo_cmds[i]; i++) {
     if (cmd == sudo_cmds[i])

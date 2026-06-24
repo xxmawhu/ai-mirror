@@ -1500,7 +1500,8 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   // Detect file owner
   std::string owner = core::PathResolver::detect_owner_user(file);
   if (owner.empty()) {
-    std::cerr << "❄️ Cannot determine file owner: " << file.string() << std::endl;
+    std::cerr << "❄️ Cannot determine file owner: " << file.string()
+              << std::endl;
     return 1;
   }
 
@@ -1522,7 +1523,8 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   int fd = open(file.c_str(), O_RDONLY | O_NOFOLLOW);
   if (fd < 0) {
     if (errno == ELOOP) {
-      std::cerr << "❄️ File replaced with symlink: " << file.string() << std::endl;
+      std::cerr << "❄️ File replaced with symlink: " << file.string()
+                << std::endl;
     } else {
       std::cerr << "❄️ Cannot open file: " << file.string() << " - "
                 << strerror(errno) << std::endl;
@@ -1534,7 +1536,8 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   struct stat fd_st;
   if (fstat(fd, &fd_st) != 0 || !S_ISREG(fd_st.st_mode)) {
     close(fd);
-    std::cerr << "❄️ File is no longer a regular file: " << file.string() << std::endl;
+    std::cerr << "❄️ File is no longer a regular file: " << file.string()
+              << std::endl;
     return 1;
   }
 

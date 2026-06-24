@@ -118,9 +118,9 @@ int parse_and_run(int argc, char **argv) {
   std::string frz_path;
   auto *frz_cmd = app.add_subcommand(
       "frz", "冻结文件\n"
-              "  将 ai-user 拥有的文件所有权转回 main user，权限设为 644。\n"
-              "  要求文件是普通文件（非软链接/目录），属于当前用户的 ai-user。\n"
-              "  成功输出 ❄️，失败输出原因");
+             "  将 ai-user 拥有的文件所有权转回 main user，权限设为 644。\n"
+             "  要求文件是普通文件（非软链接/目录），属于当前用户的 ai-user。\n"
+             "  成功输出 ❄️，失败输出原因");
   frz_cmd->add_option("file", frz_path, "文件路径（属于 ai-user 的普通文件）")
       ->required();
 

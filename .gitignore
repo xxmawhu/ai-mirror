@@ -7,6 +7,7 @@ memory/
 log/
 .cache/
 verification/
+tmp-issues/
 pyproject.toml
 docker/
 !docker/Dockerfile.smoke

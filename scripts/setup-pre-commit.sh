@@ -77,16 +77,36 @@ main() {
 	else
 		log_file INFO "install" "pre-commit not found, installing..."
 		screen_out "🔍" "installing pre-commit..."
-		if command -v pip &>/dev/null; then
-			pip install pre-commit >>"$LOG_FILE" 2>&1
+		if command -v pipx &>/dev/null; then
+			# pipx is the recommended installer for Python apps (PEP 668 safe)
+			pipx install pre-commit >>"$LOG_FILE" 2>&1
 		elif command -v pip3 &>/dev/null; then
-			pip3 install pre-commit >>"$LOG_FILE" 2>&1
+			pip3 install --user pre-commit >>"$LOG_FILE" 2>&1
+		elif command -v pip &>/dev/null; then
+			pip install --user pre-commit >>"$LOG_FILE" 2>&1
 		else
-			log_file ERROR "install" "pip/pip3 not found"
+			log_file ERROR "install" "pipx/pip3/pip not found"
 			screen_out "❌" "install pre-commit"
 			exit 1
 		fi
-		log_file PASS "install" "pre-commit installed"
+
+		# After installation, ensure pre-commit is on PATH
+		if ! command -v pre-commit &>/dev/null; then
+			local pipx_bin_dir
+			pipx_bin_dir=$(pipx environment 2>/dev/null | grep PIPX_BIN_DIR | cut -d= -f2-)
+			if [ -n "$pipx_bin_dir" ] && [ -f "$pipx_bin_dir/pre-commit" ]; then
+				export PATH="$pipx_bin_dir:$PATH"
+				log_file INFO "path" "added $pipx_bin_dir to PATH"
+			elif [ -f "$HOME/.local/bin/pre-commit" ]; then
+				export PATH="$HOME/.local/bin:$PATH"
+				log_file INFO "path" "added $HOME/.local/bin to PATH"
+			else
+				log_file ERROR "path" "pre-commit installed but not found on PATH"
+				screen_out "❌" "pre-commit not found after install"
+				exit 1
+			fi
+		fi
+		log_file PASS "install" "pre-commit installed via pipx/pip"
 		screen_out "✅" "pre-commit installed"
 	fi
 

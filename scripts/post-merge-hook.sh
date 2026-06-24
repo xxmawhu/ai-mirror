@@ -19,16 +19,20 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ---- Issue reporting helpers ----
 
-# Detect release deployment context: path contains /release/
+# Detect release deployment context: ~maxx/release (production checkout).
+# Matches $HOME/release (whoever runs git pull) and ~maxx/release explicitly,
+# so other unrelated /release/ paths on the system are not mistaken for the
+# ai-mirror production deploy.
 is_release_deploy() {
 	case "$PROJECT_DIR" in
-	*/release/*) return 0 ;;
+	"$HOME/release"/*) return 0 ;;        # e.g. ~maxx/release/ai-mirror
+	*/maxx/release/*) return 0 ;;         # explicit ~maxx/release fallback
 	*) return 1 ;;
 	esac
 }
 
 # Derive dev project path from release path.
-# ~/release/ai-mirror -> ~/dev/aimirror/ai-mirror
+# ~maxx/release/ai-mirror -> ~maxx/dev/aimirror/ai-mirror
 dev_project_path() {
 	echo "$PROJECT_DIR" | sed 's|/release/|/dev/aimirror/|'
 }

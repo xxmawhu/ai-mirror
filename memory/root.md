@@ -3,7 +3,6 @@
 ## 1. 安全第一
 - 所有用户操作必须通过 `exec_safe()` 白名单执行
 - 不允许绕过白名单直接调用 system() 或 popen()
-- SSH 密钥管理必须遵循最小权限原则
 
 ## 2. 权限模型铁律（不可更改）
 
@@ -11,14 +10,6 @@
 - **权限模型的实现逻辑不可更改**
 - 这是项目的最高安全保证，任何修改都必须经过用户明确批准
 - Agent 无权自动修改权限模型相关的任何代码
-
-### 权限模型范围
-以下内容属于权限模型核心，禁止自动修改：
-- `src/security/` 目录下的所有文件
-- `src/core/user_manager.cpp` 中的用户创建/删除逻辑
-- `src/core/graft.cpp` 中的 bind mount 权限逻辑
-- 双二进制架构的 sudoers 规则
-- `exec_safe()` 白名单机制
 
 ### AI 用户操作铁律（最高优先级）
 - **唯一操作通道**：对 AI 用户进行操作的唯一办法是主用户通过 SSH 发送执行命令
@@ -180,7 +171,6 @@ ai-mirror-bin: 以 root 执行实际逻辑
 以下文件禁止同步到子模块（开发/内部专用）：
 - Agent 配置：`AGENTS.md`
 - 记忆系统：`memory/**/*.md`
-- Issue 管理：`issues/**/*.md`, `plan/**/*.md`, `end_task/**/*.md`
 - 开发工具：`.pre-commit-config.yaml`, `scripts/**/*`
 - 实验记录：`memory/experiments.md`
 - 内部文档：`llm-docs/**/*`

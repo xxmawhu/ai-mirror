@@ -1,193 +1,172 @@
 #!/usr/bin/env bash
 #
-# ai-mirror commit-hook: six-phase validation
+# ai-mirror commit-hook: four-phase validation
 # Phase 0: Version check (version.hpp.in must be updated)
 # Phase 1: Code check (clang-format dry-run)
-# Phase 1b: File permissions check (source files must be 600)
 # Phase 2: Build verification (cmake)
 # Phase 3: Unit tests (Docker, no host root required)
-# Phase 4: Submodule sync (minimal exposure, root.md Section 9)
 #
-# Note: Phase 4 syncs AFTER commit success (not blocking commit)
-#       To ensure sync runs, use: git commit && bash scripts/sync-submodules.sh
-#
-# [log-review] 日志输出到 ./log/hook/ (Rule 2/9)
+# [git-tidy] 屏幕简洁 / 日志详尽，严格分离
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 LOG_DIR="$PROJECT_DIR/log/hook"
-LOG_FILE="$LOG_DIR/commit-$(date +%Y-%m-%d).log"
-
-# Ensure log directory exists
 mkdir -p "$LOG_DIR"
+HOOK_NAME="commit-hook"
+LOG_FILE="$LOG_DIR/${HOOK_NAME}.$(date +%Y%m%d).log"
 
-# Tee all output to log file (Rule 2: screen output must tee to ./log/)
-exec > >(tee -a "$LOG_FILE") 2>&1
+# 详尽日志：写日志文件，不打扰屏幕
+log_file() {
+	local level="$1"
+	shift
+	local stage="$1"
+	shift
+	echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] [stage:$stage] $*" >>"$LOG_FILE"
+}
 
-PASS=0
-FAIL=0
-
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-log_status() {
-	local exit_code=$1
-	local name=$2
-	local detail=$3
-	if [[ $exit_code -eq 0 ]]; then
-		echo -e "${GREEN}  ✅ PASSED${NC}: ${name}"
-		PASS=$((PASS + 1))
+# 极简屏幕输出
+screen_out() {
+	local emoji="$1"
+	shift
+	local stage="$1"
+	shift
+	if [ "$emoji" = "❌" ]; then
+		echo "$emoji $stage（详见 log/hook/$(basename "$LOG_FILE")）"
 	else
-		echo -e "${RED}  ❌ FAILED${NC}: ${name}"
-		if [[ -n "$detail" ]]; then
-			echo -e "${YELLOW}    ${detail}${NC}"
-		fi
-		FAIL=$((FAIL + 1))
+		echo "$emoji $stage"
+	fi
+}
+
+# 阶段执行器
+run_stage() {
+	local stage="$1"
+	shift
+	local start
+	start=$(date +%s)
+	screen_out "🔍" "$stage..."
+	log_file INFO "$stage" "start"
+	if "$@" >>"$LOG_FILE" 2>&1; then
+		local elapsed
+		elapsed=$(($(date +%s) - start))
+		log_file PASS "$stage" "elapsed=${elapsed}s"
+		screen_out "✅" "$stage"
+		return 0
+	else
+		local rc=$?
+		local elapsed
+		elapsed=$(($(date +%s) - start))
+		log_file FAIL "$stage" "exit_code=$rc, elapsed=${elapsed}s"
+		log_file ERROR "$stage" "command: $*"
+		screen_out "❌" "$stage"
+		return $rc
 	fi
 }
 
 main() {
-	echo -e "${CYAN}=== commit-hook: ai-mirror ===${NC}"
-	echo ""
+	# 记录触发上下文
+	local branch
+	branch=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')
+	local commit
+	commit=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo 'unknown')
+	log_file INFO init "$HOOK_NAME triggered by user=$(whoami), branch=$branch, commit=$commit"
+	screen_out "🔍" "$HOOK_NAME [$branch@$commit]"
+
+	local fail=0
 
 	# ============================================
 	# Phase 0: Version check
 	# ============================================
-	echo -e "${CYAN}--- Phase 0: Version Check ---${NC}"
-
-	local VERSION_FILE="$PROJECT_DIR/include/ai_mirror/version.hpp.in"
-	if [[ -f "$VERSION_FILE" ]]; then
-		# Check if version file changed in staged files
+	local version_file="$PROJECT_DIR/include/ai_mirror/version.hpp.in"
+	if [[ -f "$version_file" ]]; then
 		if git diff --cached --name-only | grep -q "version.hpp.in"; then
-			log_status 0 "version update" "version.hpp.in changed in commit"
+			log_file PASS "version" "version.hpp.in changed in commit"
+			screen_out "✅" "version check"
 		else
-			# Check if any source files changed (excluding version file itself)
-			local CHANGED
-			CHANGED=$(git diff --cached --name-only | grep -E "^(src/|include/)" | grep -v "version.hpp" | head -1)
-			if [[ -n "$CHANGED" ]]; then
-				log_status 1 "version update required" "source changed but version.hpp.in not updated"
-				echo -e "${YELLOW}    Files changed: ${CHANGED}${NC}"
-				echo -e "${YELLOW}    Action: edit version.hpp.in (update comment timestamp or add changelog)${NC}"
+			local changed
+			changed=$(git diff --cached --name-only | grep -E "^(src/|include/)" | grep -v "version.hpp" | head -1)
+			if [[ -n "$changed" ]]; then
+				log_file FAIL "version" "source changed but version.hpp.in not updated: $changed"
+				screen_out "❌" "version check"
+				fail=1
 			else
-				log_status 0 "version check" "no source changes"
+				log_file PASS "version" "no source changes"
+				screen_out "✅" "version check"
 			fi
 		fi
 	else
-		log_status 1 "version file missing" "include/ai_mirror/version.hpp.in not found"
+		log_file FAIL "version" "include/ai_mirror/version.hpp.in not found"
+		screen_out "❌" "version check"
+		fail=1
 	fi
 
 	# ============================================
-	# Phase 1: Code check (clang-format dry-run)
+	# Phase 1: Code check (clang-format)
 	# ============================================
-	echo -e "${CYAN}--- Phase 1: Code Check ---${NC}"
-
-	if ! command -v clang-format &>/dev/null; then
-		echo -e "${YELLOW}  ⚠️  SKIPPED: clang-format not installed${NC}"
-	else
-		local -a FAILED_FILES=()
-		# Find C++ source files
-		while IFS= read -r -d '' f; do
-			if ! clang-format --dry-run -Werror "$f" 2>/dev/null; then
-				FAILED_FILES+=("$f")
-			fi
-		done < <(find "$PROJECT_DIR/src" "$PROJECT_DIR/include" \
-			\( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) -print0 2>/dev/null || true)
-
-		if [[ ${#FAILED_FILES[@]} -eq 0 ]]; then
-			log_status 0 "clang-format check" ""
+	if command -v clang-format &>/dev/null; then
+		if run_stage "clang-format" bash -c "
+			fail_inner=0
+			while IFS= read -r -d '' f; do
+				if ! clang-format --dry-run -Werror \"\$f\" 2>/dev/null; then
+					echo \"needs formatting: \$f\"
+					fail_inner=1
+				fi
+			done < <(find \"$PROJECT_DIR/src\" \"$PROJECT_DIR/include\" \
+				\\( -name \"*.cpp\" -o -name \"*.hpp\" -o -name \"*.h\" \\) -print0 2>/dev/null || true)
+			exit \$fail_inner
+		"; then
+			:
 		else
-			log_status 1 "clang-format check" "${#FAILED_FILES[@]} files need formatting"
-			for f in "${FAILED_FILES[@]}"; do
-				echo -e "${YELLOW}      $f${NC}"
-			done
-			echo -e "${YELLOW}    Run: clang-format -i <files>${NC}"
+			fail=1
 		fi
+	else
+		log_file WARN "clang-format" "clang-format not installed, skipping"
+		screen_out "⏭️" "clang-format"
 	fi
 
 	# ============================================
 	# Phase 2: Build verification
 	# ============================================
-	echo ""
-	echo -e "${CYAN}--- Phase 2: Build Verification ---${NC}"
-
-	local BUILD_DIR="$PROJECT_DIR/build-test"
+	local build_dir="$PROJECT_DIR/build-test"
 	if [[ -f "$PROJECT_DIR/CMakeLists.txt" ]]; then
-		set +e
-		local BUILD_OUTPUT BUILD_EXIT
-		BUILD_OUTPUT=$(cmake --build "$BUILD_DIR" --target ai-mirror -j4 2>&1)
-		BUILD_EXIT=$?
-		set -e
-
-		if [[ $BUILD_EXIT -eq 0 ]]; then
-			log_status 0 "cmake build" ""
+		if run_stage "build" cmake --build "$build_dir" --target ai-mirror -j4; then
+			:
 		else
-			log_status 1 "cmake build" "see errors above"
-			echo "$BUILD_OUTPUT" | tail -20
+			fail=1
 		fi
 	else
-		echo -e "${YELLOW}  ⚠️  SKIPPED: CMakeLists.txt not found${NC}"
+		log_file WARN "build" "CMakeLists.txt not found"
+		screen_out "⏭️" "build"
 	fi
 
 	# ============================================
 	# Phase 3: Unit tests (Docker)
 	# ============================================
-	echo ""
-	echo -e "${CYAN}--- Phase 3: Unit Tests (Docker) ---${NC}"
-
 	if command -v docker &>/dev/null; then
-		local test_exit=0
-		# Build and run tests inside Docker container (--privileged for mount/ssh/useradd)
-		docker build -t ai-mirror-test -f "$PROJECT_DIR/tests/Dockerfile.test" "$PROJECT_DIR" >/dev/null 2>&1 || test_exit=$?
-		if [[ $test_exit -eq 0 ]]; then
-			docker run --rm --privileged ai-mirror-test || test_exit=$?
-		fi
-
-		if [[ $test_exit -eq 0 ]]; then
-			log_status 0 "unit tests (Docker)" ""
+		if run_stage "tests" bash -c "
+			docker build -t ai-mirror-test -f \"$PROJECT_DIR/tests/Dockerfile.test\" \"$PROJECT_DIR\" > /dev/null 2>&1 && \
+			docker run --rm --privileged ai-mirror-test
+		"; then
+			:
 		else
-			log_status 1 "unit tests (Docker)" "Docker build or test failed (exit $test_exit)"
+			fail=1
 		fi
 	else
-		echo -e "${YELLOW}  ⚠️  SKIPPED: docker not installed (required for rootless testing)${NC}"
+		log_file WARN "tests" "docker not installed, skipping"
+		screen_out "⏭️" "tests"
 	fi
 
 	# ============================================
 	# Summary
 	# ============================================
-	echo ""
-	echo -e "${CYAN}=== Summary ===${NC}"
-	echo -e "  Passed: ${GREEN}${PASS}${NC}"
-	echo -e "  Failed: ${RED}${FAIL}${NC}"
-	echo ""
-
-	if [[ $FAIL -gt 0 ]]; then
-		echo -e "${RED}commit blocked: ${FAIL} checks failed${NC}"
+	if [[ $fail -gt 0 ]]; then
+		screen_out "❌" "$HOOK_NAME failed"
+		log_file FAIL "done" "$HOOK_NAME blocked: $fail check(s) failed"
 		exit 1
 	fi
 
-	echo -e "${GREEN}commit allowed: all checks passed${NC}"
-
-	# ============================================
-	# Phase 4: Submodule Sync (post-commit)
-	# ============================================
-	# Note: Sync runs AFTER commit success (not blocking)
-	#       This ensures commit can proceed even if remote push fails
-	#       User must manually run sync if needed, or rely on CI/CD
-	echo ""
-	echo -e "${CYAN}=== Phase 4: Submodule Sync ===${NC}"
-	echo -e "${YELLOW}  ℹ️  Run after commit success:${NC}"
-	echo -e "${YELLOW}     bash scripts/sync-submodules.sh${NC}"
-	echo -e "${YELLOW}  This script will:${NC}"
-	echo -e "${YELLOW}    - Sync minimal files to submodules${NC}"
-	echo -e "${YELLOW}    - Verify build/install success${NC}"
-	echo -e "${YELLOW}    - Push to all remotes${NC}"
-	echo ""
-	exit 0
+	screen_out "✅" "$HOOK_NAME done"
+	log_file PASS "done" "$HOOK_NAME completed successfully"
 }
 
 main "$@"

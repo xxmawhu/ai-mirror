@@ -1452,13 +1452,13 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   auto ctx = make_context(verbose);
 
   if (!utils::is_root()) {
-    std::cerr << "❄️ ai-mirror frz requires root privileges" << std::endl;
+    std::cerr << "ai-mirror frz requires root privileges" << std::endl;
     return 1;
   }
 
   auto resolved_opt = core::PathResolver::resolve(file_path);
   if (!resolved_opt) {
-    std::cerr << "❄️ Invalid path: " << file_path << std::endl;
+    std::cerr << "Invalid path: " << file_path << std::endl;
     return 1;
   }
   fs::path file = *resolved_opt;
@@ -1467,47 +1467,46 @@ int cmd_frz(const std::string &file_path, bool verbose) {
 
   // Check path is allowed
   if (!utils::is_path_allowed(file, main_user, ctx.config.user.allowed_bases)) {
-    std::cerr << "❄️ Path not allowed: " << file.string() << std::endl;
+    std::cerr << "Path not allowed: " << file.string() << std::endl;
     return 1;
   }
 
   // Check file exists
   std::error_code ec;
   if (!fs::exists(file, ec)) {
-    std::cerr << "❄️ File does not exist: " << file.string() << std::endl;
+    std::cerr << "File does not exist: " << file.string() << std::endl;
     return 1;
   }
 
   // Must be a regular file (not symlink, not directory)
   struct stat st;
   if (lstat(file.c_str(), &st) != 0) {
-    std::cerr << "❄️ Cannot stat file: " << file.string() << std::endl;
+    std::cerr << "Cannot stat file: " << file.string() << std::endl;
     return 1;
   }
   if (S_ISLNK(st.st_mode)) {
-    std::cerr << "❄️ Cannot freeze a symlink: " << file.string() << std::endl;
+    std::cerr << "Cannot freeze a symlink: " << file.string() << std::endl;
     return 1;
   }
   if (S_ISDIR(st.st_mode)) {
-    std::cerr << "❄️ Cannot freeze a directory: " << file.string() << std::endl;
+    std::cerr << "Cannot freeze a directory: " << file.string() << std::endl;
     return 1;
   }
   if (!S_ISREG(st.st_mode)) {
-    std::cerr << "❄️ Not a regular file: " << file.string() << std::endl;
+    std::cerr << "Not a regular file: " << file.string() << std::endl;
     return 1;
   }
 
   // Detect file owner
   std::string owner = core::PathResolver::detect_owner_user(file);
   if (owner.empty()) {
-    std::cerr << "❄️ Cannot determine file owner: " << file.string()
-              << std::endl;
+    std::cerr << "Cannot determine file owner: " << file.string() << std::endl;
     return 1;
   }
 
   // Owner must be an ai-user belonging to main_user
   if (!validate_ai_user_ownership(owner, main_user, ctx.config.user.prefix)) {
-    std::cerr << "❄️ File owner '" << owner << "' is not an ai-user of '"
+    std::cerr << "File owner '" << owner << "' is not an ai-user of '"
               << main_user << "'" << std::endl;
     return 1;
   }
@@ -1515,7 +1514,7 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   // Resolve main user's uid/gid
   struct passwd *main_pw = getpwnam(main_user.c_str());
   if (!main_pw) {
-    std::cerr << "❄️ Cannot resolve main user: " << main_user << std::endl;
+    std::cerr << "Cannot resolve main user: " << main_user << std::endl;
     return 1;
   }
 
@@ -1523,10 +1522,9 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   int fd = open(file.c_str(), O_RDONLY | O_NOFOLLOW);
   if (fd < 0) {
     if (errno == ELOOP) {
-      std::cerr << "❄️ File replaced with symlink: " << file.string()
-                << std::endl;
+      std::cerr << "File replaced with symlink: " << file.string() << std::endl;
     } else {
-      std::cerr << "❄️ Cannot open file: " << file.string() << " - "
+      std::cerr << "Cannot open file: " << file.string() << " - "
                 << strerror(errno) << std::endl;
     }
     return 1;
@@ -1536,7 +1534,7 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   struct stat fd_st;
   if (fstat(fd, &fd_st) != 0 || !S_ISREG(fd_st.st_mode)) {
     close(fd);
-    std::cerr << "❄️ File is no longer a regular file: " << file.string()
+    std::cerr << "File is no longer a regular file: " << file.string()
               << std::endl;
     return 1;
   }
@@ -1544,7 +1542,7 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   // chown to main_user:main_user_group
   if (fchown(fd, main_pw->pw_uid, main_pw->pw_gid) != 0) {
     close(fd);
-    std::cerr << "❄️ Failed to change owner to " << main_user << ": "
+    std::cerr << "Failed to change owner to " << main_user << ": "
               << strerror(errno) << std::endl;
     return 1;
   }
@@ -1552,7 +1550,7 @@ int cmd_frz(const std::string &file_path, bool verbose) {
   // chmod to 644 (rw-r--r--)
   if (fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) != 0) {
     close(fd);
-    std::cerr << "❄️ Failed to set permissions to 644: " << strerror(errno)
+    std::cerr << "Failed to set permissions to 644: " << strerror(errno)
               << std::endl;
     return 1;
   }

@@ -34,5 +34,6 @@ int cmd_watch(const std::string &watch_path, const std::string &watch_user,
               bool verbose);
 int cmd_init(const std::string &shell, bool verbose);
 int cmd_auto_fix_all(bool verbose);
+int cmd_frz(const std::string &file_path, bool verbose);
 
 } // namespace ai_mirror::cli

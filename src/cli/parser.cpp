@@ -114,6 +114,16 @@ int parse_and_run(int argc, char **argv) {
   cd_cmd->add_flag("--dry-run", cd_dry_run,
                    "输出 JSON 决策到 stdout，不执行 SSH/cd");
 
+  // frz
+  std::string frz_path;
+  auto *frz_cmd = app.add_subcommand(
+      "frz", "冻结文件\n"
+             "  将 ai-user 拥有的文件所有权转回 main user，权限设为 644。\n"
+             "  要求文件是普通文件（非软链接/目录），属于当前用户的 ai-user。\n"
+             "  成功输出 ❄️，失败输出原因");
+  frz_cmd->add_option("file", frz_path, "文件路径（属于 ai-user 的普通文件）")
+      ->required();
+
   // list
   app.add_subcommand("list",
                      "列出用户\n"
@@ -277,6 +287,8 @@ int parse_and_run(int argc, char **argv) {
         ret = 1;
     }
     return ret;
+  } else if (frz_cmd->parsed()) {
+    return cmd_frz(frz_path, verbose);
   } else if (watch_cmd->parsed()) {
     return cmd_watch(watch_path, watch_user, verbose);
   }

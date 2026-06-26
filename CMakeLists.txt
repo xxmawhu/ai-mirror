@@ -75,6 +75,39 @@ target_link_options(ai-mirror-bin PRIVATE
     -Wl,--gc-sections -Wl,--strip-all
 )
 
+# Mount watch binary — standalone mount health checker & auto-repair
+# Designed to run periodically via systemd timer.
+add_executable(am-mount-watch
+    src/tools/mount_watch.cpp
+    src/core/config.cpp
+    src/core/graft.cpp
+    src/core/path_resolver.cpp
+    src/security/path_validator.cpp
+    src/daemon/mount_cleaner.cpp
+    src/utils/shell.cpp
+    src/utils/logger.cpp
+)
+target_include_directories(am-mount-watch PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_options(am-mount-watch PRIVATE
+    -Wall -Wextra -Wpedantic -Werror
+    -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+    -Wformat -Wformat-security
+    -ffunction-sections -fdata-sections
+)
+target_link_options(am-mount-watch PRIVATE
+    -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+    -static-libstdc++ -static-libgcc
+    -Wl,--gc-sections -Wl,--strip-all
+)
+target_link_libraries(am-mount-watch PRIVATE
+    spdlog::spdlog
+    toml11::toml11
+    nlohmann_json::nlohmann_json
+    pthread
+)
+
 # Wrapper binary (am) - auto sudo elevation
 add_executable(am src/am_wrapper.cpp)
 

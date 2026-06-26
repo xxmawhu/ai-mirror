@@ -295,12 +295,9 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
 
 bool Graft::install_file_access(const fs::path &source, const fs::path &target,
                                 const fs::path &home_dir) {
+  (void)home_dir; // reserved for future .am-mounts/ directory support
   auto logger = utils::get_logger();
-
-  if (home_dir.empty()) {
-    logger->error("install_file_access: home_dir is required");
-    return false;
-  }
+  std::error_code ec;
 
   if (!fs::is_regular_file(source)) {
     logger->error("install_file_access: source is not a regular file: {}",
@@ -308,8 +305,8 @@ bool Graft::install_file_access(const fs::path &source, const fs::path &target,
     return false;
   }
 
-  // --- Step 1: set source file permissions ---
-  // Remove group/other write, preserve everything else (including +x bits).
+  // Step 1: set source file permissions — remove group/other write, preserve
+  // everything else (including executable bits)
   {
     struct stat st;
     if (stat(source.c_str(), &st) != 0) {
@@ -317,6 +314,7 @@ bool Graft::install_file_access(const fs::path &source, const fs::path &target,
                     source.string(), strerror(errno));
       return false;
     }
+    // Only modify permissions if group/other write is currently set
     if (st.st_mode & (S_IWGRP | S_IWOTH)) {
       mode_t new_mode = st.st_mode & ~(S_IWGRP | S_IWOTH);
       if (chmod(source.c_str(), new_mode) != 0) {
@@ -333,129 +331,46 @@ bool Graft::install_file_access(const fs::path &source, const fs::path &target,
     }
   }
 
-  // --- Step 2: create .am-mounts/ directory (root-owned) ---
-  // The AI user's home dir is writable by them, so a symlink placed directly
-  // there can be deleted. We use a root-owned subdirectory instead.
-  // .am-mounts/ is created as root:ai_group with mode 0755. The AI user can
-  // read/traverse but NOT write/delete inside it.
-  struct stat home_st;
-  gid_t ai_gid = 0;
-  if (stat(home_dir.c_str(), &home_st) == 0) {
-    ai_gid = home_st.st_gid;
-  } else {
-    logger->warn("install_file_access: cannot stat home_dir {}, "
-                 "using gid=0: {}",
-                 home_dir.string(), strerror(errno));
-  }
-
-  fs::path am_mounts = home_dir / ".am-mounts";
-  bool mounts_dir_created = false;
-  std::error_code ec;
-  if (!fs::exists(am_mounts, ec)) {
-    if (mkdir(am_mounts.c_str(), 0755) != 0) {
-      logger->error("install_file_access: mkdir .am-mounts failed: {} ({})",
-                    am_mounts.string(), strerror(errno));
+  // Step 2: ensure target parent directory exists and is owned by ai-user
+  fs::path parent = target.parent_path();
+  if (!parent.empty() && !fs::exists(parent, ec)) {
+    if (!safe_create_directories(parent)) {
+      logger->error("install_file_access: failed to create parent dir for {}",
+                    target.string());
       return false;
     }
-    mounts_dir_created = true;
   }
 
-  // Fix ownership: root:ai_group, even if dir already existed
-  if (ai_gid != 0) {
-    if (chown(am_mounts.c_str(), 0, ai_gid) != 0) {
-      logger->warn("install_file_access: chown root:{} on {} failed: {}",
-                   ai_gid, am_mounts.string(), strerror(errno));
+  // Step 3: remove any existing target (old bind mount file or old symlink)
+  if (fs::exists(target, ec) || fs::is_symlink(ec ? target : target)) {
+    // If it's a bind mount point, unmount first
+    if (is_mounted_live(target)) {
+      logger->info("install_file_access: unmounting existing bind mount: {}",
+                   target.string());
+      execute_umount(target, false);
     }
-  } else {
-    if (chown(am_mounts.c_str(), 0, 0) != 0) {
-      logger->warn("install_file_access: chown root:root on {} failed: {}",
-                   am_mounts.string(), strerror(errno));
+    std::error_code rm_ec;
+    if (!fs::remove(target, rm_ec) && rm_ec) {
+      logger->warn(
+          "install_file_access: failed to remove existing target {}: {}",
+          target.string(), rm_ec.message());
     }
   }
-  // Ensure correct mode (mkdir + umask might not give 755)
-  chmod(am_mounts.c_str(), 0755);
-  if (mounts_dir_created) {
-    logger->info(
-        "install_file_access: created .am-mounts/ at {} (root:{}, 755)",
-        am_mounts.string(), ai_gid);
-  }
 
-  // --- Step 3: create symlink at .am-mounts/<basename> → source ---
-  // This symlink is owned by root:root and is inside the root-owned
-  // .am-mounts/ directory, so the AI user cannot delete or modify it.
-  fs::path sym_path = am_mounts / source.filename();
-
-  // Remove any stale entry at the symlink path
-  std::error_code rm_ec;
-  if (fs::exists(sym_path, rm_ec) ||
-      fs::is_symlink(rm_ec ? sym_path : sym_path)) {
-    fs::remove(sym_path, rm_ec);
-  }
-
-  if (symlink(source.c_str(), sym_path.c_str()) != 0) {
+  // Step 4: create symlink at target → source
+  if (symlink(source.c_str(), target.c_str()) != 0) {
     logger->error("install_file_access: symlink failed: {} -> {} ({})",
-                  sym_path.string(), source.string(), strerror(errno));
+                  target.string(), source.string(), strerror(errno));
     return false;
   }
-  logger->info("install_file_access: symlink created (protected): {} -> {}",
-               sym_path.string(), source.string());
+  logger->info("install_file_access: symlink created: {} -> {}",
+               target.string(), source.string());
 
-  // Set symlink ownership to root:root
-  if (lchown(sym_path.c_str(), 0, 0) != 0) {
+  // Step 5: set symlink ownership to root:root
+  if (lchown(target.c_str(), 0, 0) != 0) {
     logger->warn(
         "install_file_access: lchown root:root on symlink {} failed: {}",
-        sym_path.string(), strerror(errno));
-  }
-
-  // --- Step 4: create user-level wrapper at original target path ---
-  // The wrapper at `target` is a regular file owned by the AI user, so they
-  // CAN delete it. But it's just a short sourcing script that loads the
-  // real content from .am-mounts/. am update will recreate the wrapper.
-  // This step is best-effort: if it fails, the symlink is still accessible
-  // at .am-mounts/<basename>.
-  {
-    // Remove old bind mount / symlink / file at target
-    if (fs::exists(target, ec) || fs::is_symlink(ec ? target : target)) {
-      if (is_mounted_live(target)) {
-        execute_umount(target, false);
-      }
-      fs::remove(target, rm_ec);
-    }
-
-    // Write a sourcing wrapper
-    std::string wrapper_content =
-        "# Managed by ai-mirror. Do not edit.\n"
-        "# Real file is at .am-mounts/. Edit the source file instead.\n"
-        "if [ -f \"$HOME/.am-mounts/" +
-        source.filename().string() +
-        "\" ]; then\n"
-        "    . \"$HOME/.am-mounts/" +
-        source.filename().string() +
-        "\"\n"
-        "fi\n";
-
-    // Create parent directories
-    fs::path parent = target.parent_path();
-    if (!parent.empty() && !fs::exists(parent, ec)) {
-      safe_create_directories(parent);
-    }
-
-    utils::unique_fd wfd(
-        open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644));
-    if (wfd) {
-      ssize_t written =
-          write(wfd.get(), wrapper_content.data(), wrapper_content.size());
-      if (written == static_cast<ssize_t>(wrapper_content.size())) {
-        logger->info("install_file_access: created sourcing wrapper at {}",
-                     target.string());
-      }
-      wfd.reset();
-    } else {
-      // Wrapper creation is best-effort; the protected symlink is already in
-      // place
-      logger->warn("install_file_access: failed to create wrapper at {}: {}",
-                   target.string(), strerror(errno));
-    }
+        target.string(), strerror(errno));
   }
 
   invalidate_cache();

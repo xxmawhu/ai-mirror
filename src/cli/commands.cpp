@@ -484,94 +484,55 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     }
 
     if (is_mounted && !is_stale) {
-      // Migration: if source is a regular file, unmount the old bind mount
-      // and fall through to install_file_access() (which creates a symlink).
-      // NOTE: We detect files by checking the source path, NOT by checking
-      // whether target is a direntry (bind mount targets are always regular
-      // files, but we need the actual source type to make the decision).
-      bool source_is_file = fs::is_regular_file(source);
-      if (source_is_file) {
+      // Already mounted — still fix ownership of intermediate dirs and target
+      // This handles the case where dirs were created by root on first run
+      if (state.uid != 0 || state.gid != 0) {
         utils::get_logger()->info(
-            "Migrating file bind mount to symlink: {} -> {}", source.string(),
-            target.string());
-        // Unmount the old bind mount
-        auto umount_result = utils::exec_safe({"umount", target.string()});
-        if (umount_result.exit_code != 0) {
-          utils::get_logger()->warn(
-              "Migration umount failed for {}, will try lazy umount: {}",
-              target.string(), umount_result.stderr_output);
-          umount_result = utils::exec_safe({"umount", "-l", target.string()});
-        }
-        if (umount_result.exit_code == 0) {
-          is_mounted = false;
-          // Remove the old empty mount point file
-          std::error_code rm_ec;
-          fs::remove(target, rm_ec);
-          if (!rm_ec) {
-            utils::get_logger()->info(
-                "Migration: removed old mount point file: {}", target.string());
-          }
-        } else {
-          utils::get_logger()->warn(
-              "Migration: could not unmount old bind mount for {}, "
-              "will attempt install_file_access anyway: {}",
-              target.string(), umount_result.stderr_output);
-        }
-      } else {
-        // Directory mount — fix ownership as before
-        if (state.uid != 0 || state.gid != 0) {
-          utils::get_logger()->info(
-              "Fixing ownership for already-mounted target: {}",
-              target.string());
-          fs::path boundary = home_dir.empty()
-                                  ? fs::path(target.parent_path().parent_path())
-                                  : fs::path(home_dir);
-          // Fix intermediate directories
-          fs::path parent = target.parent_path();
-          if (!parent.empty()) {
-            // chown intermediate dirs via exec_safe (chown_path_chain is
-            // static in graft.cpp)
-            fs::path p = parent;
-            std::vector<fs::path> to_fix;
-            while (!p.empty() && p != "/" && p != boundary) {
-              struct stat st;
-              if (stat(p.c_str(), &st) == 0 &&
-                  (st.st_uid != state.uid || st.st_gid != state.gid)) {
-                to_fix.push_back(p);
-              }
-              p = p.parent_path();
+            "Fixing ownership for already-mounted target: {}", target.string());
+        fs::path boundary = home_dir.empty()
+                                ? fs::path(target.parent_path().parent_path())
+                                : fs::path(home_dir);
+        // Fix intermediate directories
+        fs::path parent = target.parent_path();
+        if (!parent.empty()) {
+          // chown intermediate dirs via exec_safe (chown_path_chain is static
+          // in graft.cpp)
+          fs::path p = parent;
+          std::vector<fs::path> to_fix;
+          while (!p.empty() && p != "/" && p != boundary) {
+            struct stat st;
+            if (stat(p.c_str(), &st) == 0 &&
+                (st.st_uid != state.uid || st.st_gid != state.gid)) {
+              to_fix.push_back(p);
             }
-            for (auto it = to_fix.rbegin(); it != to_fix.rend(); ++it) {
-              auto r = utils::exec_safe(
-                  {"chown",
-                   std::to_string(state.uid) + ":" + std::to_string(state.gid),
-                   it->string()});
-              if (r.exit_code == 0) {
-                utils::get_logger()->info("Fixed ownership: {} -> {}:{}",
-                                          it->string(), state.uid, state.gid);
-              }
-            }
+            p = p.parent_path();
           }
-          // Fix target itself
-          struct stat tgt_st;
-          if (stat(target.c_str(), &tgt_st) == 0 &&
-              (tgt_st.st_uid != state.uid || tgt_st.st_gid != state.gid)) {
+          for (auto it = to_fix.rbegin(); it != to_fix.rend(); ++it) {
             auto r = utils::exec_safe(
                 {"chown",
                  std::to_string(state.uid) + ":" + std::to_string(state.gid),
-                 target.string()});
+                 it->string()});
             if (r.exit_code == 0) {
               utils::get_logger()->info("Fixed ownership: {} -> {}:{}",
-                                        target.string(), state.uid, state.gid);
+                                        it->string(), state.uid, state.gid);
             }
           }
         }
+        // Fix target itself
+        struct stat tgt_st;
+        if (stat(target.c_str(), &tgt_st) == 0 &&
+            (tgt_st.st_uid != state.uid || tgt_st.st_gid != state.gid)) {
+          auto r = utils::exec_safe(
+              {"chown",
+               std::to_string(state.uid) + ":" + std::to_string(state.gid),
+               target.string()});
+          if (r.exit_code == 0) {
+            utils::get_logger()->info("Fixed ownership: {} -> {}:{}",
+                                      target.string(), state.uid, state.gid);
+          }
+        }
       }
-      // If source is a file that was unmounted, fall through to
-      // bind_mount()/install_file_access(). Otherwise, skip to next mount.
-      if (!source_is_file || is_mounted) {
-        continue;
-      }
+      continue;
     }
 
     utils::get_logger()->info("Fixing mount: {} -> {}", source.string(),

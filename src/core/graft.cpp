@@ -293,90 +293,6 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
   return entries;
 }
 
-bool Graft::install_file_access(const fs::path &source, const fs::path &target,
-                                const fs::path &home_dir) {
-  (void)home_dir; // reserved for future .am-mounts/ directory support
-  auto logger = utils::get_logger();
-  std::error_code ec;
-
-  if (!fs::is_regular_file(source)) {
-    logger->error("install_file_access: source is not a regular file: {}",
-                  source.string());
-    return false;
-  }
-
-  // Step 1: set source file permissions — remove group/other write, preserve
-  // everything else (including executable bits)
-  {
-    struct stat st;
-    if (stat(source.c_str(), &st) != 0) {
-      logger->error("install_file_access: stat failed for {}: {}",
-                    source.string(), strerror(errno));
-      return false;
-    }
-    // Only modify permissions if group/other write is currently set
-    if (st.st_mode & (S_IWGRP | S_IWOTH)) {
-      mode_t new_mode = st.st_mode & ~(S_IWGRP | S_IWOTH);
-      if (chmod(source.c_str(), new_mode) != 0) {
-        logger->error("install_file_access: chmod g-w,o-w failed for {}: {}",
-                      source.string(), strerror(errno));
-        return false;
-      }
-      logger->info("install_file_access: set {:o} on source {} (was {:o})",
-                   new_mode & 07777, source.string(), st.st_mode & 07777);
-    } else {
-      logger->info("install_file_access: source {} already has no group/other "
-                   "write (mode {:o}), skipping chmod",
-                   source.string(), st.st_mode & 07777);
-    }
-  }
-
-  // Step 2: ensure target parent directory exists and is owned by ai-user
-  fs::path parent = target.parent_path();
-  if (!parent.empty() && !fs::exists(parent, ec)) {
-    if (!safe_create_directories(parent)) {
-      logger->error("install_file_access: failed to create parent dir for {}",
-                    target.string());
-      return false;
-    }
-  }
-
-  // Step 3: remove any existing target (old bind mount file or old symlink)
-  if (fs::exists(target, ec) || fs::is_symlink(ec ? target : target)) {
-    // If it's a bind mount point, unmount first
-    if (is_mounted_live(target)) {
-      logger->info("install_file_access: unmounting existing bind mount: {}",
-                   target.string());
-      execute_umount(target, false);
-    }
-    std::error_code rm_ec;
-    if (!fs::remove(target, rm_ec) && rm_ec) {
-      logger->warn(
-          "install_file_access: failed to remove existing target {}: {}",
-          target.string(), rm_ec.message());
-    }
-  }
-
-  // Step 4: create symlink at target → source
-  if (symlink(source.c_str(), target.c_str()) != 0) {
-    logger->error("install_file_access: symlink failed: {} -> {} ({})",
-                  target.string(), source.string(), strerror(errno));
-    return false;
-  }
-  logger->info("install_file_access: symlink created: {} -> {}",
-               target.string(), source.string());
-
-  // Step 5: set symlink ownership to root:root
-  if (lchown(target.c_str(), 0, 0) != 0) {
-    logger->warn(
-        "install_file_access: lchown root:root on symlink {} failed: {}",
-        target.string(), strerror(errno));
-  }
-
-  invalidate_cache();
-  return true;
-}
-
 bool Graft::bind_mount(const fs::path &source, const fs::path &target,
                        bool read_only, uid_t owner_uid, gid_t owner_gid,
                        const fs::path &home_dir) {
@@ -419,17 +335,6 @@ bool Graft::bind_mount(const fs::path &source, const fs::path &target,
         "Mount source path changed between validation and execution: {}",
         source.string());
     return false;
-  }
-
-  // Redirect: regular files use symlink + permission setting instead of bind
-  // mount. This avoids kernel mount overhead for individual files and allows
-  // transparent access. Directories continue to use mount --bind.
-  if (fs::is_regular_file(pre_exec_source)) {
-    utils::get_logger()->info(
-        "Source is a regular file, installing file access (symlink + chmod) "
-        "instead of bind mount: {}",
-        pre_exec_source.string());
-    return install_file_access(pre_exec_source, target, home_dir);
   }
 
   return execute_mount(pre_exec_source, target, read_only, owner_uid, owner_gid,

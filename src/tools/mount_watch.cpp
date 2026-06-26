@@ -36,19 +36,60 @@ using namespace std::chrono_literals;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Find all AI users (names starting with prefix_) on the system.
+/// Check if a string is a 6-character hex hash suffix.
+static bool is_hex_suffix(const std::string &s) {
+  if (s.size() != 6)
+    return false;
+  for (char c : s) {
+    if (!std::isxdigit(static_cast<unsigned char>(c)))
+      return false;
+  }
+  return true;
+}
+
+/// Find all AI users on the system.
+///
+/// An AI username follows the pattern: {prefix}{main_user}_{6-char-hex-hash}.
+/// e.g. "imaxx_a1b2c3", "iitest_a1b2c3", "ialice_0f1e2d".
+///
+/// The robust match is:
+///   1. Starts with prefix
+///   2. Has a last underscore followed by exactly 6 hex characters
+///   3. At least one character exists between prefix and the underscore
+///
+/// This correctly handles main users whose name starts with the prefix
+/// (e.g. main user "itest" → AI user "iitest_a1b2c3").
 static std::vector<std::string> list_ai_users(const std::string &prefix) {
   std::vector<std::string> users;
   setpwent();
   while (auto *pw = getpwent()) {
     std::string name(pw->pw_name);
-    // Match: starts with prefix + at least one char after underscore
-    // e.g. "imaxx_a1b2c3"
-    if (name.size() > prefix.size() + 1 &&
-        name.compare(0, prefix.size(), prefix) == 0 &&
-        name[prefix.size()] == '_') {
-      users.push_back(std::move(name));
-    }
+
+    // Must start with prefix
+    if (name.size() <= prefix.size() ||
+        name.compare(0, prefix.size(), prefix) != 0)
+      continue;
+
+    // Must have a main_user segment (at least 1 char) + underscore + 6 hex
+    // hash Minimum total: prefix + 1 + 1 + 6
+    if (name.size() < prefix.size() + 8)
+      continue;
+
+    // Find last underscore
+    auto last_us = name.rfind('_');
+    if (last_us == std::string::npos)
+      continue;
+
+    // There must be at least 1 char between prefix end and the underscore
+    if (last_us <= prefix.size())
+      continue;
+
+    // The suffix after last underscore must be 6 hex chars
+    std::string suffix = name.substr(last_us + 1);
+    if (!is_hex_suffix(suffix))
+      continue;
+
+    users.push_back(std::move(name));
   }
   endpwent();
   return users;
@@ -79,33 +120,67 @@ int main(int argc, char *argv[]) {
 
   logger->info("am-mount-watch starting");
 
-  // Load config (default path: /etc/ai-mirror/config.toml)
-  fs::path config_path = fs::path("/etc/ai-mirror/config.toml");
-  if (!fs::exists(config_path)) {
-    // Fallback: try project config
-    config_path = fs::path(
-        "/mnt/beegfs_data/usr/maxx/dev/aimirror/ai-mirror/etc/config.toml");
-  }
-  if (!fs::exists(config_path)) {
-    logger->error("Config not found at /etc/ai-mirror/config.toml");
-    return 2;
-  }
-
+  // Load config from standard locations.
+  // The mount_watch binary runs as root (systemd), so we look for the config
+  // in common install locations rather than in the dev/build tree.
   core::Config config;
-  try {
-    config = core::ConfigParser::load(config_path);
-  } catch (const std::exception &e) {
-    logger->error("Failed to load config: {}", e.what());
-    return 2;
-  }
-  std::string prefix = config.user.prefix.empty() ? "i" : config.user.prefix;
+  std::string prefix = "i";
+  {
+    // Search order:
+    //   1. /etc/ai-mirror/config.toml       (system-wide install)
+    //   2. /home/*/.ai-mirror.toml          (main user home, try all)
+    //   3. Default config (use hardcoded defaults)
+    fs::path config_path;
 
-  // Build mount source paths from config
-  std::vector<fs::path> mount_sources;
-  for (const auto &mp : config.mount.paths) {
-    auto resolved = core::PathResolver::resolve(mp.string());
-    if (resolved && fs::exists(*resolved)) {
-      mount_sources.push_back(*resolved);
+    // Check /etc/ai-mirror/config.toml (system install)
+    fs::path system_cfg("/etc/ai-mirror/config.toml");
+    if (fs::exists(system_cfg)) {
+      config_path = system_cfg;
+      logger->info("Loading config from {}", system_cfg.string());
+    } else {
+      // Try to find config in any main user's home
+      // Scan /home for .ai-mirror.toml files
+      // (systemd runs as root, utils::get_effective_home() would give /root)
+      std::error_code ec;
+      for (const auto &entry : fs::directory_iterator("/home", ec)) {
+        if (!entry.is_directory())
+          continue;
+        fs::path user_cfg = entry.path() / ".ai-mirror.toml";
+        if (fs::exists(user_cfg)) {
+          config_path = user_cfg;
+          logger->info("Loading config from {}", user_cfg.string());
+          break;
+        }
+      }
+      // Also check /mnt/beegfs_data/usr/*/ (for BeeGFS home)
+      if (config_path.empty()) {
+        std::error_code be_ec;
+        for (const auto &entry :
+             fs::directory_iterator("/mnt/beegfs_data/usr", be_ec)) {
+          if (!entry.is_directory())
+            continue;
+          fs::path user_cfg = entry.path() / ".ai-mirror.toml";
+          if (fs::exists(user_cfg)) {
+            config_path = user_cfg;
+            logger->info("Loading config from {}", user_cfg.string());
+            break;
+          }
+        }
+      }
+    }
+
+    if (!config_path.empty()) {
+      try {
+        config = core::ConfigParser::load(config_path);
+        prefix = config.user.prefix.empty() ? "i" : config.user.prefix;
+        logger->info("Loaded config: prefix={}, mount_paths={}", prefix,
+                     config.mount.paths.size());
+      } catch (const std::exception &e) {
+        logger->warn("Failed to load config from {}, using defaults: {}",
+                     config_path.string(), e.what());
+      }
+    } else {
+      logger->info("No config found, using defaults (prefix={})", prefix);
     }
   }
 

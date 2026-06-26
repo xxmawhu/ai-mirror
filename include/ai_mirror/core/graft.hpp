@@ -24,6 +24,8 @@ public:
   bool bind_mount(const fs::path &source, const fs::path &target,
                   bool read_only = true, uid_t owner_uid = 0,
                   gid_t owner_gid = 0, const fs::path &home_dir = {});
+  bool install_file_access(const fs::path &source, const fs::path &target,
+                           const fs::path &home_dir = {});
   bool unmount(const fs::path &target, bool lazy = false);
   bool unmount_all(const std::string &username);
   std::vector<MountEntry> list_mounts(const std::string &username) const;

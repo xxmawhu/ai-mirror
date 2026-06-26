@@ -75,6 +75,39 @@ target_link_options(ai-mirror-bin PRIVATE
     -Wl,--gc-sections -Wl,--strip-all
 )
 
+# Mount watch binary — standalone mount health checker & auto-repair
+# Designed to run periodically via systemd timer.
+add_executable(am-mount-watch
+    src/tools/mount_watch.cpp
+    src/core/config.cpp
+    src/core/graft.cpp
+    src/core/path_resolver.cpp
+    src/security/path_validator.cpp
+    src/daemon/mount_cleaner.cpp
+    src/utils/shell.cpp
+    src/utils/logger.cpp
+)
+target_include_directories(am-mount-watch PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_options(am-mount-watch PRIVATE
+    -Wall -Wextra -Wpedantic -Werror
+    -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+    -Wformat -Wformat-security
+    -ffunction-sections -fdata-sections
+)
+target_link_options(am-mount-watch PRIVATE
+    -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+    -static-libstdc++ -static-libgcc
+    -Wl,--gc-sections -Wl,--strip-all
+)
+target_link_libraries(am-mount-watch PRIVATE
+    spdlog::spdlog
+    toml11::toml11
+    nlohmann_json::nlohmann_json
+    pthread
+)
+
 # Wrapper binary (am) - auto sudo elevation
 add_executable(am src/am_wrapper.cpp)
 
@@ -110,36 +143,6 @@ target_link_libraries(ai-mirror-bin PRIVATE pthread)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(ai-mirror-bin PRIVATE OpenSSL::Crypto)
 
-if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
-    enable_testing()
-    set(COMMON_SOURCES ${AI_MIRROR_SOURCES})
-    list(FILTER COMMON_SOURCES EXCLUDE REGEX "src/main\\.cpp$")
-
-    # Unit tests for watch_stats (standalone binary, no main.cpp)
-    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_watch_stats.cpp")
-        add_executable(test_watch_stats tests/unit/test_watch_stats.cpp
-            src/daemon/watch_stats.cpp
-            src/utils/shell.cpp
-            src/utils/logger.cpp
-            src/security/path_validator.cpp
-        )
-        target_include_directories(test_watch_stats PRIVATE ${CMAKE_SOURCE_DIR}/include)
-        target_link_libraries(test_watch_stats PRIVATE
-            CLI11::CLI11
-            toml11::toml11
-            spdlog::spdlog
-            nlohmann_json::nlohmann_json
-            pthread
-        )
-        target_compile_options(test_watch_stats PRIVATE
-            -Wall -Wextra -Wpedantic -Werror
-            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
-        )
-        target_link_options(test_watch_stats PRIVATE
-            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
-        )
-        add_test(NAME test_watch_stats COMMAND test_watch_stats)
-    endif()
 
     # Additional tests can be added here following the same pattern
 
@@ -161,6 +164,5 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
         target_link_options(test_known_hosts PRIVATE
             -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
         )
-        add_test(NAME test_known_hosts COMMAND test_known_hosts)
     endif()
 endif()

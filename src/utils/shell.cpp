@@ -209,7 +209,7 @@ ShellResult exec_safe(const std::string &file,
       "mount",      "umount",   "chmod",    "chown",   "chgrp",  "useradd",
       "userdel",    "groupadd", "groupdel", "usermod", "passwd", "gpasswd",
       "ssh-keygen", "mkdir",    "cp",       "mv",      "getent", "findmnt",
-      "which",      "ssh",      "pkill",    "ps",      "su"};
+      "which",      "ssh",      "pkill",    "ps",      "su",     "crontab"};
   std::string cmd_name = fs::path(file).filename().string();
   if (ALLOWED_COMMANDS.find(cmd_name) == ALLOWED_COMMANDS.end()) {
     return {-1, "", "command not in allowed list: " + cmd_name};

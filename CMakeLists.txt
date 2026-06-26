@@ -147,8 +147,6 @@ target_link_libraries(ai-mirror-bin PRIVATE OpenSSL::Crypto)
     # Additional tests can be added here following the same pattern
 
     # Unit tests for parse_known_hosts_hosts (standalone binary)
-    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_known_hosts.cpp")
-        add_executable(test_known_hosts tests/unit/test_known_hosts.cpp)
         target_include_directories(test_known_hosts PRIVATE ${CMAKE_SOURCE_DIR}/include)
         target_link_libraries(test_known_hosts PRIVATE
             CLI11::CLI11

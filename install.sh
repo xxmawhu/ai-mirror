@@ -21,6 +21,7 @@ CONFIG_DIR="${AI_MIRROR_CONFIG_DIR:-/etc/ai-mirror}"
 DATA_DIR="${AI_MIRROR_DATA_DIR:-/var/lib/ai-mirror}"
 BIN_NAME="ai-mirror-bin"
 WRAPPER_NAME="am"
+MOUNT_WATCH_NAME="am-mount-watch"
 
 # ---- Error Tracking ----
 CURRENT_PHASE="init"
@@ -358,6 +359,16 @@ phase_install() {
 		return 1
 	fi
 	cd "${SCRIPT_DIR}"
+
+	# Install am-mount-watch (standalone mount health checker for systemd)
+	if [[ -f "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" ]]; then
+		if ! sudo install -m 0755 "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" "${PREFIX}/bin/${MOUNT_WATCH_NAME}"; then
+			ERROR_MSG="Failed to install ${MOUNT_WATCH_NAME}"
+			fail "安装失败 (${MOUNT_WATCH_NAME})"
+			return 1
+		fi
+		_log_file "installed: ${PREFIX}/bin/${MOUNT_WATCH_NAME}"
+	fi
 
 	_log_file "installed: ${PREFIX}/bin/${WRAPPER_NAME}, ${PREFIX}/bin/${VERSIONED_BIN} -> ${BIN_NAME}"
 

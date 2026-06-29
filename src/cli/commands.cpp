@@ -969,6 +969,13 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     }
   }
 
+  // Persist mount info to .am_status so mount_watch can read it
+  if (!core::UserManager::update_state_mounts(username, home_dir,
+                                              ctx.config.user.prefix)) {
+    utils::get_logger()->warn(
+        "Failed to update mount state in .am_status for {}", username);
+  }
+
   utils::get_logger()->info("Configure complete: {} fix(es) applied for {}",
                             fixes, username);
   return mount_failures > 0 ? 1 : 0;

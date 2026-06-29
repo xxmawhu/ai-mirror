@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -8,6 +9,26 @@
 namespace fs = std::filesystem;
 
 namespace ai_mirror::core {
+
+/// stat(2) info for a mount source path, persisted so mount_watch can detect
+/// source changes without re-stating remote filesystems.
+struct MountStatInfo {
+  ino_t ino = 0;
+  dev_t dev = 0;
+  mode_t mode = 0;
+  uid_t uid = 0;
+  gid_t gid = 0;
+  off_t size = 0;
+  time_t mtime = 0;
+};
+
+/// A single bind mount entry persisted in `.am_status`.
+struct MountInfo {
+  std::string source;
+  std::string target;
+  bool read_only = true;
+  MountStatInfo source_stat; ///< stat(2) at time of mount/update
+};
 
 struct UserInfo {
   std::string username;
@@ -19,6 +40,7 @@ struct UserInfo {
   gid_t gid;
   bool exists;
   std::string error;
+  std::vector<MountInfo> mounts; ///< persisted bind mount list
 };
 
 // AI user management with deterministic username generation.
@@ -45,6 +67,13 @@ public:
   std::vector<UserInfo> list_ai_users() const;
 
   static std::optional<UserInfo> read_state(const fs::path &project_dir);
+
+  // Update .am_status with current mount info for an AI user.
+  // Reads /proc/mounts via Graft to get the actual mount list, stats each
+  // source, then rewrites the status file preserving all existing fields.
+  static bool update_state_mounts(const std::string &username,
+                                  const fs::path &home_dir,
+                                  const std::string &prefix);
 
   // Compute path hash for a canonical path (first 6 hex chars of SHA256)
   static std::string compute_path_hash(const fs::path &canonical_path);

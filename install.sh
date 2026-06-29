@@ -54,7 +54,7 @@ warn() { _log "${YELLOW}[warn]${NC} $*"; }
 error() { _log "${RED}[error]${NC} $*" >&2; }
 info() { _log "${CYAN}[info]${NC} $*"; }
 # Key step status: the ONLY lines a user sees for routine progress
-ok()   { _log "${GREEN}[OK]${NC}   $*"; }
+ok() { _log "${GREEN}[OK]${NC}   $*"; }
 fail() { _log "${RED}[FAIL]${NC} $*"; }
 
 require_sudo() {
@@ -222,16 +222,24 @@ phase_build() {
 
 	mkdir -p "${BUILD_DIR}"
 
+	# Check CMakeLists.txt content hash for reliable change detection
+	# (timestamp -nt fails when git pull or cp -p preserves timestamps)
+	local cmake_hash_file="${BUILD_DIR}/.cmake-lists-hash"
+	local current_hash prev_hash=""
+	current_hash=$(md5sum "${SCRIPT_DIR}/CMakeLists.txt" 2>/dev/null | cut -d' ' -f1 || echo "no-hash")
+	[[ -f "$cmake_hash_file" ]] && prev_hash=$(cat "$cmake_hash_file" 2>/dev/null || echo "")
+
 	local need_configure=false
 	if [[ ! -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
 		need_configure=true
 	elif [[ ! -f "${BUILD_DIR}/Makefile" ]]; then
 		need_configure=true
-	elif [[ "${SCRIPT_DIR}/CMakeLists.txt" -nt "${BUILD_DIR}/CMakeCache.txt" ]]; then
+	elif [[ "$current_hash" != "$prev_hash" ]]; then
+		_log_file "CMakeLists.txt changed (hash: ${prev_hash:-none} -> $current_hash)"
 		need_configure=true
 	else
 		local cache_mtime
-		cache_mtime=$(stat -c '%Y' "${BUILD_DIR}/CMakeCache.txt")
+		cache_mtime=$(stat -c '%Y' "${BUILD_DIR}/CMakeCache.txt" 2>/dev/null || echo 0)
 		local newer_src
 		newer_src=$(find "${SCRIPT_DIR}/src" "${SCRIPT_DIR}/include" \
 			-type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
@@ -248,16 +256,31 @@ phase_build() {
 			-DCMAKE_BUILD_TYPE=Release \
 			>>"$INSTALL_LOG" 2>&1; then
 			ERROR_MSG="CMake configure failed"
-			fail "构建失败 (cmake configure)"
-			tail -20 "$INSTALL_LOG" >&2
+			fail "构建失败 (cmake 配置)"
+			{
+				echo ""
+				echo "── cmake 配置错误 ──"
+				grep -i -E "CMake (Error|Warning)|^CMake Error|error:" "$INSTALL_LOG" 2>/dev/null ||
+					tail -15 "$INSTALL_LOG" 2>/dev/null
+				echo "────────────────────"
+			} >&2
 			return 1
 		fi
+		# Save hash after successful configure (only if cmake succeeded)
+		echo "$current_hash" >"$cmake_hash_file"
 	fi
 
 	if ! cmake --build "${BUILD_DIR}" -j"$(nproc)" >>"$INSTALL_LOG" 2>&1; then
 		ERROR_MSG="Build compilation failed"
 		fail "构建失败 (编译)"
-		tail -20 "$INSTALL_LOG" >&2
+		{
+			echo ""
+			echo "── 编译错误 ──"
+			grep -i -E "error:|fatal error:|undefined reference|cannot find|CMake Error" "$INSTALL_LOG" 2>/dev/null |
+				head -30 ||
+				tail -15 "$INSTALL_LOG" 2>/dev/null
+			echo "──────────────"
+		} >&2
 		return 1
 	fi
 
@@ -302,7 +325,7 @@ cleanup_old_versions() {
 	local bin_dir="$1"
 	local name="$2"
 	local current_version="$3"
-	local max_keep=2  # Keep at most 2 old versions
+	local max_keep=2 # Keep at most 2 old versions
 
 	# List all versioned files, sorted by modification time (oldest first)
 	local versions
@@ -399,8 +422,10 @@ phase_install() {
 		warn "bash 补全文件缺失，跳过"
 	fi
 
-	sudo install -d "${DATA_DIR}"; sudo chmod 0755 "${DATA_DIR}"
-	sudo install -d "${CONFIG_DIR}"; sudo install -d "${CONFIG_DIR}/sudoers.d"
+	sudo install -d "${DATA_DIR}"
+	sudo chmod 0755 "${DATA_DIR}"
+	sudo install -d "${CONFIG_DIR}"
+	sudo install -d "${CONFIG_DIR}/sudoers.d"
 
 	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
 	sudo tee "$sudoers_file" >/dev/null <<SUDOERS

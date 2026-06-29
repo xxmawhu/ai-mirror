@@ -13,6 +13,7 @@
 #include <pwd.h>
 #include <random>
 #include <sstream>
+#include <thread>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -447,27 +448,66 @@ bool UserManager::execute_userdel(const std::string &username,
     user_gid = pw->pw_gid;
   }
 
-  std::vector<std::string> args;
-  args.reserve(4);
-  args.push_back("userdel");
-  if (remove_home) {
-    args.push_back("--remove");
-  }
-  args.push_back(username);
+  // Kill all processes owned by this user before userdel.
+  // This prevents "userdel: user is currently used by process" errors.
+  // Retry up to 3 times with pkill in between to handle persistent processes
+  // (e.g. gpg-agent --supervised, systemd --user).
+  const int retry_limit = 3;
+  const int kill_sleep_sec = 3;
+  for (int attempt = 1; attempt <= retry_limit; ++attempt) {
+    // Kill remaining processes before this attempt
+    auto kill_result = utils::exec_safe({"pkill", "-u", username});
+    if (kill_result.exit_code == 0) {
+      utils::get_logger()->info(
+          "Killed processes for user {} (attempt {})", username, attempt);
+    } else if (attempt == 1) {
+      utils::get_logger()->debug(
+          "pkill for user {} returned {} (may have no processes)",
+          username, kill_result.exit_code);
+    }
 
-  auto result = utils::exec_safe(args);
-  if (result.exit_code != 0) {
+    // Sleep to allow processes to terminate
+    std::this_thread::sleep_for(std::chrono::seconds(kill_sleep_sec));
+
+    std::vector<std::string> args;
+    args.reserve(4);
+    args.push_back("userdel");
+    if (remove_home) {
+      args.push_back("--remove");
+    }
+    args.push_back(username);
+
+    auto result = utils::exec_safe(args);
+    if (result.exit_code == 0) {
+      // Success — proceed to group cleanup
+      goto group_cleanup;
+    }
+
+    // User already gone — treat as success
+    if (result.stderr_output.find("does not exist") != std::string::npos) {
+      utils::get_logger()->info("User {} does not exist, skipping", username);
+      return true;
+    }
+
+    // Mail spool warning is non-fatal, proceed
     if (result.stderr_output.find("mail spool") != std::string::npos &&
         result.stderr_output.find("not found") != std::string::npos) {
-      utils::get_logger()->info(
-          "userdel: mail spool not found (expected for ai-users): {}",
-          username);
+      goto group_cleanup;
+    }
+
+    if (attempt < retry_limit) {
+      utils::get_logger()->warn(
+          "userdel attempt {} failed for user {}: {}. Retrying...",
+          attempt, username, result.stderr_output);
     } else {
-      utils::get_logger()->error("userdel failed: {}", result.stderr_output);
+      utils::get_logger()->error(
+          "userdel failed after {} attempts for user {}: {}",
+          retry_limit, username, result.stderr_output);
       return false;
     }
   }
 
+group_cleanup:
   // Delete the user's primary group (groupadd'd in execute_useradd)
   if (user_gid != static_cast<gid_t>(-1)) {
     auto grp_result = utils::exec_safe({"groupdel", username});

@@ -391,6 +391,20 @@ phase_install() {
 			return 1
 		fi
 		_log_file "installed: ${PREFIX}/bin/${MOUNT_WATCH_NAME}"
+
+		# Set up systemd service + timer for am-mount-watch
+		# The script handles: creating unit files, enabling timer (boot start),
+		# starting timer, and running an immediate check.
+		local mount_script="${SCRIPT_DIR}/scripts/set-am-mount-watch.sh"
+		if [[ -x "$mount_script" ]]; then
+			_log_file "setting up am-mount-watch systemd service via set-am-mount-watch.sh"
+			# The script skips build (binary exists) and re-installs binary (harmless)
+			# then creates systemd units, enables timer, starts timer, runs once
+			if ! sudo bash "$mount_script" >>"$INSTALL_LOG" 2>&1; then
+				# warn:降级自error——systemd 配置失败不影响主程序安装和使用
+				warn "am-mount-watch systemd 配置失败 (详见 install.log)，请手动运行: bash ${mount_script}"
+			fi
+		fi
 	fi
 
 	_log_file "installed: ${PREFIX}/bin/${WRAPPER_NAME}, ${PREFIX}/bin/${VERSIONED_BIN} -> ${BIN_NAME}"

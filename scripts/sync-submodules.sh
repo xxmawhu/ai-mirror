@@ -228,12 +228,8 @@ sync_to_submodule() {
         # CMakeLists.txt: 移除测试配置，只保留编译
         $DRY_RUN || {
           # 删除所有测试相关的行（enable_testing, add_test, tests/ 目录配置）
-          sed -i \
-            -e '/if(EXISTS.*tests)/,/endif()/d' \
-            -e '/enable_testing()/d' \
-            -e '/add_test/d' \
-            -e '/tests\//d' \
-            "$submodule/$file"
+          # 使用 Python 脚本处理 if/endif 嵌套
+          "${MAIN_REPO}/scripts/fix_cmake_for_submodule.py" "$submodule/$file"
         }
       else
         $DRY_RUN || cp "$file" "$submodule/$file"

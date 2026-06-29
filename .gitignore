@@ -1,5 +1,7 @@
 # Internal/dev-only files (not for public release)
 AGENTS.md
+AGENTS.md.bak.*
+.test_*
 issues/
 end_task/
 plan/

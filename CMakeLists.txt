@@ -143,24 +143,3 @@ target_link_libraries(ai-mirror-bin PRIVATE pthread)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(ai-mirror-bin PRIVATE OpenSSL::Crypto)
 
-
-    # Additional tests can be added here following the same pattern
-
-    # Unit tests for parse_known_hosts_hosts (standalone binary)
-        target_include_directories(test_known_hosts PRIVATE ${CMAKE_SOURCE_DIR}/include)
-        target_link_libraries(test_known_hosts PRIVATE
-            CLI11::CLI11
-            toml11::toml11
-            spdlog::spdlog
-            nlohmann_json::nlohmann_json
-            pthread
-        )
-        target_compile_options(test_known_hosts PRIVATE
-            -Wall -Wextra -Wpedantic -Werror
-            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
-        )
-        target_link_options(test_known_hosts PRIVATE
-            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
-        )
-    endif()
-endif()

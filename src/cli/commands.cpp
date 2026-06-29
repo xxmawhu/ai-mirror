@@ -969,6 +969,13 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     }
   }
 
+  // Persist mount info to .am_status so mount_watch can read it
+  if (!core::UserManager::update_state_mounts(username, home_dir,
+                                              ctx.config.user.prefix)) {
+    utils::get_logger()->warn(
+        "Failed to update mount state in .am_status for {}", username);
+  }
+
   utils::get_logger()->info("Configure complete: {} fix(es) applied for {}",
                             fixes, username);
   return mount_failures > 0 ? 1 : 0;
@@ -2366,6 +2373,9 @@ int cmd_health([[maybe_unused]] bool verbose) {
   return unhealthy > 0 ? 1 : 0;
 }
 
+// Forward declaration (defined after cmd_force_destroy)
+static bool terminate_user_processes(const std::string &username);
+
 int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
   auto ctx = make_context(verbose);
 
@@ -2413,6 +2423,13 @@ int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
 
   utils::get_logger()->warn("Force destroying user: {}", username);
 
+  // Terminate user processes (force-destroy must be aggressive)
+  utils::get_logger()->info("Killing processes for user {}", username);
+  terminate_user_processes(username);
+
+  // Clear crontab to prevent respawn
+  utils::exec_safe({"crontab", "-r", "-u", username});
+
   daemon::MountCleaner cleaner(ctx.config.user.prefix);
   cleaner.cleanup_for_user(username);
 
@@ -2425,12 +2442,43 @@ int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
   return 0;
 }
 
-static void terminate_user_processes(const std::string &username) {
-  auto result = utils::exec_safe({"pkill", "-u", username});
-  if (result.exit_code == 0) {
-    utils::get_logger()->info("Terminated processes for user {}", username);
-    usleep(500000);
+static bool terminate_user_processes(const std::string &username) {
+  auto logger = utils::get_logger();
+
+  /// Round 1: SIGTERM — graceful shutdown
+  logger->info("Round 1: SIGTERM to processes of user {}", username);
+  utils::exec_safe({"pkill", "-u", username});
+  usleep(1000000); // 1s wait
+
+  /// Check if processes remain
+  auto ps_check = utils::exec_safe({"ps", "-u", username, "-o", "pid="});
+  bool has_procs = (ps_check.exit_code == 0) && !ps_check.stdout_output.empty();
+
+  if (!has_procs) {
+    logger->info("All processes terminated for user {} after SIGTERM",
+                 username);
+    return true;
   }
+
+  logger->warn("Processes still running for user {}, sending SIGKILL:\n{}",
+               username, ps_check.stdout_output);
+
+  /// Round 2: SIGKILL — force kill stubborn processes
+  utils::exec_safe({"pkill", "-9", "-u", username});
+  usleep(1000000); // 1s wait
+
+  // Final verification
+  ps_check = utils::exec_safe({"ps", "-u", username, "-o", "pid="});
+  has_procs = (ps_check.exit_code == 0) && !ps_check.stdout_output.empty();
+
+  if (has_procs) {
+    logger->warn("Unkillable processes remain for user {}:\n{}", username,
+                 ps_check.stdout_output);
+    return false;
+  }
+
+  logger->info("All processes terminated for user {} after SIGKILL", username);
+  return true;
 }
 
 int cmd_rm(const std::string &project_path, bool verbose) {
@@ -2517,7 +2565,19 @@ int cmd_rm(const std::string &project_path, bool verbose) {
   if (verbose) {
     std::cout << "Step 1: Terminating processes for " << username << std::endl;
   }
-  terminate_user_processes(username);
+  if (!terminate_user_processes(username)) {
+    utils::get_logger()->warn(
+        "Some processes for user {} could not be killed, attempting userdel "
+        "anyway",
+        username);
+  }
+
+  // Step 1b: Clear user crontab (prevent process restart after kill)
+  utils::get_logger()->info("Step 1b: Clearing crontab for user {}", username);
+  if (verbose) {
+    std::cout << "Step 1b: Clearing crontab for " << username << std::endl;
+  }
+  utils::exec_safe({"crontab", "-r", "-u", username});
 
   // Step 2: Unmount bind mounts
   utils::get_logger()->info("Step 2: Unmounting bind mounts for {}", username);

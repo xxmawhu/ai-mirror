@@ -1,8 +1,19 @@
 // am-mount-watch: standalone mount health checker & auto-repair
 //
-// Scans all AI users' bind mounts, detects stale mounts (source missing or
-// target inaccessible), force-unmounts them, and reports results.
-// Designed to run periodically via systemd timer.
+// Discovers AI users by scanning all system users' $HOME/.am_status files.
+// For each AI user, reads the persisted `mounts` array from .am_status and
+// compares each entry against /proc/mounts. Stale mounts (source missing or
+// target inaccessible) are force-unmounted.
+//
+// This approach (introspection via .am_status) replaces the old
+// naming-convention and .ai-mirror.toml scanning approach:
+//   - No dependency on hex-hash username format (the prefix conventionally
+//   starts
+//     with "i", but any user with .am_status is treated as an AI user)
+//   - No scanning of main user home directories (which crashes under NFS
+//     root_squash)
+//   - Self-contained: mount_watch reads expected mounts directly from each AI
+//     user's state file
 //
 // Exit codes:
 //   0 — all mounts healthy
@@ -14,15 +25,19 @@
 #include "ai_mirror/core/config.hpp"
 #include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/core/path_resolver.hpp"
+#include "ai_mirror/core/user_manager.hpp"
 #include "ai_mirror/daemon/mount_cleaner.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include "ai_mirror/utils/shell.hpp"
 
 #include <cerrno>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <pwd.h>
+#include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
@@ -36,22 +51,82 @@ using namespace std::chrono_literals;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Find all AI users (names starting with prefix_) on the system.
-static std::vector<std::string> list_ai_users(const std::string &prefix) {
-  std::vector<std::string> users;
-  setpwent();
-  while (auto *pw = getpwent()) {
-    std::string name(pw->pw_name);
-    // Match: starts with prefix + at least one char after underscore
-    // e.g. "imaxx_a1b2c3"
-    if (name.size() > prefix.size() + 1 &&
-        name.compare(0, prefix.size(), prefix) == 0 &&
-        name[prefix.size()] == '_') {
-      users.push_back(std::move(name));
+/// Check if a path has a readable .am_status file.
+/// Uses std::error_code overload to avoid throwing filesystem_error on NFS
+/// root_squash.
+static bool has_status_file(const fs::path &home_dir) {
+  std::error_code ec;
+  return fs::exists(home_dir / ".am_status", ec);
+}
+
+/// Read .am_status and return the mounts array.
+/// Returns empty vector if the file is missing or unreadable (graceful
+/// degradation).
+static std::vector<core::MountInfo>
+read_expected_mounts(const fs::path &home_dir) {
+  auto info = core::UserManager::read_state(home_dir);
+  if (!info)
+    return {};
+  return std::move(info->mounts);
+}
+
+/// Read /proc/mounts for mount entries under the given home directory.
+/// This is used for the one-time fill when .am_status has no mounts field yet
+/// (legacy AI users).
+static std::vector<core::MountEntry>
+read_proc_mounts_for_user(const fs::path &home_dir) {
+  std::vector<core::MountEntry> entries;
+  std::ifstream mounts("/proc/mounts");
+  std::string line;
+  while (std::getline(mounts, line)) {
+    std::istringstream iss(line);
+    std::string device, mount_point, fs_type, options;
+    iss >> device >> mount_point >> fs_type >> options;
+    if (mount_point.find(home_dir.string()) == 0 &&
+        mount_point.size() > home_dir.string().size()) {
+      core::MountEntry me;
+      me.source = device;
+      me.target = mount_point;
+      me.read_only = options.find("ro") != std::string::npos;
+      me.active = true;
+      entries.push_back(std::move(me));
     }
   }
-  endpwent();
-  return users;
+  return entries;
+}
+
+/// Build MountInfo from MountEntry by stat-ing the source.
+static core::MountInfo mount_entry_to_info(const core::MountEntry &me) {
+  core::MountInfo mi;
+  mi.source = me.source.string();
+  mi.target = me.target.string();
+  mi.read_only = me.read_only;
+  struct stat st;
+  if (::stat(me.source.c_str(), &st) == 0) {
+    mi.source_stat.ino = st.st_ino;
+    mi.source_stat.dev = st.st_dev;
+    mi.source_stat.mode = st.st_mode;
+    mi.source_stat.uid = st.st_uid;
+    mi.source_stat.gid = st.st_gid;
+    mi.source_stat.size = st.st_size;
+    mi.source_stat.mtime = st.st_mtime;
+  }
+  return mi;
+}
+
+/// Check if a mount target is still alive by stat(2) on the target.
+/// A bind mount becomes stale when its source is deleted, making the target
+/// inaccessible. We do NOT compare inode/device numbers (see health_check in
+/// graft.cpp for details on BeeGFS false-positive avoidance).
+static bool is_mount_alive(const fs::path &target) {
+  struct stat st;
+  return ::stat(target.c_str(), &st) == 0;
+}
+
+/// Check if a mount source still exists via stat(2).
+static bool source_exists(const fs::path &source) {
+  struct stat st;
+  return ::stat(source.c_str(), &st) == 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,77 +154,137 @@ int main(int argc, char *argv[]) {
 
   logger->info("am-mount-watch starting");
 
-  // Load config (default path: /etc/ai-mirror/config.toml)
-  fs::path config_path = fs::path("/etc/ai-mirror/config.toml");
-  if (!fs::exists(config_path)) {
-    // Fallback: try project config
-    config_path = fs::path(
-        "/mnt/beegfs_data/usr/maxx/dev/aimirror/ai-mirror/etc/config.toml");
-  }
-  if (!fs::exists(config_path)) {
-    logger->error("Config not found at /etc/ai-mirror/config.toml");
-    return 2;
-  }
-
+  // Load optional system config for prefix.
+  // The mount_watch binary runs as root (systemd), so we look for the config
+  // in the system-wide install location only. We no longer scan main user
+  // home directories for .ai-mirror.toml (NFS root_squash crash risk).
   core::Config config;
-  try {
-    config = core::ConfigParser::load(config_path);
-  } catch (const std::exception &e) {
-    logger->error("Failed to load config: {}", e.what());
-    return 2;
-  }
-  std::string prefix = config.user.prefix.empty() ? "i" : config.user.prefix;
-
-  // Build mount source paths from config
-  std::vector<fs::path> mount_sources;
-  for (const auto &mp : config.mount.paths) {
-    auto resolved = core::PathResolver::resolve(mp.string());
-    if (resolved && fs::exists(*resolved)) {
-      mount_sources.push_back(*resolved);
+  std::string prefix = "i";
+  {
+    fs::path system_cfg("/etc/ai-mirror/config.toml");
+    std::error_code ec;
+    if (fs::exists(system_cfg, ec)) {
+      try {
+        config = core::ConfigParser::load(system_cfg);
+        prefix = config.user.prefix.empty() ? "i" : config.user.prefix;
+        logger->info("Loaded system config from {}", system_cfg.string());
+      } catch (const std::exception &e) {
+        // [log-review] 降级为 warning: config load 失败但使用默认值继续运行
+        logger->warn("Failed to load config from {}, using defaults: {}",
+                     system_cfg.string(), e.what());
+      }
+    } else {
+      logger->info("No system config found at {}, using defaults (prefix={})",
+                   system_cfg.string(), prefix);
     }
   }
 
-  // Scan AI users
-  auto ai_users = list_ai_users(prefix);
+  // Discover AI users by scanning /etc/passwd for users with .am_status.
+  // Any user with a readable $HOME/.am_status is treated as an AI user.
+  // This replaces the old naming-convention + prefix approach.
+  std::vector<std::pair<std::string, fs::path>> ai_users; // username, home_dir
+  {
+    setpwent();
+    while (auto *pw = getpwent()) {
+      std::string home(pw->pw_dir);
+      if (home.empty() || home == "/" || home == "/root")
+        continue;
+      // Check for .am_status (NFS-safe: uses error_code)
+      if (has_status_file(home)) {
+        ai_users.emplace_back(std::string(pw->pw_name), fs::path(home));
+      }
+    }
+    endpwent();
+  }
+
   if (ai_users.empty()) {
-    logger->info("No AI users found (prefix={})", prefix);
+    logger->info("No AI users found (no .am_status files found)");
     return 0;
   }
-  logger->info("Found {} AI user(s)", ai_users.size());
+  logger->info("Found {} AI user(s) via .am_status", ai_users.size());
 
   int total_fixed = 0;
   int total_unfixable = 0;
   std::vector<std::string> unfixable_users;
 
-  for (const auto &username : ai_users) {
+  for (const auto &[username, home_dir] : ai_users) {
     if (verbose) {
-      logger->info("Checking user: {}", username);
+      logger->info("Checking user: {} (home: {})", username, home_dir.string());
     }
 
-    core::Graft graft(prefix);
-    auto issues = graft.health_check();
+    // Read expected mounts from .am_status
+    auto expected_mounts = read_expected_mounts(home_dir);
 
-    // Filter issues for this user
-    std::vector<fs::path> dead_mounts;
-    std::string user_home = ai_mirror::utils::get_home_dir(username);
-    if (user_home.empty()) {
-      logger->warn("Cannot determine home for user {}, skipping", username);
-      continue;
-    }
+    // [补充机制] Legacy AI user: .am_status exists but no mounts field yet.
+    // Read actual mounts from /proc/mounts, stat sources, and write back.
+    if (expected_mounts.empty()) {
+      auto proc_mounts = read_proc_mounts_for_user(home_dir);
+      if (!proc_mounts.empty()) {
+        logger->info(
+            "  user {}: .am_status has no mounts, filling {} from /proc/mounts",
+            username, proc_mounts.size());
 
-    for (const auto &m : issues) {
-      if (m.target.string().find(user_home) == 0) {
-        dead_mounts.push_back(m.target);
-        if (verbose) {
-          logger->info("  stale mount: {} -> {}", m.target.string(),
-                       m.source.string());
+        // Convert MountEntry to MountInfo
+        std::vector<core::MountInfo> filled;
+        for (const auto &me : proc_mounts) {
+          filled.push_back(mount_entry_to_info(me));
         }
+        expected_mounts = std::move(filled);
+
+        // Persist back to .am_status via update_state_mounts
+        // (We use Graft.list_mounts which reads /proc/mounts — same result)
+        if (!core::UserManager::update_state_mounts(username, home_dir,
+                                                    prefix)) {
+          logger->warn(
+              "  user {}: failed to write initial mounts to .am_status",
+              username);
+        }
+      } else {
+        if (verbose) {
+          logger->info("  user {}: no mounts in .am_status or /proc/mounts, "
+                       "skipping",
+                       username);
+        }
+        continue;
+      }
+    }
+
+    std::vector<fs::path> dead_mounts;
+
+    for (const auto &mi : expected_mounts) {
+      fs::path target(mi.target);
+      fs::path source(mi.source);
+
+      // Check if target is still mounted (check via stat on target)
+      bool target_alive = is_mount_alive(target);
+
+      if (!target_alive) {
+        // Target stat failed — stale mount or target path removed
+        if (verbose) {
+          logger->info("  stale mount target: {} (source: {})", mi.target,
+                       mi.source);
+        }
+        dead_mounts.push_back(target);
+        continue;
+      }
+
+      // Source existence check
+      // (We stat the source directly; on NFS this is safe without
+      // root_squash because mount_watch runs as root.)
+      if (!source_exists(source)) {
+        if (verbose) {
+          logger->info("  stale mount (source missing): {} -> {}", mi.source,
+                       mi.target);
+        }
+        dead_mounts.push_back(target);
+        continue;
       }
     }
 
     if (dead_mounts.empty()) {
       if (verbose) {
-        logger->info("  user {}: all mounts healthy", username);
+        logger->info("  user {}: all {} mount(s) healthy", username,
+                     expected_mounts.size());
       }
       continue;
     }
@@ -157,6 +292,8 @@ int main(int argc, char *argv[]) {
     // Force-unmount stale mounts
     logger->info("  user {}: cleaning {} stale mount(s)", username,
                  dead_mounts.size());
+
+    core::Graft graft(prefix);
     int cleaned = graft.force_cleanup(dead_mounts);
     total_fixed += cleaned;
 

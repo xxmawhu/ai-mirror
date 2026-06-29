@@ -82,6 +82,7 @@ add_executable(am-mount-watch
     src/core/config.cpp
     src/core/graft.cpp
     src/core/path_resolver.cpp
+    src/core/user_manager.cpp
     src/security/path_validator.cpp
     src/daemon/mount_cleaner.cpp
     src/utils/shell.cpp
@@ -105,6 +106,7 @@ target_link_libraries(am-mount-watch PRIVATE
     spdlog::spdlog
     toml11::toml11
     nlohmann_json::nlohmann_json
+    OpenSSL::Crypto
     pthread
 )
 

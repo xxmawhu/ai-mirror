@@ -395,15 +395,23 @@ phase_install() {
 		# Set up systemd service + timer for am-mount-watch
 		# The script handles: creating unit files, enabling timer (boot start),
 		# starting timer, and running an immediate check.
+		# Output piped to tee so user sees progress on screen and in log.
 		local mount_script="${SCRIPT_DIR}/scripts/set-am-mount-watch.sh"
 		if [[ -x "$mount_script" ]]; then
+			log "配置 am-mount-watch systemd 服务..."
 			_log_file "setting up am-mount-watch systemd service via set-am-mount-watch.sh"
 			# The script skips build (binary exists) and re-installs binary (harmless)
 			# then creates systemd units, enables timer, starts timer, runs once
-			if ! sudo bash "$mount_script" >>"$INSTALL_LOG" 2>&1; then
+			if ! sudo bash "$mount_script" 2>&1 | tee -a "$INSTALL_LOG"; then
 				# warn:降级自error——systemd 配置失败不影响主程序安装和使用
-				warn "am-mount-watch systemd 配置失败 (详见 install.log)，请手动运行: bash ${mount_script}"
+				warn "am-mount-watch systemd 配置失败，请检查上方错误信息或手动运行: bash ${mount_script}"
+			else
+				ok "am-mount-watch systemd 服务已配置并启动"
 			fi
+		else
+			# warn:降级自error——脚本不可执行但仍可手动运行
+			warn "scripts/set-am-mount-watch.sh 不可执行，跳过 systemd 配置"
+			warn "如需手动配置: chmod +x ${mount_script} && sudo bash ${mount_script}"
 		fi
 	fi
 
@@ -484,6 +492,24 @@ phase_summary() {
 	local VERSION
 	VERSION=$(get_version)
 	ok "安装完成 v${VERSION}: ${PREFIX}/bin/${WRAPPER_NAME}  (source ~/.bashrc 生效)"
+
+	# Show systemd service/timer status if am-mount-watch was installed
+	if command -v systemctl &>/dev/null && [[ -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" ]]; then
+		if systemctl is-active --quiet "am-mount-watch.service" 2>/dev/null; then
+			ok "systemd: am-mount-watch.service 运行中"
+		else
+			# [log-review] warn:降级自error——service 未运行可能因系统无 systemd 或安装阶段配置失败，属于预期内场景，不影响主程序功能
+			warn "systemd: am-mount-watch.service 未运行"
+		fi
+		if systemctl is-active --quiet "am-mount-watch.timer" 2>/dev/null; then
+			ok "systemd: am-mount-watch.timer 运行中 (每 5 分钟)"
+		else
+			# [log-review] warn:降级自error——timer 未运行可能因系统无 systemd 或安装阶段配置失败，属于预期内场景，不影响主程序功能
+			warn "systemd: am-mount-watch.timer 未运行"
+		fi
+		_log_file "systemd status: $(systemctl is-active am-mount-watch.service 2>/dev/null || echo unknown), timer: $(systemctl is-active am-mount-watch.timer 2>/dev/null || echo unknown)"
+	fi
+
 	_log_file "Full log: ${INSTALL_LOG}"
 }
 

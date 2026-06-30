@@ -15,6 +15,10 @@ docker/
 !docker/Dockerfile.smoke
 tests/*
 !tests/smoke/
+!tests/integration/
+!tests/docker/
+!tests/test_*.sh
+!tests/unit/
 release.sh
 .dockerignore
 llm-docs/
@@ -37,6 +41,7 @@ build/
 build-release/
 build-test/
 build-test2/
+build-docker-test/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

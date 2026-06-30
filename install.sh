@@ -41,11 +41,13 @@ _log() {
 	ts=$(date '+%Y-%m-%d %H:%M:%S')
 	local msg="${ts} $1"
 	echo -e "$msg"
-	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$msg" >>"$INSTALL_LOG"
+	# [防御] Permission denied 时静默降级（log 文件被其他用户创建时），set -e 不阻断
+	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$msg" >>"$INSTALL_LOG" 2>/dev/null || true
 }
 # Log only (verbose steps — never shown on screen)
 _log_file() {
-	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$(date '+%Y-%m-%d %H:%M:%S') $1" >>"$INSTALL_LOG"
+	# [防御] Permission denied 时静默降级，set -e 不阻断
+	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$(date '+%Y-%m-%d %H:%M:%S') $1" >>"$INSTALL_LOG" 2>/dev/null || true
 }
 
 log() { _log "${GREEN}[install]${NC} $*"; }
@@ -77,11 +79,15 @@ generate_fail_report() {
 	report_ts=$(date '+%Y%m%d-%H%M%S')
 	local report_file="${LOG_DIR}/install-fail-${report_ts}.md"
 
-	mkdir -p "${LOG_DIR}"
+	mkdir -p "${LOG_DIR}" 2>/dev/null || true
 
 	# Atomic write: use tempfile then mv (Rule 11)
 	local tmp_file
-	tmp_file=$(mktemp "${LOG_DIR}/install-fail-XXXXXX.tmp")
+	tmp_file=$(mktemp "${LOG_DIR}/install-fail-XXXXXX.tmp" 2>/dev/null) || {
+		echo "[install] INSTALL FAILED (exit=$exit_code)" >&2
+		echo "[install] Cannot write failure report to ${LOG_DIR}/ (Permission denied)" >&2
+		return $exit_code
+	}
 
 	local report_content
 	report_content=$(
@@ -163,11 +169,12 @@ trap generate_fail_report EXIT
 # ---- Phase: Setup ----
 phase_setup() {
 	CURRENT_PHASE="setup"
-	mkdir -p "${LOG_DIR}"
-	mkdir -p "${BUILD_DIR}"
+	mkdir -p "${LOG_DIR}" 2>/dev/null || true
+	mkdir -p "${BUILD_DIR}" 2>/dev/null || true
 	LOG_DIR_READY=1
 
-	: >"$INSTALL_LOG"
+	# [防御] 清空 log 文件可能因权限失败（文件被其他用户创建），静默降级
+	: >"$INSTALL_LOG" 2>/dev/null || true
 
 	info "ai-mirror installer v0.1.0 (log: ${INSTALL_LOG})"
 	_log_file "Install started at $(date)"
@@ -197,12 +204,12 @@ phase_system_deps() {
 	if [[ ${#missing[@]} -gt 0 ]]; then
 		require_sudo
 		info "Installing missing packages: ${missing[*]}"
-		if ! sudo apt-get update -qq >>"$INSTALL_LOG" 2>&1; then
+		if ! sudo apt-get update -qq 2>&1 | sudo tee -a "$INSTALL_LOG" >/dev/null; then
 			ERROR_MSG="apt-get update failed"
 			fail "依赖安装失败 (apt-get update)"
 			return 1
 		fi
-		if ! sudo apt-get install -y -qq "${missing[@]}" >>"$INSTALL_LOG" 2>&1; then
+		if ! sudo apt-get install -y -qq "${missing[@]}" 2>&1 | sudo tee -a "$INSTALL_LOG" >/dev/null; then
 			ERROR_MSG="apt-get install failed for: ${missing[*]}"
 			fail "依赖安装失败: ${missing[*]}"
 			return 1
@@ -220,7 +227,8 @@ phase_build() {
 	CURRENT_PHASE="build"
 	info "构建中 (C++20)..."
 
-	mkdir -p "${BUILD_DIR}"
+	# [防御] build dir 创建失败时静默降级（Permission denied）
+	mkdir -p "${BUILD_DIR}" 2>/dev/null || true
 
 	# Check CMakeLists.txt content hash for reliable change detection
 	# (timestamp -nt fails when git pull or cp -p preserves timestamps)
@@ -238,8 +246,8 @@ phase_build() {
 		_log_file "CMakeLists.txt changed (hash: ${prev_hash:-none} -> $current_hash)"
 		need_configure=true
 	else
-		local cache_mtime
-		cache_mtime=$(stat -c '%Y' "${BUILD_DIR}/CMakeCache.txt" 2>/dev/null || echo 0)
+		# cache_mtime intentionally removed: we use find -newer below which is
+		# more reliable (handles mtime comparison correctly across filesystems)
 		local newer_src
 		newer_src=$(find "${SCRIPT_DIR}/src" "${SCRIPT_DIR}/include" \
 			-type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
@@ -267,7 +275,7 @@ phase_build() {
 			return 1
 		fi
 		# Save hash after successful configure (only if cmake succeeded)
-		echo "$current_hash" >"$cmake_hash_file"
+		echo "$current_hash" >"$cmake_hash_file" 2>/dev/null || true
 	fi
 
 	if ! cmake --build "${BUILD_DIR}" -j"$(nproc)" >>"$INSTALL_LOG" 2>&1; then
@@ -306,7 +314,7 @@ phase_verify() {
 
 	if [[ $help_exit -ne 0 ]]; then
 		_log_file "${BIN_NAME} --help returned non-zero (exit=$help_exit): ${help_output}"
-		# warn:降级自error——--help 非零退出可能是终端兼容问题，不影响安装
+		# [log-review] warn:降级自error——--help 非零退出可能是终端兼容问题，不影响安装
 		warn "验证: --help 返回非零 (exit=$help_exit，可能终端兼容问题)"
 	else
 		ok "验证"
@@ -327,23 +335,29 @@ cleanup_old_versions() {
 	local current_version="$3"
 	local max_keep=2 # Keep at most 2 old versions
 
-	# List all versioned files, sorted by modification time (oldest first)
-	local versions
-	versions=$(ls -t "${bin_dir}/${name}."* 2>/dev/null | grep -E "${name}\.[0-9]+\.[0-9]+$" || true)
+	# Find all versioned files, sorted by modification time (newest first)
+	local versions=()
+	while IFS= read -r -d '' f; do
+		versions+=("$f")
+	done < <(find "${bin_dir}" -maxdepth 1 -type f -name "${name}.*" \
+		-regextype posix-extended -regex ".*/${name}\.[0-9]+\.[0-9]+$" \
+		-printf '%T@ %p\0' 2>/dev/null | sort -rn | cut -z -d' ' -f2-)
 
-	local count=$(echo "$versions" | wc -l)
-	local to_delete=$((count - max_keep))
-
-	if [[ $to_delete -gt 0 ]]; then
-		local old_files
-		old_files=$(echo "$versions" | tail -n $to_delete)
-		for f in $old_files; do
-			if [[ "$f" != "${bin_dir}/${name}.${current_version}" ]]; then
-				log "  Removing old version: $(basename "$f")"
-				sudo rm -f "$f"
-			fi
-		done
+	local count
+	count=${#versions[@]}
+	if [[ $count -le $max_keep ]]; then
+		return 0
 	fi
+
+	# Delete oldest versions beyond max_keep
+	local i
+	for ((i = max_keep; i < count; i++)); do
+		local f="${versions[$i]}"
+		if [[ "$f" != "${bin_dir}/${name}.${current_version}" ]]; then
+			log "  Removing old version: $(basename "$f")"
+			sudo rm -f "$f"
+		fi
+	done
 }
 
 # ---- Phase: Install ----
@@ -426,7 +440,11 @@ RestrictSUIDSGID=yes
 WantedBy=multi-user.target
 UNIT_EOF
 			local svc_rc=$?
-			[[ $svc_rc -ne 0 ]] && { warn "创建 am-mount-watch.service 失败"; ERROR_MSG="systemd service unit creation failed"; }
+			# [log-review] warn:降级自error——systemd service 单元写入失败是预期内异常（sudo tee 可能在非 systemd 系统或容器内失败），不影响主程序安装
+			[[ $svc_rc -ne 0 ]] && {
+				warn "创建 am-mount-watch.service 失败"
+				ERROR_MSG="systemd service unit creation failed"
+			}
 
 			# 2) 创建 timer 单元文件
 			local tmr_file="/etc/systemd/system/am-mount-watch.timer"
@@ -443,8 +461,12 @@ RandomizedDelaySec=30
 [Install]
 WantedBy=timers.target
 UNIT_EOF
+			# [log-review] warn:降级自error——systemd timer 单元写入失败是预期内异常（可能 sudo 超时或 systemd 不支持），不影响主程序安装
 			local tmr_rc=$?
-			[[ $tmr_rc -ne 0 ]] && { warn "创建 am-mount-watch.timer 失败"; ERROR_MSG="systemd timer unit creation failed"; }
+			[[ $tmr_rc -ne 0 ]] && {
+				warn "创建 am-mount-watch.timer 失败"
+				ERROR_MSG="systemd timer unit creation failed"
+			}
 
 			# 3) 重载 daemon + 启用 timer + 启动 timer + 立即运行一次
 			if [[ $svc_rc -eq 0 && $tmr_rc -eq 0 ]]; then
@@ -457,9 +479,11 @@ UNIT_EOF
 				_log_file "systemd: immediate check triggered"
 				ok "am-mount-watch systemd 服务已安装并启动"
 			else
+				# [log-review] warn:降级自error——systemd 单元文件写入失败后单元可能不完整，但不影响 ai-mirror 主程序功能
 				warn "am-mount-watch systemd 单元文件创建异常，请检查 systemd 状态"
 			fi
 		else
+			# [log-review] warn:降级自error——systemctl 不可用（容器/非 systemd 系统），跳过 systemd 配置不影响主程序安装
 			warn "systemctl 不可用，跳过 systemd 配置"
 		fi
 	fi
@@ -489,7 +513,7 @@ UNIT_EOF
 		sudo install -m 0644 "$completion_src" /etc/bash_completion.d/am
 		_log_file "bash completion -> /etc/bash_completion.d/am"
 	else
-		# warn:降级自error——补全文件缺失不影响核心功能
+		# [log-review] warn:降级自error——补全文件缺失不影响核心功能
 		warn "bash 补全文件缺失，跳过"
 	fi
 
@@ -543,12 +567,16 @@ phase_summary() {
 	ok "安装完成 v${VERSION}: ${PREFIX}/bin/${WRAPPER_NAME}  (source ~/.bashrc 生效)"
 
 	# Show systemd service/timer status if am-mount-watch was installed
+	# NOTE: am-mount-watch.service is Type=oneshot — it runs and exits.
+	# "systemctl is-active" returns "inactive" when the service is not
+	# currently executing.  Use is-failed to check for crash; check the
+	# timer (a daemon) for running status in the normal sense.
 	if command -v systemctl &>/dev/null && [[ -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" ]]; then
-		if systemctl is-active --quiet "am-mount-watch.service" 2>/dev/null; then
-			ok "systemd: am-mount-watch.service 运行中"
+		if systemctl is-failed --quiet "am-mount-watch.service" 2>/dev/null; then
+			# [log-review] warn:降级自error——service 曾执行失败，可能是配置或环境问题，不影响主程序
+			warn "systemd: am-mount-watch.service 曾执行失败 (systemctl is-failed)"
 		else
-			# [log-review] warn:降级自error——service 未运行可能因系统无 systemd 或安装阶段配置失败，属于预期内场景，不影响主程序功能
-			warn "systemd: am-mount-watch.service 未运行"
+			ok "systemd: am-mount-watch.service 上次执行正常"
 		fi
 		if systemctl is-active --quiet "am-mount-watch.timer" 2>/dev/null; then
 			ok "systemd: am-mount-watch.timer 运行中 (每 5 分钟)"
@@ -567,11 +595,13 @@ phase_restart_systemd() {
 	CURRENT_PHASE="restart_systemd"
 
 	if ! command -v systemctl &>/dev/null; then
+		# [log-review] warn:降级自error——systemctl 不可用（容器/非 systemd 系统），无法重启 systemd 服务但主程序功能不受影响
 		warn "systemctl 不可用，无法重启 systemd 服务"
 		return 1
 	fi
 
 	if ! sudo test -f /etc/systemd/system/am-mount-watch.service 2>/dev/null; then
+		# [log-review] warn:降级自error——service 文件不存在说明未安装，重启功能不可用但不影响主程序
 		warn "am-mount-watch.service 未安装，请先执行 install.sh"
 		return 1
 	fi
@@ -588,15 +618,18 @@ phase_restart_systemd() {
 	_log_file "systemd: immediate check triggered"
 
 	# 验证状态
-	if systemctl is-active --quiet "am-mount-watch.service" 2>/dev/null; then
-		ok "am-mount-watch.service 运行中"
+	# am-mount-watch.service is Type=oneshot — use is-failed instead of
+	# is-active (which returns "inactive" once the service finishes).
+	if systemctl is-failed --quiet "am-mount-watch.service" 2>/dev/null; then
+		# [log-review] warn:降级自error——service 执行失败，可能是配置或环境问题，不影响主程序
+		warn "am-mount-watch.service 启动失败，请手动检查: systemctl status am-mount-watch.service"
 	else
-		# warn:降级自error——服务可能因环境问题无法启动，但不影响主程序
-		warn "am-mount-watch.service 启动异常，请手动检查: systemctl status am-mount-watch.service"
+		ok "am-mount-watch.service 启动成功"
 	fi
 	if systemctl is-active --quiet "am-mount-watch.timer" 2>/dev/null; then
 		ok "am-mount-watch.timer 运行中 (每 5 分钟)"
 	else
+		# [log-review] warn:降级自error——timer 可能因环境问题无法启动，但不影响主程序
 		warn "am-mount-watch.timer 启动异常，请手动检查: systemctl status am-mount-watch.timer"
 	fi
 }
@@ -670,7 +703,7 @@ phase_clean() {
 
 	if sudo test -d "${DATA_DIR}"; then
 		if ! sudo rmdir "${DATA_DIR}" 2>/dev/null; then
-			# warn:降级自error——data dir 非空可能是运行中产生的数据，跳过删除不影响卸载
+			# [log-review] warn:降级自error——data dir 非空可能是运行中产生的数据，跳过删除不影响卸载
 			warn "Data dir ${DATA_DIR}/ 非空，跳过删除"
 		else
 			_log_file "Removed data dir ${DATA_DIR}/"
@@ -679,7 +712,7 @@ phase_clean() {
 
 	# Clean up systemd service if am-mount-watch was installed
 	# (完整维护逻辑：停止→禁用→删除单元文件→重载daemon→删除binary，内联不委托外部脚本)
-	if command -v systemctl &>/dev/null && ( sudo test -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" || sudo test -f /etc/systemd/system/am-mount-watch.service 2>/dev/null || sudo test -f /etc/systemd/system/am-mount-watch.timer 2>/dev/null ); then
+	if command -v systemctl &>/dev/null && (sudo test -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" || sudo test -f /etc/systemd/system/am-mount-watch.service 2>/dev/null || sudo test -f /etc/systemd/system/am-mount-watch.timer 2>/dev/null); then
 		log "停止并移除 am-mount-watch systemd 服务（内联）..."
 		_log_file "Removing am-mount-watch systemd service (inline)"
 		sudo systemctl stop am-mount-watch.timer 2>/dev/null || true

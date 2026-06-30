@@ -392,26 +392,75 @@ phase_install() {
 		fi
 		_log_file "installed: ${PREFIX}/bin/${MOUNT_WATCH_NAME}"
 
-		# Set up systemd service + timer for am-mount-watch
-		# The script handles: creating unit files, enabling timer (boot start),
-		# starting timer, and running an immediate check.
-		# Output piped to tee so user sees progress on screen and in log.
-		local mount_script="${SCRIPT_DIR}/scripts/set-am-mount-watch.sh"
-		if [[ -x "$mount_script" ]]; then
-			log "配置 am-mount-watch systemd 服务..."
-			_log_file "setting up am-mount-watch systemd service via set-am-mount-watch.sh"
-			# The script skips build (binary exists) and re-installs binary (harmless)
-			# then creates systemd units, enables timer, starts timer, runs once
-			if ! sudo bash "$mount_script" 2>&1 | tee -a "$INSTALL_LOG"; then
-				# warn:降级自error——systemd 配置失败不影响主程序安装和使用
-				warn "am-mount-watch systemd 配置失败，请检查上方错误信息或手动运行: bash ${mount_script}"
+		# ---- 内联 systemd 配置（完整维护逻辑，不委托外部脚本） ----
+		if command -v systemctl &>/dev/null; then
+			log "配置 am-mount-watch systemd 服务（内联）..."
+			_log_file "Setting up am-mount-watch systemd service (inline)"
+
+			# 1) 创建 service 单元文件
+			local svc_file="/etc/systemd/system/am-mount-watch.service"
+			sudo tee "$svc_file" >/dev/null <<UNIT_EOF
+[Unit]
+Description=am-mount-watch — AI mirror mount health checker & auto-repair
+Documentation=https://github.com/maxx/ai-mirror
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=${PREFIX}/bin/${MOUNT_WATCH_NAME}
+User=root
+Group=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=am-mount-watch
+
+# Hardening
+CapabilityBoundingSet=
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+			local svc_rc=$?
+			[[ $svc_rc -ne 0 ]] && { warn "创建 am-mount-watch.service 失败"; ERROR_MSG="systemd service unit creation failed"; }
+
+			# 2) 创建 timer 单元文件
+			local tmr_file="/etc/systemd/system/am-mount-watch.timer"
+			sudo tee "$tmr_file" >/dev/null <<UNIT_EOF
+[Unit]
+Description=am-mount-watch timer (every 5 min)
+Requires=am-mount-watch.service
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target
+UNIT_EOF
+			local tmr_rc=$?
+			[[ $tmr_rc -ne 0 ]] && { warn "创建 am-mount-watch.timer 失败"; ERROR_MSG="systemd timer unit creation failed"; }
+
+			# 3) 重载 daemon + 启用 timer + 启动 timer + 立即运行一次
+			if [[ $svc_rc -eq 0 && $tmr_rc -eq 0 ]]; then
+				sudo systemctl daemon-reload 2>/dev/null || true
+				sudo systemctl enable am-mount-watch.timer 2>/dev/null || true
+				sudo systemctl start am-mount-watch.timer 2>/dev/null || true
+				_log_file "systemd: timer enabled and started"
+				# 立即执行一次（oneshot，不等 5 分钟周期）
+				sudo systemctl start am-mount-watch.service 2>/dev/null || true
+				_log_file "systemd: immediate check triggered"
+				ok "am-mount-watch systemd 服务已安装并启动"
 			else
-				ok "am-mount-watch systemd 服务已配置并启动"
+				warn "am-mount-watch systemd 单元文件创建异常，请检查 systemd 状态"
 			fi
 		else
-			# warn:降级自error——脚本不可执行但仍可手动运行
-			warn "scripts/set-am-mount-watch.sh 不可执行，跳过 systemd 配置"
-			warn "如需手动配置: chmod +x ${mount_script} && sudo bash ${mount_script}"
+			warn "systemctl 不可用，跳过 systemd 配置"
 		fi
 	fi
 
@@ -513,6 +562,45 @@ phase_summary() {
 	_log_file "Full log: ${INSTALL_LOG}"
 }
 
+# ---- Phase: Restart systemd ----
+phase_restart_systemd() {
+	CURRENT_PHASE="restart_systemd"
+
+	if ! command -v systemctl &>/dev/null; then
+		warn "systemctl 不可用，无法重启 systemd 服务"
+		return 1
+	fi
+
+	if ! sudo test -f /etc/systemd/system/am-mount-watch.service 2>/dev/null; then
+		warn "am-mount-watch.service 未安装，请先执行 install.sh"
+		return 1
+	fi
+
+	log "重启 am-mount-watch systemd 服务..."
+	sudo systemctl daemon-reload 2>/dev/null || true
+	_log_file "systemd: daemon-reload done"
+
+	sudo systemctl restart am-mount-watch.timer 2>/dev/null || true
+	_log_file "systemd: timer restarted"
+
+	# 立即执行一次（验证服务可用）
+	sudo systemctl start am-mount-watch.service 2>/dev/null || true
+	_log_file "systemd: immediate check triggered"
+
+	# 验证状态
+	if systemctl is-active --quiet "am-mount-watch.service" 2>/dev/null; then
+		ok "am-mount-watch.service 运行中"
+	else
+		# warn:降级自error——服务可能因环境问题无法启动，但不影响主程序
+		warn "am-mount-watch.service 启动异常，请手动检查: systemctl status am-mount-watch.service"
+	fi
+	if systemctl is-active --quiet "am-mount-watch.timer" 2>/dev/null; then
+		ok "am-mount-watch.timer 运行中 (每 5 分钟)"
+	else
+		warn "am-mount-watch.timer 启动异常，请手动检查: systemctl status am-mount-watch.timer"
+	fi
+}
+
 # ---- Phase: Clean ----
 phase_clean() {
 	CURRENT_PHASE="clean"
@@ -589,6 +677,28 @@ phase_clean() {
 		fi
 	fi
 
+	# Clean up systemd service if am-mount-watch was installed
+	# (完整维护逻辑：停止→禁用→删除单元文件→重载daemon→删除binary，内联不委托外部脚本)
+	if command -v systemctl &>/dev/null && ( sudo test -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" || sudo test -f /etc/systemd/system/am-mount-watch.service 2>/dev/null || sudo test -f /etc/systemd/system/am-mount-watch.timer 2>/dev/null ); then
+		log "停止并移除 am-mount-watch systemd 服务（内联）..."
+		_log_file "Removing am-mount-watch systemd service (inline)"
+		sudo systemctl stop am-mount-watch.timer 2>/dev/null || true
+		sudo systemctl disable am-mount-watch.timer 2>/dev/null || true
+		sudo systemctl stop am-mount-watch.service 2>/dev/null || true
+		sudo systemctl disable am-mount-watch.service 2>/dev/null || true
+		sudo rm -f /etc/systemd/system/am-mount-watch.service
+		sudo rm -f /etc/systemd/system/am-mount-watch.timer
+		sudo systemctl daemon-reload 2>/dev/null || true
+		_log_file "systemd: service and timer stopped, disabled, removed"
+		sudo rm -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}"
+		log "  Removed am-mount-watch binary + systemd 服务"
+		ok "am-mount-watch systemd 服务已清理"
+	elif [[ -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" ]]; then
+		# systemctl 不可用，仅删除 binary
+		sudo rm -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}"
+		log "  Removed am-mount-watch binary（systemctl 不可用，跳过 systemd）"
+	fi
+
 	log "Uninstall complete"
 }
 
@@ -617,13 +727,19 @@ main() {
 		phase_install || return $?
 		phase_summary || return $?
 		;;
+	--restart-systemd)
+		CURRENT_PHASE="restart_systemd"
+		phase_setup || return $?
+		phase_restart_systemd || return $?
+		;;
 	--help | -h)
-		echo "Usage: bash $0 [--build|--clean|--help]"
+		echo "Usage: bash $0 [--build|--clean|--restart-systemd|--help]"
 		echo ""
-		echo "  (default)   Build and install (sudo used only when needed)"
-		echo "  --build     Build and verify only, no sudo needed"
-		echo "  --clean     Remove all installed files (sudo needed)"
-		echo "  --help      Show this help"
+		echo "  (default)       Build and install (sudo used only when needed)"
+		echo "  --build         Build and verify only, no sudo needed"
+		echo "  --clean         Remove all installed files (sudo needed)"
+		echo "  --restart-systemd  Restart am-mount-watch systemd service + timer"
+		echo "  --help          Show this help"
 		;;
 	*)
 		CURRENT_PHASE="main"

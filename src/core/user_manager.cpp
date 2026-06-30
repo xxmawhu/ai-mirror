@@ -63,12 +63,22 @@ make_mounts_json(const std::vector<MountInfo> &mounts) {
     nlohmann::ordered_json mj;
     mj["source"] = m.source;
     mj["target"] = m.target;
+    mj["fstype"] = m.fstype;
     mj["read_only"] = m.read_only;
-    // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
-    // device backing — skip source_stat to avoid writing all-zero stat
-    // fields.  Uses fstype if available, falls back to source heuristic
-    // (source.empty() || source[0] != '/') for backward compat.
-    if (!is_virtual_source(m.source, m.fstype)) {
+    // source_stat: include when either:
+    // 1. Not a virtual filesystem (fstype+source combo is real), OR
+    // 2. source is a real path (starts with '/') and stat data is
+    //    populated (non-zero ino) — handles virtual filesystems
+    //    (BeeGFS) whose source has been resolved to a real path by
+    //    update_state_mounts.
+    bool skip_stat = is_virtual_source(m.source, m.fstype);
+    if (skip_stat && !m.source.empty() && m.source[0] == '/') {
+      // Virtual fstype with a real path source — stat was done by
+      // update_state_mounts after mountinfo resolution. Include
+      // source_stat only if it has actual data.
+      skip_stat = (m.source_stat.ino == 0);
+    }
+    if (!skip_stat) {
       mj["source_stat"] = build_source_stat_json(m.source_stat);
     }
     arr.push_back(std::move(mj));
@@ -255,6 +265,7 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
         MountInfo mi;
         mi.source = mj.value("source", "");
         mi.target = mj.value("target", "");
+        mi.fstype = mj.value("fstype", "");
         mi.read_only = mj.value("read_only", true);
         if (mj.contains("source_stat")) {
           const auto &sj = mj["source_stat"];
@@ -907,7 +918,12 @@ bool UserManager::update_state_mounts(const std::string &username,
       auto sit = mountinfo_source.find(mi.target);
       if (sit != mountinfo_source.end()) {
         mi.source = sit->second; // real source path
-        mi.fstype.clear();       // let make_mounts_json include stat
+        // Keep fstype for serialization so mount_watch can identify
+        // virtual filesystems; make_mounts_json already includes
+        // source_stat when source is a real path (starts with '/').
+        // No longer cleared — was previously cleared to let
+        // make_mounts_json include source_stat, but the JSON
+        // serializer now handles this correctly.
         struct stat st;
         if (::stat(mi.source.c_str(), &st) == 0) {
           mi.source_stat.ino = st.st_ino;

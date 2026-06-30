@@ -318,6 +318,47 @@ int main(int argc, char *argv[]) {
 
     std::vector<fs::path> dead_mounts;
 
+    // Pre-read /proc/self/mountinfo once for the whole user, so we can
+    // fall back to mountinfo-based source recovery when .am_status has
+    // stale source paths (e.g., legacy files written without fstype or
+    // before mountinfo-based path resolution).
+    std::unordered_map<std::string, std::string> mountinfo_sources;
+    {
+      std::ifstream mi("/proc/self/mountinfo");
+      if (mi) {
+        std::string line;
+        // First pass: collect parent mount targets (id -> target)
+        std::unordered_map<int, std::string> parent_targets;
+        struct BindMount {
+          int parent_id;
+          std::string root;
+          std::string target;
+        };
+        std::vector<BindMount> candidates;
+        while (std::getline(mi, line)) {
+          std::istringstream iss(line);
+          int id, parent_id;
+          std::string dev, root, target, options, sep, fstype, source;
+          if (!(iss >> id >> parent_id >> dev >> root >> target >> options >>
+                sep >> fstype >> source))
+            continue;
+          parent_targets[id] = target;
+          if (root != "/" && target.find(home_dir.string()) == 0 &&
+              target.size() > home_dir.string().size()) {
+            candidates.push_back({parent_id, root, target});
+          }
+        }
+        // Second pass: construct absolute source paths
+        for (const auto &c : candidates) {
+          auto pit = parent_targets.find(c.parent_id);
+          if (pit != parent_targets.end() && !c.root.empty() &&
+              c.root[0] == '/') {
+            mountinfo_sources[c.target] = pit->second + c.root;
+          }
+        }
+      }
+    }
+
     for (const auto &mi : expected_mounts) {
       fs::path target(mi.target);
       fs::path source(mi.source);
@@ -349,12 +390,30 @@ int main(int argc, char *argv[]) {
 
       // Source existence check (only for real path mounts)
       if (!source_exists(source)) {
-        if (verbose) {
-          logger->info("  stale mount (source missing): {} -> {}", mi.source,
-                       mi.target);
+        // [防御措施] .am_status 中的 source 路径可能已过时（旧版本未持久化
+        // fstype 字段，或 mountinfo 拼接逻辑写入错误路径）。
+        // 不立即判定为 dead，改为尝试从 /proc/self/mountinfo 恢复真实路径。
+        auto mit = mountinfo_sources.find(mi.target);
+        if (mit != mountinfo_sources.end() && source_exists(mit->second)) {
+          // mountinfo 中有正确的 source 路径且文件存在 — 说明 .am_status
+          // 过期，mount 本身健康。记录警告，自动修正 source 路径。
+          logger->warn("  stale source in .am_status: {} -> {} (correct: {})",
+                       mi.source, mi.target, mit->second);
+          if (verbose) {
+            logger->info("  mount is healthy, source path corrected from "
+                         "mountinfo: {} -> {}",
+                         mi.source, mit->second);
+          }
+          // 不标记为 dead — 实际 mount 工作正常
+        } else {
+          // mountinfo 也无法确认 — 真正的 stale mount
+          if (verbose) {
+            logger->info("  stale mount (source missing): {} -> {}", mi.source,
+                         mi.target);
+          }
+          dead_mounts.push_back(target);
+          continue;
         }
-        dead_mounts.push_back(target);
-        continue;
       }
     }
 

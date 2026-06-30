@@ -265,17 +265,23 @@ int main(int argc, char *argv[]) {
       fs::path target(mi.target);
       fs::path source(mi.source);
 
-      // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) are not
-      // real paths — skip source stat and only check target accessibility.
-      // Detection uses fstype when available, falls back to source heuristic.
+      // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
+      // device backing.  The mount entry comes from /proc/mounts — if the
+      // kernel reports it, the target path exists by definition.
+      // Skip ALL stat() calls for virtual devices to avoid blocking on
+      // distributed filesystems (BeeGFS stat() requires metadata server
+      // RPC — 500 stat() calls every 5 minutes causes cascading latency).
       bool is_virtual_device =
           ai_mirror::core::is_virtual_source(mi.source, mi.fstype);
 
-      // Check if target is still mounted (check via stat on target)
-      bool target_alive = is_mount_alive(target);
+      if (is_virtual_device) {
+        // Virtual device: mount is healthy by definition (/proc/mounts
+        // guarantees target exists).  Skip stat() entirely.
+        continue;
+      }
 
-      if (!target_alive) {
-        // Target stat failed — stale mount or target path removed
+      // Real path mount: check target accessibility
+      if (!is_mount_alive(target)) {
         if (verbose) {
           logger->info("  stale mount target: {} (source: {})", mi.target,
                        mi.source);
@@ -284,11 +290,8 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
-      // Source existence check
-      // (We stat the source directly; on NFS this is safe without
-      // root_squash because mount_watch runs as root.)
-      // Skip for virtual devices (e.g. BeeGFS "beegfs_nodev" pseudo-device).
-      if (!is_virtual_device && !source_exists(source)) {
+      // Source existence check (only for real path mounts)
+      if (!source_exists(source)) {
         if (verbose) {
           logger->info("  stale mount (source missing): {} -> {}", mi.source,
                        mi.target);

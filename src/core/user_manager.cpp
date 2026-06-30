@@ -1,5 +1,4 @@
 #include "ai_mirror/core/user_manager.hpp"
-#include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include "ai_mirror/utils/shell.hpp"
@@ -15,7 +14,6 @@
 #include <random>
 #include <sstream>
 #include <sys/stat.h>
-#include <thread>
 #include <unistd.h>
 
 #include <openssl/evp.h>
@@ -49,35 +47,6 @@ static std::string md5_hex(const std::string &input) {
   return oss.str();
 }
 
-static std::string make_mounts_json(const std::vector<MountInfo> &mounts) {
-  if (mounts.empty())
-    return "\"mounts\": []";
-  std::string s = "\"mounts\": [\n";
-  for (size_t i = 0; i < mounts.size(); ++i) {
-    const auto &m = mounts[i];
-    s += "    {\n";
-    s += "      \"source\": \"" + m.source + "\",\n";
-    s += "      \"target\": \"" + m.target + "\",\n";
-    s += "      \"read_only\": " + std::string(m.read_only ? "true" : "false") +
-         ",\n";
-    s += "      \"source_stat\": {\n";
-    s += "        \"ino\": " + std::to_string(m.source_stat.ino) + ",\n";
-    s += "        \"dev\": " + std::to_string(m.source_stat.dev) + ",\n";
-    s += "        \"mode\": " + std::to_string(m.source_stat.mode) + ",\n";
-    s += "        \"uid\": " + std::to_string(m.source_stat.uid) + ",\n";
-    s += "        \"gid\": " + std::to_string(m.source_stat.gid) + ",\n";
-    s += "        \"size\": " + std::to_string(m.source_stat.size) + ",\n";
-    s += "        \"mtime\": " + std::to_string(m.source_stat.mtime) + "\n";
-    s += "      }\n";
-    s += "    }";
-    if (i < mounts.size() - 1)
-      s += ",";
-    s += "\n";
-  }
-  s += "  ]";
-  return s;
-}
-
 static std::string make_state_content(const UserInfo &info,
                                       const std::string &main_user) {
   // Build JSON via string concatenation, then PoW with us-level timestamp as
@@ -85,7 +54,7 @@ static std::string make_state_content(const UserInfo &info,
   // zeros) NO hash field is stored - the PoW is verified by checking
   // md5(content) prefix
   std::string base;
-  base.reserve(512);
+  base.reserve(256);
   base += "{\n";
   base += "  \"username\": \"";
   base += info.username;
@@ -108,7 +77,6 @@ static std::string make_state_content(const UserInfo &info,
   base += "  \"path_hash\": \"";
   base += info.path_hash;
   base += "\",\n";
-  base += "  " + make_mounts_json(info.mounts) + ",\n";
 
   auto now = std::chrono::system_clock::now();
   auto epoch = now.time_since_epoch();
@@ -257,27 +225,6 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
     info.path_hash = j.value("path_hash", "");
     info.exists = true;
     info.error = "";
-
-    // Parse mounts array (backward compatible: missing mounts field → empty)
-    if (j.contains("mounts") && j["mounts"].is_array()) {
-      for (const auto &mj : j["mounts"]) {
-        MountInfo mi;
-        mi.source = mj.value("source", "");
-        mi.target = mj.value("target", "");
-        mi.read_only = mj.value("read_only", true);
-        if (mj.contains("source_stat")) {
-          const auto &sj = mj["source_stat"];
-          mi.source_stat.ino = sj.value("ino", ino_t(0));
-          mi.source_stat.dev = sj.value("dev", dev_t(0));
-          mi.source_stat.mode = sj.value("mode", mode_t(0));
-          mi.source_stat.uid = sj.value("uid", uid_t(0));
-          mi.source_stat.gid = sj.value("gid", gid_t(0));
-          mi.source_stat.size = sj.value("size", off_t(0));
-          mi.source_stat.mtime = sj.value("mtime", time_t(0));
-        }
-        info.mounts.push_back(std::move(mi));
-      }
-    }
 
     // Backward compatibility: if project_path/path_hash missing, derive from
     // username Username format: {prefix}{user}_{hash6} → extract hash6 as
@@ -500,66 +447,27 @@ bool UserManager::execute_userdel(const std::string &username,
     user_gid = pw->pw_gid;
   }
 
-  // Kill all processes owned by this user before userdel.
-  // This prevents "userdel: user is currently used by process" errors.
-  // Retry up to 3 times with pkill in between to handle persistent processes
-  // (e.g. gpg-agent --supervised, systemd --user).
-  const int retry_limit = 3;
-  const int kill_sleep_sec = 3;
-  for (int attempt = 1; attempt <= retry_limit; ++attempt) {
-    // Kill remaining processes before this attempt
-    auto kill_result = utils::exec_safe({"pkill", "-u", username});
-    if (kill_result.exit_code == 0) {
-      utils::get_logger()->info("Killed processes for user {} (attempt {})",
-                                username, attempt);
-    } else if (attempt == 1) {
-      utils::get_logger()->debug(
-          "pkill for user {} returned {} (may have no processes)", username,
-          kill_result.exit_code);
-    }
+  std::vector<std::string> args;
+  args.reserve(4);
+  args.push_back("userdel");
+  if (remove_home) {
+    args.push_back("--remove");
+  }
+  args.push_back(username);
 
-    // Sleep to allow processes to terminate
-    std::this_thread::sleep_for(std::chrono::seconds(kill_sleep_sec));
-
-    std::vector<std::string> args;
-    args.reserve(4);
-    args.push_back("userdel");
-    if (remove_home) {
-      args.push_back("--remove");
-    }
-    args.push_back(username);
-
-    auto result = utils::exec_safe(args);
-    if (result.exit_code == 0) {
-      // Success — proceed to group cleanup
-      goto group_cleanup;
-    }
-
-    // User already gone — treat as success
-    if (result.stderr_output.find("does not exist") != std::string::npos) {
-      utils::get_logger()->info("User {} does not exist, skipping", username);
-      return true;
-    }
-
-    // Mail spool warning is non-fatal, proceed
+  auto result = utils::exec_safe(args);
+  if (result.exit_code != 0) {
     if (result.stderr_output.find("mail spool") != std::string::npos &&
         result.stderr_output.find("not found") != std::string::npos) {
-      goto group_cleanup;
-    }
-
-    if (attempt < retry_limit) {
-      utils::get_logger()->warn(
-          "userdel attempt {} failed for user {}: {}. Retrying...", attempt,
-          username, result.stderr_output);
+      utils::get_logger()->info(
+          "userdel: mail spool not found (expected for ai-users): {}",
+          username);
     } else {
-      utils::get_logger()->error(
-          "userdel failed after {} attempts for user {}: {}", retry_limit,
-          username, result.stderr_output);
+      utils::get_logger()->error("userdel failed: {}", result.stderr_output);
       return false;
     }
   }
 
-group_cleanup:
   // Delete the user's primary group (groupadd'd in execute_useradd)
   if (user_gid != static_cast<gid_t>(-1)) {
     auto grp_result = utils::exec_safe({"groupdel", username});
@@ -585,7 +493,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     std::string err = "Project path not allowed for user '" + main_user +
                       "': " + proj.string();
     utils::get_logger()->error("{}", err);
-    return {"", "", "", "", "", 0, 0, false, err, {}};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   std::string main_home = utils::get_effective_home();
@@ -596,7 +504,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     std::string err =
         "Cannot determine home directory for user '" + main_user + "'";
     utils::get_logger()->error("{}", err);
-    return {"", "", "", "", "", 0, 0, false, err, {}};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   std::error_code ec;
@@ -606,7 +514,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     if (ec) {
       std::string err = "Cannot resolve project path: " + proj.string();
       utils::get_logger()->error("{}", err);
-      return {"", "", "", "", "", 0, 0, false, err, {}};
+      return {"", "", "", "", "", 0, 0, false, err};
     }
   }
 
@@ -620,7 +528,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
   if (main_home_canon.empty()) {
     std::string err = "Cannot canonicalize home directory: " + main_home;
     utils::get_logger()->error("{}", err);
-    return {"", "", "", "", "", 0, 0, false, err, {}};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   std::string ps = abs_proj.string();
@@ -630,7 +538,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
   if (!utils::is_path_allowed(abs_proj, main_user, allowed_bases_)) {
     std::string err = "Project path not accessible by user: " + ps;
     utils::get_logger()->error("{}", err);
-    return {"", "", "", "", "", 0, 0, false, err, {}};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   // Also check SYSTEM_DIRS blacklist (skip for root user)
@@ -640,7 +548,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
   if (login_uid != 0 && !security::validate_path_allowed(abs_proj)) {
     std::string err = "Project path in system directory (not allowed): " + ps;
     utils::get_logger()->error("{}", err);
-    return {"", "", "", "", "", 0, 0, false, err, {}};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
 
   auto state = read_state_file(abs_proj);
@@ -682,7 +590,7 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
                       proj.string() +
                       "': directory name must contain only [a-z0-9_-], no "
                       "leading digit, max 32 chars";
-    return {"", "", "", "", "", 0, 0, false, err, {}};
+    return {"", "", "", "", "", 0, 0, false, err};
   }
   std::string username = std::move(*username_opt);
   std::string path_hash = compute_path_hash(abs_proj);
@@ -693,16 +601,8 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     if (!info) {
       utils::get_logger()->error("User '{}' exists but getpwnam failed",
                                  username);
-      return {username,
-              proj.string(),
-              "",
-              "",
-              "",
-              0,
-              0,
-              false,
-              "getpwnam lookup failed",
-              {}};
+      return {username, proj.string(),           "", "", "", 0, 0,
+              false,    "getpwnam lookup failed"};
     }
     // Fill project_path and path_hash for existing user
     info->project_path = project_path_str;
@@ -729,11 +629,9 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     std::string err =
         "useradd failed for '" + username + "': see logs for details";
     utils::get_logger()->error("{}", err);
-    return {username,  home_dir.string(),
-            "",        project_path_str,
-            path_hash, new_uid,
-            new_gid,   false,
-            err,       {}};
+    return {username,  home_dir.string(), "",      project_path_str,
+            path_hash, new_uid,           new_gid, false,
+            err};
   }
 
   // Change home_dir group to main user's primary group and add group write
@@ -742,11 +640,9 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
 
   auto info = get_user_info(username);
   if (!info) {
-    UserInfo created{username,  home_dir.string(),
-                     "",        project_path_str,
-                     path_hash, new_uid,
-                     new_gid,   true,
-                     "",        {}};
+    UserInfo created{username,  home_dir.string(), "",      project_path_str,
+                     path_hash, new_uid,           new_gid, true,
+                     ""};
     write_state_file(home_dir, created, main_user);
     utils::get_logger()->info("Created ai-user: {} (uid={})", username,
                               new_uid);
@@ -787,7 +683,7 @@ UserManager::get_user_info(const std::string &username) const {
     return std::nullopt;
   }
   return UserInfo{username,   pw->pw_dir, "",   "", "",
-                  pw->pw_uid, pw->pw_gid, true, "", {}};
+                  pw->pw_uid, pw->pw_gid, true, {}};
 }
 
 bool UserManager::user_exists(const std::string &username) const {
@@ -804,7 +700,7 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
     if (name.length() > prefix_str.length() &&
         name.substr(0, prefix_str.length()) == prefix_str) {
       UserInfo info{name,       pw->pw_dir, "",   "", "",
-                    pw->pw_uid, pw->pw_gid, true, "", {}};
+                    pw->pw_uid, pw->pw_gid, true, ""};
       // Try to read state file for project_path and path_hash
       auto state = read_state_file(pw->pw_dir);
       if (state) {
@@ -822,58 +718,6 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
 
 std::optional<UserInfo> UserManager::read_state(const fs::path &project_dir) {
   return read_state_file(project_dir);
-}
-
-bool UserManager::update_state_mounts(const std::string &username,
-                                      const fs::path &home_dir,
-                                      const std::string &prefix) {
-  // 1. Read existing state
-  auto info_opt = read_state_file(home_dir);
-  if (!info_opt) {
-    utils::get_logger()->error(
-        "update_state_mounts: cannot read .am_status for {} in {}", username,
-        home_dir.string());
-    return false;
-  }
-
-  // 2. Get current mount list via Graft
-  Graft graft(prefix);
-  auto mount_entries = graft.list_mounts(username);
-
-  // 3. Convert MountEntry → MountInfo with source stat
-  std::vector<MountInfo> mounts;
-  for (const auto &me : mount_entries) {
-    MountInfo mi;
-    mi.source = me.source.string();
-    mi.target = me.target.string();
-    mi.read_only = me.read_only;
-
-    // stat the source path to capture its identity
-    struct stat st;
-    if (::stat(me.source.c_str(), &st) == 0) {
-      mi.source_stat.ino = st.st_ino;
-      mi.source_stat.dev = st.st_dev;
-      mi.source_stat.mode = st.st_mode;
-      mi.source_stat.uid = st.st_uid;
-      mi.source_stat.gid = st.st_gid;
-      mi.source_stat.size = st.st_size;
-      mi.source_stat.mtime = st.st_mtime;
-    }
-    mounts.push_back(std::move(mi));
-  }
-  info_opt->mounts = std::move(mounts);
-
-  // 4. Rewrite state file with updated mounts
-  if (!write_state_file(home_dir, *info_opt, info_opt->main_user)) {
-    utils::get_logger()->error(
-        "update_state_mounts: failed to write .am_status for {}", username);
-    return false;
-  }
-
-  utils::get_logger()->info(
-      "update_state_mounts: updated {} mount(s) in .am_status for {}",
-      info_opt->mounts.size(), username);
-  return true;
 }
 
 } // namespace ai_mirror::core

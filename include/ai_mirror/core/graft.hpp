@@ -40,7 +40,6 @@ public:
   bool set_sgid(const fs::path &path);
 
   std::vector<MountEntry> health_check() const;
-  int force_cleanup(const std::vector<fs::path> &dead_mounts);
   void invalidate_cache();
 
 private:

@@ -912,14 +912,4 @@ std::vector<MountEntry> Graft::health_check() const {
   return issues;
 }
 
-int Graft::force_cleanup(const std::vector<fs::path> &dead_mounts) {
-  int cleaned = 0;
-  for (const auto &m : dead_mounts) {
-    if (unmount(m, true)) {
-      cleaned++;
-    }
-  }
-  return cleaned;
-}
-
 } // namespace ai_mirror::core

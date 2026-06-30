@@ -559,12 +559,16 @@ phase_summary() {
 	ok "安装完成 v${VERSION}: ${PREFIX}/bin/${WRAPPER_NAME}  (source ~/.bashrc 生效)"
 
 	# Show systemd service/timer status if am-mount-watch was installed
+	# NOTE: am-mount-watch.service is Type=oneshot — it runs and exits.
+	# "systemctl is-active" returns "inactive" when the service is not
+	# currently executing.  Use is-failed to check for crash; check the
+	# timer (a daemon) for running status in the normal sense.
 	if command -v systemctl &>/dev/null && [[ -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" ]]; then
-		if systemctl is-active --quiet "am-mount-watch.service" 2>/dev/null; then
-			ok "systemd: am-mount-watch.service 运行中"
+		if systemctl is-failed --quiet "am-mount-watch.service" 2>/dev/null; then
+			# [log-review] warn:降级自error——service 曾执行失败，可能是配置或环境问题，不影响主程序
+			warn "systemd: am-mount-watch.service 曾执行失败 (systemctl is-failed)"
 		else
-			# [log-review] warn:降级自error——service 未运行可能因系统无 systemd 或安装阶段配置失败，属于预期内场景，不影响主程序功能
-			warn "systemd: am-mount-watch.service 未运行"
+			ok "systemd: am-mount-watch.service 上次执行正常"
 		fi
 		if systemctl is-active --quiet "am-mount-watch.timer" 2>/dev/null; then
 			ok "systemd: am-mount-watch.timer 运行中 (每 5 分钟)"
@@ -606,11 +610,13 @@ phase_restart_systemd() {
 	_log_file "systemd: immediate check triggered"
 
 	# 验证状态
-	if systemctl is-active --quiet "am-mount-watch.service" 2>/dev/null; then
-		ok "am-mount-watch.service 运行中"
+	# am-mount-watch.service is Type=oneshot — use is-failed instead of
+	# is-active (which returns "inactive" once the service finishes).
+	if systemctl is-failed --quiet "am-mount-watch.service" 2>/dev/null; then
+		# [log-review] warn:降级自error——service 执行失败，可能是配置或环境问题，不影响主程序
+		warn "am-mount-watch.service 启动失败，请手动检查: systemctl status am-mount-watch.service"
 	else
-		# [log-review] warn:降级自error——服务可能因环境问题无法启动，但不影响主程序
-		warn "am-mount-watch.service 启动异常，请手动检查: systemctl status am-mount-watch.service"
+		ok "am-mount-watch.service 启动成功"
 	fi
 	if systemctl is-active --quiet "am-mount-watch.timer" 2>/dev/null; then
 		ok "am-mount-watch.timer 运行中 (每 5 分钟)"

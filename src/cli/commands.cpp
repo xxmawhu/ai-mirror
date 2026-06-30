@@ -2828,44 +2828,10 @@ int cmd_auto_fix_all(bool verbose) {
     std::cout << "  [FAIL] " << m.target.string() << std::endl;
   }
 
-  // Step 2: Force unmount all unhealthy mounts before remounting
-  std::cout << "\nForce unmounting unhealthy mounts..." << std::endl;
-  int unmount_failures = 0;
-  for (const auto &m : unhealthy) {
-    // Try lazy unmount first (handles busy mounts)
-    auto umount_result = utils::exec_safe({"umount", "-l", m.target.string()});
-    if (umount_result.exit_code == 0) {
-      std::cout << "  [OK] Unmounted: " << m.target.string() << std::endl;
-      // Remove the empty mount point file if it exists
-      std::error_code rm_ec;
-      fs::remove(m.target, rm_ec);
-      if (!rm_ec) {
-        std::cout << "  [OK] Removed mount point: " << m.target.string()
-                  << std::endl;
-      }
-    } else {
-      // Try force unmount as fallback
-      auto force_result = utils::exec_safe({"umount", "-f", m.target.string()});
-      if (force_result.exit_code == 0) {
-        std::cout << "  [OK] Force unmounted: " << m.target.string()
-                  << std::endl;
-      } else {
-        std::cerr << "  [FAIL] Cannot unmount: " << m.target.string() << " - "
-                  << umount_result.stderr_output << std::endl;
-        unmount_failures++;
-      }
-    }
-  }
-
-  if (unmount_failures > 0) {
-    std::cerr << "Warning: " << unmount_failures
-              << " mount(s) could not be unmounted" << std::endl;
-  }
-
-  // Invalidate cache after unmounting
-  graft.invalidate_cache();
-
   // Step 2: Find unique project paths from unhealthy mount targets
+  // NOTE: We do NOT unmount unhealthy mounts before fixing.
+  // Unmounting first creates a race condition: if cmd_update fails,
+  // the mount is already gone with no rollback.
   std::set<fs::path> projects_to_fix;
   for (const auto &m : unhealthy) {
     auto proj = find_project_from_mount(m.target);

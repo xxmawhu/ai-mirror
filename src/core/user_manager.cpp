@@ -13,7 +13,6 @@
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include <pwd.h>
-#include <random>
 #include <sstream>
 #include <sys/stat.h>
 #include <thread>
@@ -30,18 +29,6 @@ static std::string sha256_hex(const std::string &input) {
   unsigned int hash_len = 0;
   EVP_Digest(input.c_str(), input.size(), hash, &hash_len, EVP_sha256(),
              nullptr);
-  std::ostringstream oss;
-  for (unsigned int i = 0; i < hash_len; ++i) {
-    oss << std::hex << std::setfill('0') << std::setw(2)
-        << static_cast<int>(hash[i]);
-  }
-  return oss.str();
-}
-
-static std::string md5_hex(const std::string &input) {
-  unsigned char hash[16];
-  unsigned int hash_len = 0;
-  EVP_Digest(input.c_str(), input.size(), hash, &hash_len, EVP_md5(), nullptr);
   std::ostringstream oss;
   for (unsigned int i = 0; i < hash_len; ++i) {
     oss << std::hex << std::setfill('0') << std::setw(2)
@@ -88,19 +75,9 @@ make_mounts_json(const std::vector<MountInfo> &mounts) {
 
 static std::string make_state_content(const UserInfo &info,
                                       const std::string &main_user) {
-  // Build JSON via nlohmann::ordered_json, then PoW with us-level timestamp as
-  // nonce. Difficulty: hash of entire content must start with "000" (3 leading
-  // zeros). No hash field is stored — the PoW is verified by checking
-  // md5(content) prefix.
-  //
-  // Using ordered_json instead of plain json to preserve field insertion order
-  // (the reader uses ordered iteration for backward-compat field extraction).
-  // dump(2) produces 2-space-indented JSON with proper string escaping (fixes
-  // the root cause — previous code hand-concatenated strings without escaping).
-  //
-  // PERFORMANCE: PoW loop re-dumps the json on each iteration (~4096 attempts).
-  // json::dump(2) is a simple string-format pass (~1-2µs per call on modern
-  // hardware), so the total PoW cost is well under 10ms — negligible.
+  // Build JSON fresh without timestamp — PoW (md5 nonce) was removed because
+  // it had no security value and caused am update to reject valid files when
+  // the md5 prefix didn't match (e.g., after am-mount-watch rewrote the file).
   nlohmann::ordered_json j;
   j["username"] = info.username;
   j["uid"] = info.uid;
@@ -110,24 +87,7 @@ static std::string make_state_content(const UserInfo &info,
   j["project_path"] = info.project_path;
   j["path_hash"] = info.path_hash;
   j["mounts"] = make_mounts_json(info.mounts);
-
-  auto now = std::chrono::system_clock::now();
-  auto epoch = now.time_since_epoch();
-  auto us =
-      std::chrono::duration_cast<std::chrono::microseconds>(epoch).count();
-
-  // PoW: try successive us timestamps until md5 of entire content starts with
-  // "000" Expected ~4096 attempts for 12-bit difficulty, negligible CPU/memory
-  for (int64_t t = us;; ++t) {
-    j["timestamp"] = t;
-    // json::dump(2) ends with "}" (no trailing newline), so + "\n" gives
-    // "...}\n" matching the original file format.
-    std::string content = j.dump(2) + "\n";
-    std::string h = md5_hex(content);
-    if (h.substr(0, 3) == "000") {
-      return content; // Return content WITHOUT hash field
-    }
-  }
+  return j.dump(2) + "\n";
 }
 
 void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
@@ -171,32 +131,11 @@ void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
 }
 
 static bool verify_state_content(const std::string &content) {
-  // PoW verification: md5 of content must start with "000"
-  // Supports three formats:
-  //   - Legacy hash format: has "hash" field → stored hash starts with "000"
-  //   - New PoW format: has "project_path"/"path_hash" → md5(content) starts
-  //   with "000"
-  //   - Old format: no "hash" AND no "project_path"/"path_hash" → trust
-  //   directly (pre-PoW)
+  // [P0-remove-pow] PoW 校验已移除（2026-06-30）：
+  // 之前要求 md5 以 "000" 开头，但没有安全价值且导致 am update 瘫痪。
+  // 现在只验证 JSON 可解析，不检查 md5 前缀。
   auto j = nlohmann::json::parse(content, nullptr, false);
-  if (j.is_discarded())
-    return false;
-
-  // Legacy hash format: verify stored hash starts with "000"
-  if (j.contains("hash")) {
-    std::string stored_hash = j["hash"].get<std::string>();
-    return stored_hash.substr(0, 3) == "000";
-  }
-
-  // New PoW format: has project_path and path_hash fields
-  if (j.contains("project_path") || j.contains("path_hash")) {
-    return md5_hex(content).substr(0, 3) == "000";
-  }
-
-  // Old format (pre-PoW): trust directly - these files were created before PoW
-  // was introduced, they only have
-  // username/uid/gid/home_dir/main_user/timestamp
-  return true;
+  return !j.is_discarded();
 }
 
 static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
@@ -218,6 +157,15 @@ static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
     utils::get_logger()->error("Failed to write state file: {}",
                                state_path.string());
     return false;
+  }
+  // [P0-chown] Chown state file to AI user so `am update` can read/write it.
+  // When write_state_file is called by am-mount-watch (running as root), the
+  // file would otherwise stay root:root, blocking non-root reads.
+  if ((info.uid != 0 || info.gid != 0) &&
+      ::fchown(ufd.get(), info.uid, info.gid) != 0) {
+    // [log-review] 降级为 warning: chown 失败不影响核心功能，文件仍可读
+    utils::get_logger()->warn("Failed to chown state file to {}:{}: {}",
+                              info.uid, info.gid, strerror(errno));
   }
   return true;
 }
@@ -243,7 +191,7 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
     }
 
     if (!verify_state_content(content)) {
-      utils::get_logger()->error("State file md5 verification failed: {}",
+      utils::get_logger()->error("State file JSON parse failed: {}",
                                  state_path.string());
       return std::nullopt;
     }
@@ -294,6 +242,15 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
             "Derived path_hash '{}' from username '{}' (legacy format)",
             info.path_hash, info.username);
       }
+    }
+    // [P0-path-hash] Fallback: compute path_hash from project_path if still
+    // empty. This handles cases where username suffix is not exactly 6 chars
+    // (e.g., new-style usernames with different formats).
+    if (info.path_hash.empty() && !info.project_path.empty()) {
+      info.path_hash = sha256_hex(info.project_path).substr(0, 6);
+      utils::get_logger()->debug(
+          "Computed path_hash '{}' from project_path '{}'", info.path_hash,
+          info.project_path);
     }
     // project_path defaults to home_dir if not stored
     if (info.project_path.empty()) {

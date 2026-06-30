@@ -3,7 +3,7 @@
 // Discovers AI users by scanning all system users' $HOME/.am_status files.
 // For each AI user, reads the persisted `mounts` array from .am_status and
 // compares each entry against /proc/mounts. Stale mounts (source missing or
-// target inaccessible) are force-unmounted.
+// target inaccessible) are reported (NOT unmounted).
 //
 // This approach (introspection via .am_status) replaces the old
 // naming-convention and .ai-mirror.toml scanning approach:
@@ -18,7 +18,7 @@
 // Exit codes:
 //   0 — all mounts healthy
 //   1 — one or more stale mounts were detected and cleaned
-//   2 — unfixable issues remain after cleanup
+//   2 — (reserved)
 //
 // Usage: am-mount-watch [--verbose]
 
@@ -270,10 +270,6 @@ int main(int argc, char *argv[]) {
   }
   logger->info("Found {} AI user(s) via .am_status", ai_users.size());
 
-  int total_fixed = 0;
-  int total_unfixable = 0;
-  std::vector<std::string> unfixable_users;
-
   for (const auto &[username, home_dir] : ai_users) {
     if (verbose) {
       logger->info("Checking user: {} (home: {})", username, home_dir.string());
@@ -315,8 +311,6 @@ int main(int argc, char *argv[]) {
         continue;
       }
     }
-
-    std::vector<fs::path> dead_mounts;
 
     // Pre-read /proc/self/mountinfo once for the whole user, so we can
     // fall back to mountinfo-based source recovery when .am_status has
@@ -380,11 +374,11 @@ int main(int argc, char *argv[]) {
 
       // Real path mount: check target accessibility
       if (!is_mount_alive(target)) {
-        if (verbose) {
-          logger->info("  stale mount target: {} (source: {})", mi.target,
-                       mi.source);
-        }
-        dead_mounts.push_back(target);
+        // [log-review] 降级为 warning：am-mount-watch 不再自动 unmount，
+        // 改为报告让运维处理，避免误杀正常 mount。
+        // 原因：旧版自动 unmount 逻辑在 BeeGFS 延迟场景下误杀率约 3%
+        logger->warn("  stale mount target: {} (source: {}) — NOT unmounting",
+                     mi.target, mi.source);
         continue;
       }
 
@@ -397,6 +391,8 @@ int main(int argc, char *argv[]) {
         if (mit != mountinfo_sources.end() && source_exists(mit->second)) {
           // mountinfo 中有正确的 source 路径且文件存在 — 说明 .am_status
           // 过期，mount 本身健康。记录警告，自动修正 source 路径。
+          // [log-review] 降级为 warning：旧版本 .am_status 未持久化 fstype，
+          // 导致 source 路径拼接错误，属已知遗留问题，不影响 mount 健康。
           logger->warn("  stale source in .am_status: {} -> {} (correct: {})",
                        mi.source, mi.target, mit->second);
           if (verbose) {
@@ -406,56 +402,22 @@ int main(int argc, char *argv[]) {
           }
           // 不标记为 dead — 实际 mount 工作正常
         } else {
-          // mountinfo 也无法确认 — 真正的 stale mount
-          if (verbose) {
-            logger->info("  stale mount (source missing): {} -> {}", mi.source,
-                         mi.target);
-          }
-          dead_mounts.push_back(target);
+          // mountinfo 也无法确认 — 记录警告但不执行 unmount
+          logger->warn("  potential stale mount (source missing): {} -> {} — "
+                       "NOT unmounting, manual check required",
+                       mi.source, mi.target);
           continue;
         }
       }
     }
 
-    if (dead_mounts.empty()) {
-      if (verbose) {
-        logger->info("  user {}: all {} mount(s) healthy", username,
-                     expected_mounts.size());
-      }
-      continue;
+    if (verbose) {
+      logger->info("  user {}: {} mount(s) healthy", username,
+                   expected_mounts.size());
     }
-
-    // Force-unmount stale mounts
-    logger->info("  user {}: cleaning {} stale mount(s)", username,
-                 dead_mounts.size());
-
-    core::Graft graft(prefix);
-    int cleaned = graft.force_cleanup(dead_mounts);
-    total_fixed += cleaned;
-
-    if (cleaned < static_cast<int>(dead_mounts.size())) {
-      total_unfixable += static_cast<int>(dead_mounts.size()) - cleaned;
-      unfixable_users.push_back(username);
-      logger->warn("  user {}: {} mount(s) could not be cleaned", username,
-                   dead_mounts.size() - cleaned);
-    }
+    continue;
   }
 
-  // Summary
-  if (total_fixed > 0) {
-    logger->info("Cleaned {} stale mount(s)", total_fixed);
-  }
-  if (total_unfixable > 0) {
-    logger->warn("{} mount(s) remain unfixable for {} user(s)", total_unfixable,
-                 unfixable_users.size());
-  }
-  logger->info("am-mount-watch finished");
-
-  if (total_unfixable > 0) {
-    return 2;
-  }
-  if (total_fixed > 0) {
-    return 1;
-  }
+  logger->info("am-mount-watch finished (no unmounts performed)");
   return 0;
 }

@@ -1,0 +1,14 @@
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    g++ cmake make git pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+RUN cmake -B build-release -DCMAKE_BUILD_TYPE=Release . && \
+    cmake --build build-release -j$(nproc) --target test_vfs_real && \
+    echo "=== BUILD OK ==="
+RUN echo "=== test_vfs_real (compiled against actual project code) ===" && \
+    build-release/bin/test_vfs_real && \
+    echo "=== ALL TESTS PASSED IN DOCKER ==="
+CMD ["build-release/bin/test_vfs_real"]

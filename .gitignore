@@ -15,6 +15,7 @@ docker/
 !docker/Dockerfile.smoke
 tests/*
 !tests/smoke/
+!tests/integration/
 !tests/docker/
 !tests/test_*.sh
 !tests/unit/

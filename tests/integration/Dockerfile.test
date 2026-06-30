@@ -1,0 +1,26 @@
+# Dockerfile for ai-mirror integration tests
+FROM ubuntu:22.04
+
+# Avoid prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    sudo \
+    passwd \
+    coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create ai-mirror group
+RUN groupadd ai-mirror || true
+
+# Setup sudoers for ai-mirror (minimal)
+RUN mkdir -p /etc/ai-mirror/sudoers.d && \
+    echo '%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror mv ""' > /etc/ai-mirror/sudoers.d/ai-mirror && \
+    echo '%ai-mirror ALL=(root) NOPASSWD: /usr/local/bin/ai-mirror cp ""' >> /etc/ai-mirror/sudoers.d/ai-mirror && \
+    chmod 440 /etc/ai-mirror/sudoers.d/ai-mirror
+
+# Set working directory
+WORKDIR /tmp
+
+CMD ["tail", "-f", "/dev/null"]

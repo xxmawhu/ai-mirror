@@ -290,10 +290,24 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
   while (std::getline(mi, line)) {
     std::istringstream iss(line);
     int id, parent_id;
-    std::string dev, root, target, options, sep, fstype, source;
-    iss >> id >> parent_id >> dev >> root >> target >> options >> sep >>
-        fstype >> source;
+    std::string dev, root, target, options, fstype, source;
+    // Read fixed-position fields (1-6): id, parent, major:minor, root,
+    // mount_point, options
+    if (!(iss >> id >> parent_id >> dev >> root >> target >> options))
+      continue;
+
+    // Skip optional fields (7+) until the separator '-'
+    // mountinfo format: ... options <opt1> <opt2> ... - fstype source ...
+    // The optional fields vary by mount (e.g., shared:X, master:X).
+    std::string sep;
+    while (iss >> sep && sep != "-") {
+    }
     if (iss.fail())
+      continue; // Malformed mountinfo — no separator found
+
+    // Read fstype (after '-') and mount source (device name in /proc/mounts
+    // column 1)
+    if (!(iss >> fstype >> source))
       continue;
 
     parent_targets[id] = target;

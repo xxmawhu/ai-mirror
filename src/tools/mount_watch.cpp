@@ -111,10 +111,21 @@ read_mountinfo_for_user(const fs::path &home_dir) {
   while (std::getline(mi, line)) {
     std::istringstream iss(line);
     int id, parent_id;
-    std::string dev, root, target, options, sep, fstype, source;
-    iss >> id >> parent_id >> dev >> root >> target >> options >> sep >>
-        fstype >> source;
+    std::string dev, root, target, options, fstype, source;
+    // Read fixed-position fields: id, parent, major:minor, root,
+    // mount_point, options
+    if (!(iss >> id >> parent_id >> dev >> root >> target >> options))
+      continue;
+
+    // Skip optional fields until the separator '-'
+    std::string sep;
+    while (iss >> sep && sep != "-") {
+    }
     if (iss.fail())
+      continue;
+
+    // Read fstype (after '-') and mount source
+    if (!(iss >> fstype >> source))
       continue;
 
     parent_targets[id] = target;

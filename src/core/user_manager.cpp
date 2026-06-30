@@ -60,15 +60,21 @@ static std::string make_mounts_json(const std::vector<MountInfo> &mounts) {
     s += "      \"target\": \"" + m.target + "\",\n";
     s += "      \"read_only\": " + std::string(m.read_only ? "true" : "false") +
          ",\n";
-    s += "      \"source_stat\": {\n";
-    s += "        \"ino\": " + std::to_string(m.source_stat.ino) + ",\n";
-    s += "        \"dev\": " + std::to_string(m.source_stat.dev) + ",\n";
-    s += "        \"mode\": " + std::to_string(m.source_stat.mode) + ",\n";
-    s += "        \"uid\": " + std::to_string(m.source_stat.uid) + ",\n";
-    s += "        \"gid\": " + std::to_string(m.source_stat.gid) + ",\n";
-    s += "        \"size\": " + std::to_string(m.source_stat.size) + ",\n";
-    s += "        \"mtime\": " + std::to_string(m.source_stat.mtime) + "\n";
-    s += "      }\n";
+    // Virtual device names (beegfs_nodev, tmpfs, proc, etc.) are not real
+    // paths — skip source_stat to avoid writing all-zero stat fields which
+    // would be indistinguishable from a failed ::stat().
+    bool is_virtual_source = m.source.empty() || m.source[0] != '/';
+    if (!is_virtual_source) {
+      s += "      \"source_stat\": {\n";
+      s += "        \"ino\": " + std::to_string(m.source_stat.ino) + ",\n";
+      s += "        \"dev\": " + std::to_string(m.source_stat.dev) + ",\n";
+      s += "        \"mode\": " + std::to_string(m.source_stat.mode) + ",\n";
+      s += "        \"uid\": " + std::to_string(m.source_stat.uid) + ",\n";
+      s += "        \"gid\": " + std::to_string(m.source_stat.gid) + ",\n";
+      s += "        \"size\": " + std::to_string(m.source_stat.size) + ",\n";
+      s += "        \"mtime\": " + std::to_string(m.source_stat.mtime) + "\n";
+      s += "      }\n";
+    }
     s += "    }";
     if (i < mounts.size() - 1)
       s += ",";
@@ -848,11 +854,13 @@ bool UserManager::update_state_mounts(const std::string &username,
     mi.target = me.target.string();
     mi.read_only = me.read_only;
 
-    // stat the source path to capture its identity.
     // Virtual device names (beegfs_nodev, tmpfs, proc, etc.) don't start
-    // with '/' — skip stat to avoid ::stat() on a pseudo-device name.
+    // with '/' — skip stat and clear source (the device name is not a real
+    // path and should not appear in .am_status as a mount source).
     bool is_virtual_device = me.source.empty() || me.source.string()[0] != '/';
-    if (!is_virtual_device) {
+    if (is_virtual_device) {
+      mi.source.clear(); // virtual device names are meaningless as source
+    } else {
       struct stat st;
       if (::stat(me.source.c_str(), &st) == 0) {
         mi.source_stat.ino = st.st_ino;

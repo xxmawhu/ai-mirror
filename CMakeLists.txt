@@ -176,6 +176,19 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
         add_test(NAME test_watch_stats COMMAND test_watch_stats)
     endif()
 
+    # Unit tests for mount_stat — virtual device detection and source_stat serialization
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_mount_stat.cpp")
+        add_executable(test_mount_stat tests/unit/test_mount_stat.cpp)
+        target_compile_options(test_mount_stat PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+        )
+        target_link_options(test_mount_stat PRIVATE
+            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+        )
+        add_test(NAME test_mount_stat COMMAND test_mount_stat)
+    endif()
+
     # Additional tests can be added here following the same pattern
 
     # Unit tests for parse_known_hosts_hosts (standalone binary)
@@ -197,5 +210,19 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
             -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
         )
         add_test(NAME test_known_hosts COMMAND test_known_hosts)
+    endif()
+
+    # Unit tests for mount stat / virtual device handling (standalone binary)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_mount_stat.cpp")
+        add_executable(test_mount_stat tests/unit/test_mount_stat.cpp)
+        target_include_directories(test_mount_stat PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        target_compile_options(test_mount_stat PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+        )
+        target_link_options(test_mount_stat PRIVATE
+            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+        )
+        add_test(NAME test_mount_stat COMMAND test_mount_stat)
     endif()
 endif()

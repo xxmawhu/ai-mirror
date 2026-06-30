@@ -23,10 +23,10 @@ COPY . .
 
 # Build
 RUN cmake -B build-release -DCMAKE_BUILD_TYPE=Release . && \
-    cmake --build build-release --target ai-mirror -j$(nproc)
+    cmake --build build-release --target ai-mirror-bin -j$(nproc)
 
 # Install
-RUN cp build-release/bin/ai-mirror /usr/local/bin/ai-mirror-bin && \
+RUN cp build-release/bin/ai-mirror-bin /usr/local/bin/ai-mirror-bin && \
     ln -sf /usr/local/bin/ai-mirror-bin /usr/local/bin/am
 
 # Setup test config

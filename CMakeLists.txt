@@ -189,6 +189,21 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
         add_test(NAME test_mount_stat COMMAND test_mount_stat)
     endif()
 
+    # Integration test for VFS real detection — compiled against actual code
+    # Uses the exact /proc/mounts column format that was broken
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/integration/test_vfs_real.cpp")
+        add_executable(test_vfs_real tests/integration/test_vfs_real.cpp)
+        target_include_directories(test_vfs_real PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        target_compile_options(test_vfs_real PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+        )
+        target_link_options(test_vfs_real PRIVATE
+            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+        )
+        add_test(NAME test_vfs_real COMMAND test_vfs_real)
+    endif()
+
     # Unit tests for .am_status JSON serialization — verifies ordered_json
     # dump(2) produces correct format with proper string escaping
     if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_state_json.cpp")

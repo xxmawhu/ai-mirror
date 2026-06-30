@@ -848,16 +848,21 @@ bool UserManager::update_state_mounts(const std::string &username,
     mi.target = me.target.string();
     mi.read_only = me.read_only;
 
-    // stat the source path to capture its identity
-    struct stat st;
-    if (::stat(me.source.c_str(), &st) == 0) {
-      mi.source_stat.ino = st.st_ino;
-      mi.source_stat.dev = st.st_dev;
-      mi.source_stat.mode = st.st_mode;
-      mi.source_stat.uid = st.st_uid;
-      mi.source_stat.gid = st.st_gid;
-      mi.source_stat.size = st.st_size;
-      mi.source_stat.mtime = st.st_mtime;
+    // stat the source path to capture its identity.
+    // Virtual device names (beegfs_nodev, tmpfs, proc, etc.) don't start
+    // with '/' — skip stat to avoid ::stat() on a pseudo-device name.
+    bool is_virtual_device = me.source.empty() || me.source.string()[0] != '/';
+    if (!is_virtual_device) {
+      struct stat st;
+      if (::stat(me.source.c_str(), &st) == 0) {
+        mi.source_stat.ino = st.st_ino;
+        mi.source_stat.dev = st.st_dev;
+        mi.source_stat.mode = st.st_mode;
+        mi.source_stat.uid = st.st_uid;
+        mi.source_stat.gid = st.st_gid;
+        mi.source_stat.size = st.st_size;
+        mi.source_stat.mtime = st.st_mtime;
+      }
     }
     mounts.push_back(std::move(mi));
   }

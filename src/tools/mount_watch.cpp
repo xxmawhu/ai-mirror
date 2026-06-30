@@ -96,20 +96,26 @@ read_proc_mounts_for_user(const fs::path &home_dir) {
 }
 
 /// Build MountInfo from MountEntry by stat-ing the source.
+/// For virtual device names (beegfs_nodev, tmpfs, proc, etc.), source is not
+/// a real path — skip source stat to avoid ::stat() on a pseudo-device name.
 static core::MountInfo mount_entry_to_info(const core::MountEntry &me) {
   core::MountInfo mi;
   mi.source = me.source.string();
   mi.target = me.target.string();
   mi.read_only = me.read_only;
-  struct stat st;
-  if (::stat(me.source.c_str(), &st) == 0) {
-    mi.source_stat.ino = st.st_ino;
-    mi.source_stat.dev = st.st_dev;
-    mi.source_stat.mode = st.st_mode;
-    mi.source_stat.uid = st.st_uid;
-    mi.source_stat.gid = st.st_gid;
-    mi.source_stat.size = st.st_size;
-    mi.source_stat.mtime = st.st_mtime;
+  // Virtual device names don't start with '/' (e.g. "beegfs_nodev", "tmpfs")
+  bool is_virtual_device = me.source.empty() || me.source.string()[0] != '/';
+  if (!is_virtual_device) {
+    struct stat st;
+    if (::stat(me.source.c_str(), &st) == 0) {
+      mi.source_stat.ino = st.st_ino;
+      mi.source_stat.dev = st.st_dev;
+      mi.source_stat.mode = st.st_mode;
+      mi.source_stat.uid = st.st_uid;
+      mi.source_stat.gid = st.st_gid;
+      mi.source_stat.size = st.st_size;
+      mi.source_stat.mtime = st.st_mtime;
+    }
   }
   return mi;
 }
@@ -255,6 +261,11 @@ int main(int argc, char *argv[]) {
       fs::path target(mi.target);
       fs::path source(mi.source);
 
+      // Virtual device names (beegfs_nodev, tmpfs, proc, etc.) are not
+      // real paths — skip source stat and only check target accessibility.
+      // This mirrors the logic in Graft::health_check() (graft.cpp).
+      bool is_virtual_device = mi.source.empty() || mi.source[0] != '/';
+
       // Check if target is still mounted (check via stat on target)
       bool target_alive = is_mount_alive(target);
 
@@ -271,7 +282,8 @@ int main(int argc, char *argv[]) {
       // Source existence check
       // (We stat the source directly; on NFS this is safe without
       // root_squash because mount_watch runs as root.)
-      if (!source_exists(source)) {
+      // Skip for virtual devices (e.g. BeeGFS "beegfs_nodev" pseudo-device).
+      if (!is_virtual_device && !source_exists(source)) {
         if (verbose) {
           logger->info("  stale mount (source missing): {} -> {}", mi.source,
                        mi.target);

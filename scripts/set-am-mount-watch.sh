@@ -169,6 +169,7 @@ run_check() {
 		if [[ $rc -eq 1 ]]; then
 			log_ok "stale mount 已清理"
 		else
+			# warn:降级自error——无法自动修复的 mount 问题不影响脚本执行，仅提示用户手动处理
 			log_warn "存在无法修复的问题（exit=$rc）"
 		fi
 	fi

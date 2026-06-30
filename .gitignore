@@ -17,6 +17,7 @@ tests/*
 !tests/smoke/
 !tests/docker/
 !tests/test_*.sh
+!tests/unit/
 release.sh
 .dockerignore
 llm-docs/

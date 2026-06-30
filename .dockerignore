@@ -1,4 +1,5 @@
-build-release/
+build-release/*/
+build-release/CMakeFiles/
 build-test/*
 !build-test/bin/
 build/*
@@ -12,9 +13,9 @@ plan/
 .clangd/
 compile_commands.json
 
-# Keep tests/smoke, tests/run_tests.sh and tests/Dockerfile.test for Docker build
+# Keep test files needed for Docker build
 tests/*
 !tests/smoke/
-!tests/run_tests.sh
+!tests/docker/
+!tests/docker/*.sh
 !tests/Dockerfile.test
-!tests/test_*.sh

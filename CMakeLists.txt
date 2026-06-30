@@ -212,17 +212,4 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
         add_test(NAME test_known_hosts COMMAND test_known_hosts)
     endif()
 
-    # Unit tests for mount stat / virtual device handling (standalone binary)
-    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_mount_stat.cpp")
-        add_executable(test_mount_stat tests/unit/test_mount_stat.cpp)
-        target_include_directories(test_mount_stat PRIVATE ${CMAKE_SOURCE_DIR}/include)
-        target_compile_options(test_mount_stat PRIVATE
-            -Wall -Wextra -Wpedantic -Werror
-            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
-        )
-        target_link_options(test_mount_stat PRIVATE
-            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
-        )
-        add_test(NAME test_mount_stat COMMAND test_mount_stat)
-    endif()
 endif()

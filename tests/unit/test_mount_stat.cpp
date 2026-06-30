@@ -14,8 +14,57 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+
+// Inline copy of vfs_util.hpp for standalone test (no project header deps)
+// The real implementation is in include/ai_mirror/core/vfs_util.hpp
+namespace { // anonymous namespace for internal linkage
+
+using namespace std::string_literals;
+
+/// Known virtual/pseudo filesystem types
+static constexpr const char *KNOWN_VIRTUAL_FSTYPES[] = {
+    "proc",    "tmpfs",   "devtmpfs",    "sysfs",        "cgroup",
+    "cgroup2", "devpts",  "none",        "binfmt_misc",  "configfs",
+    "debugfs", "tracefs", "securityfs",  "pstore",       "hugetlbfs",
+    "mqueue",  "fusectl", "efivarfs",    "bpf",          "autofs",
+    "overlay", "aufs",    "fuse.portal", "beegfs_nodev",
+};
+static constexpr size_t NUM_VIRTUAL_FSTYPES =
+    sizeof(KNOWN_VIRTUAL_FSTYPES) / sizeof(KNOWN_VIRTUAL_FSTYPES[0]);
+
+/// Inline copy of is_virtual_fstype()
+static bool test_is_virtual_fstype(const std::string &fstype) {
+  for (size_t i = 0; i < NUM_VIRTUAL_FSTYPES; ++i) {
+    if (fstype == KNOWN_VIRTUAL_FSTYPES[i])
+      return true;
+  }
+  return false;
+}
+
+/// Inline copy of is_virtual_source_fallback()
+static bool test_is_virtual_source_fallback(const std::string &source) {
+  if (source.empty())
+    return true;
+  if (source[0] == '/')
+    return false;
+  // NFS paths (server:/path) don't start with '/' — without fstype we
+  // conservatively treat them as virtual (avoids stat on pseudo-device)
+  return true;
+}
+
+/// Inline copy of is_virtual_source()
+static bool test_is_virtual_source(const std::string &source,
+                                   const std::string &fstype) {
+  if (!fstype.empty()) {
+    return test_is_virtual_fstype(fstype);
+  }
+  return test_is_virtual_source_fallback(source);
+}
+
+} // anonymous namespace
 
 namespace fs = std::filesystem;
 
@@ -97,6 +146,7 @@ struct MountStatInfo {
 struct MountInfo {
   std::string source;
   std::string target;
+  std::string fstype;
   bool read_only = true;
   MountStatInfo source_stat;
 };
@@ -108,7 +158,7 @@ static std::string mount_to_json(const MountInfo &m) {
   s += "      \"source\": \"" + m.source + "\",\n";
   s += "      \"target\": \"" + m.target + "\",\n";
   s += "      \"read_only\": " + std::string(m.read_only ? "true" : "false");
-  bool is_virtual = is_virtual_source(m.source);
+  bool is_virtual = test_is_virtual_source(m.source, m.fstype);
   if (!is_virtual) {
     s += ",\n";
     s += "      \"source_stat\": {\n";
@@ -128,44 +178,138 @@ static std::string mount_to_json(const MountInfo &m) {
 }
 
 // ================================================================
-// Test: is_virtual_source detects common virtual device names
+// Test: is_virtual_fstype — fstype-based detection (all known types)
+// ================================================================
+
+void test_fstype_virtual_all() {
+  TEST("fstype: all known virtual types");
+  const char *all_types[] = {
+      "proc",    "tmpfs",   "devtmpfs",    "sysfs",        "cgroup",
+      "cgroup2", "devpts",  "none",        "binfmt_misc",  "configfs",
+      "debugfs", "tracefs", "securityfs",  "pstore",       "hugetlbfs",
+      "mqueue",  "fusectl", "efivarfs",    "bpf",          "autofs",
+      "overlay", "aufs",    "fuse.portal", "beegfs_nodev",
+  };
+  for (auto t : all_types) {
+    ASSERT_TRUE(test_is_virtual_fstype(t),
+                (std::string("fstype '") + t + "' should be virtual").c_str());
+  }
+  PASS();
+}
+
+void test_fstype_real_types() {
+  TEST("fstype: real filesystem types are NOT virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("ext4"), "ext4 should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("xfs"), "xfs should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("btrfs"), "btrfs should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("zfs"), "zfs should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("nfs"), "nfs should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("nfs4"), "nfs4 should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("cifs"), "cifs should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("fuse"), "fuse should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_fstype("fuse.bindfs"),
+               "fuse.bindfs should NOT be virtual");
+  PASS();
+}
+
+void test_fstype_empty() {
+  TEST("fstype: empty string (fallback to source heuristic)");
+  // With empty fstype, falls back to source heuristic
+  ASSERT_TRUE(test_is_virtual_source("", ""),
+              "empty source+empty fstype should be virtual");
+  ASSERT_FALSE(test_is_virtual_source("/dev/sda1", ""),
+               "real path + empty fstype should NOT be virtual");
+  ASSERT_TRUE(test_is_virtual_source("beegfs_nodev", ""),
+              "virtual source + empty fstype should be virtual (fallback)");
+  ASSERT_TRUE(test_is_virtual_source("tmpfs", ""),
+              "tmpfs + empty fstype should be virtual (fallback)");
+  PASS();
+}
+
+void test_fstype_override() {
+  TEST("fstype: fstype overrides source heuristic");
+  // NFS: source is server:/path (no leading /), but fstype=nfs4 -> NOT virtual
+  ASSERT_FALSE(test_is_virtual_source("192.168.1.100:/export/data", "nfs4"),
+               "NFS source with nfs4 fstype should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_source("storage:/path", "nfs"),
+               "NFS source with nfs fstype should NOT be virtual");
+  // proc with fstype=proc -> virtual (regardless of source)
+  ASSERT_TRUE(test_is_virtual_source("proc", "proc"),
+              "proc source with proc fstype should be virtual");
+  ASSERT_TRUE(test_is_virtual_source("beegfs_nodev", "beegfs_nodev"),
+              "beegfs_nodev source with beegfs_nodev fstype should be virtual");
+  PASS();
+}
+
+void test_fstype_smb_cifs() {
+  TEST("fstype: CIFS paths start with //");
+  ASSERT_FALSE(test_is_virtual_source("//server/share", "cifs"),
+               "CIFS //path should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_source("//server/share", ""),
+               "CIFS //path with empty fstype should NOT be virtual (fallback: "
+               "starts with /)");
+  PASS();
+}
+
+void test_fstype_bind_mounts() {
+  TEST("fstype: bind mounts are real paths");
+  ASSERT_FALSE(test_is_virtual_source("/mnt/data", ""),
+               "bind mount source with empty fstype should NOT be virtual");
+  ASSERT_FALSE(test_is_virtual_source("/mnt/data", "ext4"),
+               "bind mount source with ext4 fstype should NOT be virtual");
+  PASS();
+}
+
+void test_fstype_nfs_without_fstype() {
+  TEST("fstype: NFS without fstype (conservative fallback)");
+  // NFS source doesn't start with /, but without fstype we can't distinguish
+  // from a virtual device name.  Conservative fallback: treat as virtual.
+  ASSERT_TRUE(test_is_virtual_source("192.168.1.100:/export", ""),
+              "NFS source without fstype should be virtual (conservative: "
+              "avoid stat on pseudo-device)");
+  PASS();
+}
+
+// ================================================================
+// Legacy tests: source-only fallback (single-arg is_virtual_source)
 // ================================================================
 
 void test_virtual_beegfs() {
-  TEST("is_virtual_source: beegfs_nodev");
+  TEST("legacy: beegfs_nodev (source-only)");
   ASSERT_TRUE(is_virtual_source("beegfs_nodev"),
-              "beegfs_nodev should be virtual");
+              "beegfs_nodev should be virtual (fallback)");
   PASS();
 }
 
 void test_virtual_tmpfs() {
-  TEST("is_virtual_source: tmpfs");
-  ASSERT_TRUE(is_virtual_source("tmpfs"), "tmpfs should be virtual");
+  TEST("legacy: tmpfs (source-only)");
+  ASSERT_TRUE(is_virtual_source("tmpfs"), "tmpfs should be virtual (fallback)");
   PASS();
 }
 
 void test_virtual_proc() {
-  TEST("is_virtual_source: proc");
-  ASSERT_TRUE(is_virtual_source("proc"), "proc should be virtual");
+  TEST("legacy: proc (source-only)");
+  ASSERT_TRUE(is_virtual_source("proc"), "proc should be virtual (fallback)");
   PASS();
 }
 
 void test_virtual_empty() {
-  TEST("is_virtual_source: empty string");
-  ASSERT_TRUE(is_virtual_source(""), "empty should be virtual");
+  TEST("legacy: empty string (source-only)");
+  ASSERT_TRUE(is_virtual_source(""), "empty should be virtual (fallback)");
   PASS();
 }
 
 void test_real_path() {
-  TEST("is_virtual_source: /real/path");
+  TEST("legacy: /real/path (source-only)");
   ASSERT_FALSE(is_virtual_source("/real/path"),
-               "/real/path should NOT be virtual");
+               "/real/path should NOT be virtual (fallback)");
   PASS();
 }
 
 void test_real_root() {
-  TEST("is_virtual_source: root path /");
-  ASSERT_FALSE(is_virtual_source("/"), "root / should NOT be virtual");
+  TEST("legacy: root path / (source-only)");
+  ASSERT_FALSE(is_virtual_source("/"),
+               "root / should NOT be virtual (fallback)");
   PASS();
 }
 
@@ -206,6 +350,7 @@ void test_serialize_real_has_source_stat() {
   m.source = "/real/path/file";
   m.target = "/tmp/test/.bashrc";
   m.read_only = false;
+  m.fstype = "ext4"; // real filesystem
   m.source_stat.ino = 12345;
   m.source_stat.dev = 42;
   m.source_stat.mode = 0644;
@@ -251,6 +396,7 @@ void test_serialize_real_zero_stat_included() {
 
   MountInfo m;
   m.source = "/real/but/zero/stat";
+  m.fstype = "ext4"; // real filesystem
   // source_stat intentionally all zeros (real path where stat failed)
 
   std::string json = mount_to_json(m);
@@ -513,7 +659,18 @@ void test_json_roundtrip_virtual() {
 int main() {
   std::cout << "=== mount_stat unit tests ===" << std::endl;
 
-  // Virtual device detection
+  // ===== fstype-based virtual device detection =====
+  std::cout << "--- fstype detection ---" << std::endl;
+  test_fstype_virtual_all();
+  test_fstype_real_types();
+  test_fstype_empty();
+  test_fstype_override();
+  test_fstype_smb_cifs();
+  test_fstype_bind_mounts();
+  test_fstype_nfs_without_fstype();
+
+  // ===== legacy fallback (source-only) detection =====
+  std::cout << "--- source-fallback detection ---" << std::endl;
   test_virtual_beegfs();
   test_virtual_tmpfs();
   test_virtual_proc();

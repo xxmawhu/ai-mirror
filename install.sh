@@ -327,7 +327,7 @@ cleanup_old_versions() {
 	local current_version="$3"
 	local max_keep=2 # Keep at most 2 old versions
 
-	# Find all versioned files, sorted by modification time (oldest first)
+	# Find all versioned files, sorted by modification time (newest first)
 	local versions=()
 	while IFS= read -r -d '' f; do
 		versions+=("$f")
@@ -337,18 +337,19 @@ cleanup_old_versions() {
 
 	local count
 	count=${#versions[@]}
-	local to_delete=$((count - max_keep))
-
-	if [[ $to_delete -gt 0 ]]; then
-		local i
-		for ((i = 0; i < to_delete; i++)); do
-			local f="${versions[$i]}"
-			if [[ "$f" != "${bin_dir}/${name}.${current_version}" ]]; then
-				log "  Removing old version: $(basename "$f")"
-				sudo rm -f "$f"
-			fi
-		done
+	if [[ $count -le $max_keep ]]; then
+		return 0
 	fi
+
+	# Delete oldest versions beyond max_keep
+	local i
+	for ((i = max_keep; i < count; i++)); do
+		local f="${versions[$i]}"
+		if [[ "$f" != "${bin_dir}/${name}.${current_version}" ]]; then
+			log "  Removing old version: $(basename "$f")"
+			sudo rm -f "$f"
+		fi
+	done
 }
 
 # ---- Phase: Install ----

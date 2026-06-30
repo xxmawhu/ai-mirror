@@ -1,4 +1,5 @@
 #include "ai_mirror/core/graft.hpp"
+#include "ai_mirror/core/vfs_util.hpp"
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include "ai_mirror/utils/shell.hpp"
@@ -283,6 +284,7 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
       MountEntry entry;
       entry.source = device;
       entry.target = mount_point;
+      entry.fstype = fs_type;
       entry.read_only = options.find("ro") != std::string::npos;
       entry.active = true;
       entries.push_back(entry);
@@ -809,10 +811,11 @@ std::vector<MountEntry> Graft::health_check() const {
   for (const auto &m : mounts) {
     std::error_code ec;
 
-    // For virtual device names (beegfs_nodev, tmpfs, proc, etc.),
-    // check target existence since source is not a real path.
-    // For real path sources, check source existence.
-    bool is_virtual_device = !m.source.empty() && m.source.string()[0] != '/';
+    // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
+    // device backing — check target existence since source is not a real
+    // path.  Detection uses fstype when available, falls back to source
+    // heuristic for backward compat.
+    bool is_virtual_device = is_virtual_source(m.source.string(), m.fstype);
 
     if (is_virtual_device) {
       // Virtual device: check if target (mount point) exists and is accessible

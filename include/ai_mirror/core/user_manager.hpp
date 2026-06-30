@@ -26,6 +26,7 @@ struct MountStatInfo {
 struct MountInfo {
   std::string source;
   std::string target;
+  std::string fstype; ///< filesystem type (ext4, nfs4, proc, tmpfs, ...)
   bool read_only = true;
   MountStatInfo source_stat; ///< stat(2) at time of mount/update
 };

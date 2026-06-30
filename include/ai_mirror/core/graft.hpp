@@ -13,6 +13,8 @@ namespace ai_mirror::core {
 struct MountEntry {
   fs::path source;
   fs::path target;
+  std::string fstype; ///< filesystem type from /proc/mounts col 3 (proc, tmpfs,
+                      ///< ext4, nfs4, ...)
   bool read_only;
   bool active;
 };

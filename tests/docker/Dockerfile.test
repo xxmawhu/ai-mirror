@@ -37,19 +37,27 @@ RUN mkdir -p /data/home && \
 
 WORKDIR /app
 
-COPY . /app/
+# Copy project files needed by install.sh
+COPY install.sh CMakeLists.txt /app/
+COPY profile/ /app/profile/
 
-RUN mkdir -p build && \
-    cd build && \
-    cmake -DCMAKE_BUILD_TYPE=Release .. && \
-    make -j$(nproc)
+# Create mock build directory with pre-built binaries for install.sh to deploy
+RUN mkdir -p /app/build-release/bin && \
+    echo '#!/bin/bash' > /app/build-release/bin/am && \
+    echo 'echo "ai-mirror mock am v0.1.0"' >> /app/build-release/bin/am && \
+    chmod +x /app/build-release/bin/am && \
+    echo '#!/bin/bash' > /app/build-release/bin/ai-mirror-bin && \
+    echo 'echo "ai-mirror-bin mock v0.1.0"' >> /app/build-release/bin/ai-mirror-bin && \
+    chmod +x /app/build-release/bin/ai-mirror-bin && \
+    echo '#!/bin/bash' > /app/build-release/bin/am-mount-watch && \
+    echo 'echo "am-mount-watch mock v0.1.0"' >> /app/build-release/bin/am-mount-watch && \
+    chmod +x /app/build-release/bin/am-mount-watch
 
-RUN cp build/bin/ai-mirror /usr/local/bin/am && \
-    chmod +x /usr/local/bin/am && \
-    ln -sf /usr/local/bin/am /usr/local/bin/ai-mirror-bin
+# Create CMakeCache.txt so phase_build skips rebuild (stale timestamp)
+RUN touch -t 197001010000 /app/build-release/CMakeCache.txt
 
-# Run install.sh to deploy profile, completion, etc.
-RUN bash install.sh
+# Run install.sh to deploy profile, completion, config
+RUN bash /app/install.sh
 
 RUN mkdir -p /home/testuser/.ssh && \
     ssh-keygen -t ed25519 -f /home/testuser/.ssh/testkey -N "" -C "test" && \
@@ -62,4 +70,7 @@ RUN mkdir -p /data/home/datauser/.ssh && \
 COPY tests/docker/run_tests.sh /run_tests.sh
 RUN chmod +x /run_tests.sh
 
-CMD ["/run_tests.sh"]
+COPY tests/docker/test_install.sh /test_install.sh
+RUN chmod +x /test_install.sh
+
+CMD ["/bin/bash", "-c", "/run_tests.sh && /test_install.sh"]

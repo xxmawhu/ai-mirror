@@ -1,5 +1,6 @@
 #include "ai_mirror/core/user_manager.hpp"
 #include "ai_mirror/core/graft.hpp"
+#include "ai_mirror/core/vfs_util.hpp"
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include "ai_mirror/utils/shell.hpp"
@@ -60,11 +61,11 @@ static std::string make_mounts_json(const std::vector<MountInfo> &mounts) {
     s += "      \"target\": \"" + m.target + "\",\n";
     s += "      \"read_only\": " + std::string(m.read_only ? "true" : "false") +
          ",\n";
-    // Virtual device names (beegfs_nodev, tmpfs, proc, etc.) are not real
-    // paths — skip source_stat to avoid writing all-zero stat fields which
-    // would be indistinguishable from a failed ::stat().
-    bool is_virtual_source = m.source.empty() || m.source[0] != '/';
-    if (!is_virtual_source) {
+    // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
+    // device backing — skip source_stat to avoid writing all-zero stat
+    // fields.  Uses fstype if available, falls back to source heuristic
+    // (source.empty() || source[0] != '/') for backward compat.
+    if (!is_virtual_source(m.source, m.fstype)) {
       s += "      \"source_stat\": {\n";
       s += "        \"ino\": " + std::to_string(m.source_stat.ino) + ",\n";
       s += "        \"dev\": " + std::to_string(m.source_stat.dev) + ",\n";
@@ -852,13 +853,13 @@ bool UserManager::update_state_mounts(const std::string &username,
     MountInfo mi;
     mi.source = me.source.string();
     mi.target = me.target.string();
+    mi.fstype = me.fstype;
     mi.read_only = me.read_only;
 
-    // Virtual device names (beegfs_nodev, tmpfs, proc, etc.) don't start
-    // with '/' — skip stat and clear source (the device name is not a real
-    // path and should not appear in .am_status as a mount source).
-    bool is_virtual_device = me.source.empty() || me.source.string()[0] != '/';
-    if (is_virtual_device) {
+    // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
+    // device backing — skip stat and clear source. Detection uses fstype
+    // when available, falls back to source heuristic (source[0] != '/').
+    if (is_virtual_source(mi.source, mi.fstype)) {
       mi.source.clear(); // virtual device names are meaningless as source
     } else {
       struct stat st;

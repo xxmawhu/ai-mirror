@@ -26,6 +26,7 @@
 #include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/core/path_resolver.hpp"
 #include "ai_mirror/core/user_manager.hpp"
+#include "ai_mirror/core/vfs_util.hpp"
 #include "ai_mirror/daemon/mount_cleaner.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include "ai_mirror/utils/shell.hpp"
@@ -87,6 +88,7 @@ read_proc_mounts_for_user(const fs::path &home_dir) {
       core::MountEntry me;
       me.source = device;
       me.target = mount_point;
+      me.fstype = fs_type;
       me.read_only = options.find("ro") != std::string::npos;
       me.active = true;
       entries.push_back(std::move(me));
@@ -102,10 +104,12 @@ static core::MountInfo mount_entry_to_info(const core::MountEntry &me) {
   core::MountInfo mi;
   mi.source = me.source.string();
   mi.target = me.target.string();
+  mi.fstype = me.fstype;
   mi.read_only = me.read_only;
-  // Virtual device names don't start with '/' (e.g. "beegfs_nodev", "tmpfs")
-  bool is_virtual_device = me.source.empty() || me.source.string()[0] != '/';
-  if (!is_virtual_device) {
+  // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
+  // device backing.  Uses fstype when available, falls back to source
+  // heuristic for backward compat.
+  if (!ai_mirror::core::is_virtual_source(mi.source, mi.fstype)) {
     struct stat st;
     if (::stat(me.source.c_str(), &st) == 0) {
       mi.source_stat.ino = st.st_ino;
@@ -261,10 +265,11 @@ int main(int argc, char *argv[]) {
       fs::path target(mi.target);
       fs::path source(mi.source);
 
-      // Virtual device names (beegfs_nodev, tmpfs, proc, etc.) are not
+      // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) are not
       // real paths — skip source stat and only check target accessibility.
-      // This mirrors the logic in Graft::health_check() (graft.cpp).
-      bool is_virtual_device = mi.source.empty() || mi.source[0] != '/';
+      // Detection uses fstype when available, falls back to source heuristic.
+      bool is_virtual_device =
+          ai_mirror::core::is_virtual_source(mi.source, mi.fstype);
 
       // Check if target is still mounted (check via stat on target)
       bool target_alive = is_mount_alive(target);

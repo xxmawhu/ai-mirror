@@ -189,6 +189,24 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
         add_test(NAME test_mount_stat COMMAND test_mount_stat)
     endif()
 
+    # Unit tests for .am_status JSON serialization — verifies ordered_json
+    # dump(2) produces correct format with proper string escaping
+    if(EXISTS "${CMAKE_SOURCE_DIR}/tests/unit/test_state_json.cpp")
+        add_executable(test_state_json tests/unit/test_state_json.cpp)
+        target_link_libraries(test_state_json PRIVATE
+            nlohmann_json::nlohmann_json
+            pthread
+        )
+        target_compile_options(test_state_json PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=2
+        )
+        target_link_options(test_state_json PRIVATE
+            -pie -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
+        )
+        add_test(NAME test_state_json COMMAND test_state_json)
+    endif()
+
     # Additional tests can be added here following the same pattern
 
     # Unit tests for parse_known_hosts_hosts (standalone binary)

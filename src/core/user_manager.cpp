@@ -50,72 +50,56 @@ static std::string md5_hex(const std::string &input) {
   return oss.str();
 }
 
-static std::string make_mounts_json(const std::vector<MountInfo> &mounts) {
-  if (mounts.empty())
-    return "\"mounts\": []";
-  std::string s = "\"mounts\": [\n";
-  for (size_t i = 0; i < mounts.size(); ++i) {
-    const auto &m = mounts[i];
-    s += "    {\n";
-    s += "      \"source\": \"" + m.source + "\",\n";
-    s += "      \"target\": \"" + m.target + "\",\n";
-    s += "      \"read_only\": " + std::string(m.read_only ? "true" : "false") +
-         ",\n";
+static nlohmann::ordered_json build_source_stat_json(const MountStatInfo &st) {
+  return {{"ino", st.ino},    {"dev", st.dev}, {"mode", st.mode},
+          {"uid", st.uid},    {"gid", st.gid}, {"size", st.size},
+          {"mtime", st.mtime}};
+}
+
+static nlohmann::ordered_json
+make_mounts_json(const std::vector<MountInfo> &mounts) {
+  auto arr = nlohmann::ordered_json::array();
+  for (const auto &m : mounts) {
+    nlohmann::ordered_json mj;
+    mj["source"] = m.source;
+    mj["target"] = m.target;
+    mj["read_only"] = m.read_only;
     // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
     // device backing — skip source_stat to avoid writing all-zero stat
     // fields.  Uses fstype if available, falls back to source heuristic
     // (source.empty() || source[0] != '/') for backward compat.
     if (!is_virtual_source(m.source, m.fstype)) {
-      s += "      \"source_stat\": {\n";
-      s += "        \"ino\": " + std::to_string(m.source_stat.ino) + ",\n";
-      s += "        \"dev\": " + std::to_string(m.source_stat.dev) + ",\n";
-      s += "        \"mode\": " + std::to_string(m.source_stat.mode) + ",\n";
-      s += "        \"uid\": " + std::to_string(m.source_stat.uid) + ",\n";
-      s += "        \"gid\": " + std::to_string(m.source_stat.gid) + ",\n";
-      s += "        \"size\": " + std::to_string(m.source_stat.size) + ",\n";
-      s += "        \"mtime\": " + std::to_string(m.source_stat.mtime) + "\n";
-      s += "      }\n";
+      mj["source_stat"] = build_source_stat_json(m.source_stat);
     }
-    s += "    }";
-    if (i < mounts.size() - 1)
-      s += ",";
-    s += "\n";
+    arr.push_back(std::move(mj));
   }
-  s += "  ]";
-  return s;
+  return arr;
 }
 
 static std::string make_state_content(const UserInfo &info,
                                       const std::string &main_user) {
-  // Build JSON via string concatenation, then PoW with us-level timestamp as
-  // nonce Difficulty: hash of entire content must start with "000" (3 leading
-  // zeros) NO hash field is stored - the PoW is verified by checking
-  // md5(content) prefix
-  std::string base;
-  base.reserve(512);
-  base += "{\n";
-  base += "  \"username\": \"";
-  base += info.username;
-  base += "\",\n";
-  base += "  \"uid\": ";
-  base += std::to_string(info.uid);
-  base += ",\n";
-  base += "  \"gid\": ";
-  base += std::to_string(info.gid);
-  base += ",\n";
-  base += "  \"home_dir\": \"";
-  base += info.home_dir;
-  base += "\",\n";
-  base += "  \"main_user\": \"";
-  base += main_user;
-  base += "\",\n";
-  base += "  \"project_path\": \"";
-  base += info.project_path;
-  base += "\",\n";
-  base += "  \"path_hash\": \"";
-  base += info.path_hash;
-  base += "\",\n";
-  base += "  " + make_mounts_json(info.mounts) + ",\n";
+  // Build JSON via nlohmann::ordered_json, then PoW with us-level timestamp as
+  // nonce. Difficulty: hash of entire content must start with "000" (3 leading
+  // zeros). No hash field is stored — the PoW is verified by checking
+  // md5(content) prefix.
+  //
+  // Using ordered_json instead of plain json to preserve field insertion order
+  // (the reader uses ordered iteration for backward-compat field extraction).
+  // dump(2) produces 2-space-indented JSON with proper string escaping (fixes
+  // the root cause — previous code hand-concatenated strings without escaping).
+  //
+  // PERFORMANCE: PoW loop re-dumps the json on each iteration (~4096 attempts).
+  // json::dump(2) is a simple string-format pass (~1-2µs per call on modern
+  // hardware), so the total PoW cost is well under 10ms — negligible.
+  nlohmann::ordered_json j;
+  j["username"] = info.username;
+  j["uid"] = info.uid;
+  j["gid"] = info.gid;
+  j["home_dir"] = info.home_dir;
+  j["main_user"] = main_user;
+  j["project_path"] = info.project_path;
+  j["path_hash"] = info.path_hash;
+  j["mounts"] = make_mounts_json(info.mounts);
 
   auto now = std::chrono::system_clock::now();
   auto epoch = now.time_since_epoch();
@@ -125,10 +109,10 @@ static std::string make_state_content(const UserInfo &info,
   // PoW: try successive us timestamps until md5 of entire content starts with
   // "000" Expected ~4096 attempts for 12-bit difficulty, negligible CPU/memory
   for (int64_t t = us;; ++t) {
-    std::string content = base;
-    content += "  \"timestamp\": ";
-    content += std::to_string(t);
-    content += "\n}\n";
+    j["timestamp"] = t;
+    // json::dump(2) ends with "}" (no trailing newline), so + "\n" gives
+    // "...}\n" matching the original file format.
+    std::string content = j.dump(2) + "\n";
     std::string h = md5_hex(content);
     if (h.substr(0, 3) == "000") {
       return content; // Return content WITHOUT hash field

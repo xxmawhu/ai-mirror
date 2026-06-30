@@ -12,15 +12,20 @@ namespace ai_mirror::core {
 /// a device path or network path.  Source is from Linux kernel docs
 /// (Documentation/filesystems/) and common practice.
 ///
+/// ⚠️ IMPORTANT: This is the FSTYPE column (column 3) of /proc/mounts,
+/// NOT the device column (column 1).  For example, BeeGFS has:
+///   device=beegfs_nodev, fstype=beegfs
+/// So "beegfs" goes in this list, NOT "beegfs_nodev".
+///
 /// When a mount has one of these fstypes, we skip ::stat() on its source
 /// and omit source_stat from serialized output.
 inline const std::unordered_set<std::string> &virtual_fstypes() {
   static const std::unordered_set<std::string> types{
-      "proc",    "tmpfs",   "devtmpfs",    "sysfs",        "cgroup",
-      "cgroup2", "devpts",  "none",        "binfmt_misc",  "configfs",
-      "debugfs", "tracefs", "securityfs",  "pstore",       "hugetlbfs",
-      "mqueue",  "fusectl", "efivarfs",    "bpf",          "autofs",
-      "overlay", "aufs",    "fuse.portal", "beegfs_nodev",
+      "proc",    "tmpfs",   "devtmpfs",    "sysfs",       "cgroup",
+      "cgroup2", "devpts",  "none",        "binfmt_misc", "configfs",
+      "debugfs", "tracefs", "securityfs",  "pstore",      "hugetlbfs",
+      "mqueue",  "fusectl", "efivarfs",    "bpf",         "autofs",
+      "overlay", "aufs",    "fuse.portal", "beegfs",
   };
   return types;
 }
@@ -54,6 +59,16 @@ inline bool is_virtual_source_fallback(const std::string &source) {
 }
 
 /// Combined check: use fstype if available, fall back to source heuristic.
+///
+/// Logic:
+/// 1. If fstype is a known virtual type (proc, tmpfs, beegfs, ...) → virtual
+/// 2. If fstype is empty → use source heuristic (source.empty() ||
+/// source[0]!='/')
+/// 3. Otherwise (known non-virtual fstype like ext4, nfs4) → not virtual
+///
+/// ⚠️ When adding a new virtual filesystem, add its FSTYPE (column 3 of
+/// /proc/mounts) to virtual_fstypes(), NOT its device name (column 1).
+/// For BeeGFS: device=beegfs_nodev, fstype=beegfs → add "beegfs".
 inline bool is_virtual_source(const std::string &source,
                               const std::string &fstype) {
   if (!fstype.empty()) {

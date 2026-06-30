@@ -26,11 +26,11 @@ using namespace std::string_literals;
 
 /// Known virtual/pseudo filesystem types
 static constexpr const char *KNOWN_VIRTUAL_FSTYPES[] = {
-    "proc",    "tmpfs",   "devtmpfs",    "sysfs",        "cgroup",
-    "cgroup2", "devpts",  "none",        "binfmt_misc",  "configfs",
-    "debugfs", "tracefs", "securityfs",  "pstore",       "hugetlbfs",
-    "mqueue",  "fusectl", "efivarfs",    "bpf",          "autofs",
-    "overlay", "aufs",    "fuse.portal", "beegfs_nodev",
+    "proc",    "tmpfs",   "devtmpfs",    "sysfs",       "cgroup",
+    "cgroup2", "devpts",  "none",        "binfmt_misc", "configfs",
+    "debugfs", "tracefs", "securityfs",  "pstore",      "hugetlbfs",
+    "mqueue",  "fusectl", "efivarfs",    "bpf",         "autofs",
+    "overlay", "aufs",    "fuse.portal", "beegfs",
 };
 static constexpr size_t NUM_VIRTUAL_FSTYPES =
     sizeof(KNOWN_VIRTUAL_FSTYPES) / sizeof(KNOWN_VIRTUAL_FSTYPES[0]);
@@ -184,11 +184,11 @@ static std::string mount_to_json(const MountInfo &m) {
 void test_fstype_virtual_all() {
   TEST("fstype: all known virtual types");
   const char *all_types[] = {
-      "proc",    "tmpfs",   "devtmpfs",    "sysfs",        "cgroup",
-      "cgroup2", "devpts",  "none",        "binfmt_misc",  "configfs",
-      "debugfs", "tracefs", "securityfs",  "pstore",       "hugetlbfs",
-      "mqueue",  "fusectl", "efivarfs",    "bpf",          "autofs",
-      "overlay", "aufs",    "fuse.portal", "beegfs_nodev",
+      "proc",    "tmpfs",   "devtmpfs",    "sysfs",       "cgroup",
+      "cgroup2", "devpts",  "none",        "binfmt_misc", "configfs",
+      "debugfs", "tracefs", "securityfs",  "pstore",      "hugetlbfs",
+      "mqueue",  "fusectl", "efivarfs",    "bpf",         "autofs",
+      "overlay", "aufs",    "fuse.portal", "beegfs",
   };
   for (auto t : all_types) {
     ASSERT_TRUE(test_is_virtual_fstype(t),
@@ -236,8 +236,27 @@ void test_fstype_override() {
   // proc with fstype=proc -> virtual (regardless of source)
   ASSERT_TRUE(test_is_virtual_source("proc", "proc"),
               "proc source with proc fstype should be virtual");
-  ASSERT_TRUE(test_is_virtual_source("beegfs_nodev", "beegfs_nodev"),
-              "beegfs_nodev source with beegfs_nodev fstype should be virtual");
+  // /proc/mounts 真实格式: device=beegfs_nodev, fstype=beegfs
+  ASSERT_TRUE(test_is_virtual_source("beegfs_nodev", "beegfs"),
+              "beegfs source with beegfs_nodev device should be virtual");
+  PASS();
+}
+
+void test_real_proc_mounts_beegfs() {
+  TEST("fstype: exact /proc/mounts BeeGFS format");
+  // Real-world /proc/mounts line for BeeGFS:
+  //   beegfs_nodev /mnt/beegfs_data beegfs rw,nosuid,relatime,...
+  //   column 1 (device): beegfs_nodev
+  //   column 3 (fstype): beegfs
+  // The OLD code had "beegfs_nodev" in the fstype list which was WRONG.
+  // The fstype column value is "beegfs", NOT "beegfs_nodev".
+  ASSERT_TRUE(test_is_virtual_source("beegfs_nodev", "beegfs"),
+              "device=beegfs_nodev + fstype=beegfs should be virtual");
+  // Also verify that "beegfs_nodev" as fstype (the OLD bug) still works
+  // via the fallback when fstype is empty/unknown
+  ASSERT_TRUE(
+      test_is_virtual_source("beegfs_nodev", ""),
+      "device=beegfs_nodev + empty fstype should be virtual (fallback)");
   PASS();
 }
 
@@ -668,6 +687,7 @@ int main() {
   test_fstype_smb_cifs();
   test_fstype_bind_mounts();
   test_fstype_nfs_without_fstype();
+  test_real_proc_mounts_beegfs();
 
   // ===== legacy fallback (source-only) detection =====
   std::cout << "--- source-fallback detection ---" << std::endl;

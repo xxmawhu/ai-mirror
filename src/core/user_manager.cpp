@@ -827,11 +827,21 @@ bool UserManager::update_state_mounts(const std::string &username,
     return false;
   }
 
-  // 2. Get current mount list via Graft
+  // 2. Build target→existing mount map from current .am_status
+  //    Virtual devices (BeeGFS) have no real device path in /proc/mounts —
+  //    the device column shows "beegfs_nodev" instead of the actual source.
+  //    We preserve the original source and source_stat from the previous
+  //    .am_status so that am update doesn't lose the real path information.
+  std::unordered_map<std::string, const MountInfo *> existing_by_target;
+  for (const auto &em : info_opt->mounts) {
+    existing_by_target[em.target] = &em;
+  }
+
+  // 3. Get current mount list via Graft
   Graft graft(prefix);
   auto mount_entries = graft.list_mounts(username);
 
-  // 3. Convert MountEntry → MountInfo with source stat
+  // 4. Convert MountEntry → MountInfo with source stat
   std::vector<MountInfo> mounts;
   for (const auto &me : mount_entries) {
     MountInfo mi;
@@ -841,10 +851,37 @@ bool UserManager::update_state_mounts(const std::string &username,
     mi.read_only = me.read_only;
 
     // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
-    // device backing — skip stat and clear source. Detection uses fstype
-    // when available, falls back to source heuristic (source[0] != '/').
+    // device backing — the device column (/proc/mounts col 1) shows a
+    // pseudo-device name like "beegfs_nodev" instead of the real path.
+    // We preserve the original source + source_stat from .am_status if
+    // available, because /proc/mounts can't tell us the real source path.
     if (is_virtual_source(mi.source, mi.fstype)) {
-      mi.source.clear(); // virtual device names are meaningless as source
+      auto it = existing_by_target.find(mi.target);
+      if (it != existing_by_target.end() && !it->second->source.empty()) {
+        // Preserve the original source path and stat from .am_status
+        mi.source = it->second->source;
+        mi.source_stat = it->second->source_stat;
+        // Clear fstype so make_mounts_json uses source heuristic and
+        // includes source_stat in the output (virtual fstype would skip it)
+        mi.fstype.clear();
+      } else if (it != existing_by_target.end() && it->second->source.empty()) {
+        // Source was cleared by a previous buggy version.
+        // Use the target path as source (same BeeGFS filesystem),
+        // and stat the target to get real inode/dev/size data.
+        mi.source = mi.target;
+        mi.fstype.clear(); // make_mounts_json will include source_stat
+        struct stat st;
+        if (::stat(mi.target.c_str(), &st) == 0) {
+          mi.source_stat.ino = st.st_ino;
+          mi.source_stat.dev = st.st_dev;
+          mi.source_stat.mode = st.st_mode;
+          mi.source_stat.uid = st.st_uid;
+          mi.source_stat.gid = st.st_gid;
+          mi.source_stat.size = st.st_size;
+          mi.source_stat.mtime = st.st_mtime;
+        }
+      }
+      // else: new mount with no history — keep source empty (no data)
     } else {
       struct stat st;
       if (::stat(me.source.c_str(), &st) == 0) {

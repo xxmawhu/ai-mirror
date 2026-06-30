@@ -83,308 +83,321 @@ static CommandContext make_context(bool verbose) {
 static bool safe_chown_path(const fs::path &p, const std::string &owner);
 
 static int do_configure(CommandContext &ctx, const core::UserInfo &state,
-                        const fs::path &proj, const std::string &main_user) {
+                        const fs::path &proj, const std::string &main_user,
+                        bool mount_only = false) {
   std::string username = state.username;
   std::string home_dir = state.home_dir;
   int fixes = 0;
 
-  {
-    fs::path mhome = utils::get_home_dir(main_user);
-    fs::path p = fs::absolute(proj);
-    std::vector<fs::path> dirs_to_fix;
-    // 防止无限循环：最多遍历到根目录或最多32层
-    int max_depth = 32;
-    while (p.has_parent_path() && p != mhome && !p.empty() && p != "/" &&
-           --max_depth > 0) {
-      p = p.parent_path();
-      if (p == mhome || p == "/")
-        break;
-      dirs_to_fix.push_back(p);
-    }
-    for (auto &d : dirs_to_fix) {
-      std::error_code ec;
-      auto perms = fs::status(d, ec).permissions();
-      if (ec)
-        continue;
-      if ((perms & fs::perms::group_exec) == fs::perms::none) {
-        auto chgrp = utils::exec_safe({"chgrp", main_user, d.string()});
-        if (chgrp.exit_code == 0) {
-          fs::permissions(d, perms | fs::perms::group_exec, ec);
-          if (!ec) {
-            utils::get_logger()->info("Added g+x to {} (group traverse for {})",
-                                      d.string(), main_user);
-            fixes++;
-          }
-        } else {
-          utils::get_logger()->warn("Failed to chgrp {} to {}: {}", d.string(),
-                                    main_user, chgrp.stderr_output);
-        }
+  // [P1-performance] mount_only=true skips SSH/groups/permissions setup.
+  // Used by cmd_auto_fix_all which should only fix mounts, not reconfigure
+  // the entire project. See issue P1-auto-fix-all-performance.
+  if (!mount_only) {
+    {
+      fs::path mhome = utils::get_home_dir(main_user);
+      fs::path p = fs::absolute(proj);
+      std::vector<fs::path> dirs_to_fix;
+      // 防止无限循环：最多遍历到根目录或最多32层
+      int max_depth = 32;
+      while (p.has_parent_path() && p != mhome && !p.empty() && p != "/" &&
+             --max_depth > 0) {
+        p = p.parent_path();
+        if (p == mhome || p == "/")
+          break;
+        dirs_to_fix.push_back(p);
       }
-    }
-    std::error_code iter_ec;
-    for (const auto &entry : fs::directory_iterator(mhome, iter_ec)) {
-      if (!entry.is_directory())
-        continue;
-      std::error_code ec;
-      auto ep = entry.status(ec).permissions();
-      if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
-        fs::permissions(entry.path(), ep & ~fs::perms::group_write, ec);
-        if (!ec) {
-          utils::get_logger()->info("Removed g+w from {} (privacy protection)",
-                                    entry.path().string());
-          fixes++;
-        } else {
-          utils::get_logger()->warn("Failed to remove g+w from {}: {}",
-                                    entry.path().string(), ec.message());
-        }
-      }
-    }
-  }
-
-  {
-    std::error_code ec;
-    auto hp = fs::status(home_dir, ec);
-    if (!ec && (hp.permissions() & (fs::perms::set_gid)) != fs::perms::none) {
-      utils::get_logger()->info("Clearing setgid on {} (will be re-applied by "
-                                "grant_write_access if needed)",
-                                home_dir);
-    }
-  }
-
-  {
-    fs::path passwd_home = utils::get_home_dir(main_user);
-    std::string env_home = utils::get_effective_home();
-    if (!passwd_home.empty() && !env_home.empty() && passwd_home != env_home) {
-      fs::path old_ssh = passwd_home / ".ssh";
-      fs::path new_ssh = fs::path(env_home) / ".ssh";
-      std::error_code ec;
-      if (fs::exists(new_ssh) && !fs::exists(old_ssh, ec)) {
-        fs::create_symlink(new_ssh, old_ssh, ec);
-        if (!ec) {
-          struct passwd *main_pw = getpwnam(main_user.c_str());
-          if (!main_pw) {
-            utils::get_logger()->warn("Cannot resolve uid for main user '{}'",
-                                      main_user);
-          } else {
-            auto chown_r =
-                utils::exec_safe({"chown", "-h",
-                                  std::to_string(main_pw->pw_uid) + ":" +
-                                      std::to_string(main_pw->pw_gid),
-                                  old_ssh.string()});
-            if (chown_r.exit_code == 0) {
-              utils::get_logger()->info("Created symlink {} -> {}",
-                                        old_ssh.string(), new_ssh.string());
+      for (auto &d : dirs_to_fix) {
+        std::error_code ec;
+        auto perms = fs::status(d, ec).permissions();
+        if (ec)
+          continue;
+        if ((perms & fs::perms::group_exec) == fs::perms::none) {
+          auto chgrp = utils::exec_safe({"chgrp", main_user, d.string()});
+          if (chgrp.exit_code == 0) {
+            fs::permissions(d, perms | fs::perms::group_exec, ec);
+            if (!ec) {
+              utils::get_logger()->info(
+                  "Added g+x to {} (group traverse for {})", d.string(),
+                  main_user);
               fixes++;
             }
+          } else {
+            utils::get_logger()->warn("Failed to chgrp {} to {}: {}",
+                                      d.string(), main_user,
+                                      chgrp.stderr_output);
+          }
+        }
+      }
+      std::error_code iter_ec;
+      for (const auto &entry : fs::directory_iterator(mhome, iter_ec)) {
+        if (!entry.is_directory())
+          continue;
+        std::error_code ec;
+        auto ep = entry.status(ec).permissions();
+        if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
+          fs::permissions(entry.path(), ep & ~fs::perms::group_write, ec);
+          if (!ec) {
+            utils::get_logger()->info(
+                "Removed g+w from {} (privacy protection)",
+                entry.path().string());
+            fixes++;
+          } else {
+            utils::get_logger()->warn("Failed to remove g+w from {}: {}",
+                                      entry.path().string(), ec.message());
           }
         }
       }
     }
-  }
 
-  // Fix AM home directory permissions for collaboration
-  // This allows main user to create sub-projects inside AM home
-  core::UserManager::fix_home_dir_permissions(home_dir, main_user);
-  fixes++; // Count as a fix even if permissions were already correct
-
-  auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, username});
-  if (grp_result.exit_code == 0) {
-    fixes++;
-  } else {
-    utils::get_logger()->warn("Failed to add {} to {} group: {}", username,
-                              main_user, grp_result.stderr_output);
-  }
-
-  // Add main_user to ai_user's group for file access
-  auto grp_result2 = utils::exec_safe({"usermod", "-aG", username, main_user});
-  if (grp_result2.exit_code == 0) {
-    fixes++;
-    if (ctx.verbose) {
-      std::cout << "newgrp=" << username << std::endl;
-    }
-  } else {
-    utils::get_logger()->warn("Failed to add {} to {} group: {}", main_user,
-                              username, grp_result2.stderr_output);
-  }
-
-  // Supplementary groups from [ai-user] config
-  // Security rules:
-  //   1. ai-mirror group is ALWAYS rejected (ai-user must never be in
-  //   ai-mirror)
-  //   2. If main_user is not a member of the requested group, reject (no
-  //   privilege escalation)
-  //   3. If the group does not exist on the system, warn and skip
-  for (const auto &group_name : ctx.config.ai_user.groups) {
-    // Rule 1: Never allow ai-mirror group
-    if (group_name == "ai-mirror") {
-      std::cerr << "SECURITY: refusing to add ai-user to 'ai-mirror' group"
-                << std::endl;
-      continue;
+    {
+      std::error_code ec;
+      auto hp = fs::status(home_dir, ec);
+      if (!ec && (hp.permissions() & (fs::perms::set_gid)) != fs::perms::none) {
+        utils::get_logger()->info(
+            "Clearing setgid on {} (will be re-applied by "
+            "grant_write_access if needed)",
+            home_dir);
+      }
     }
 
-    // Check group exists
-    struct group *grp = getgrnam(group_name.c_str());
-    if (!grp) {
-      std::cerr << "WARNING: group '" << group_name
-                << "' does not exist, skipping" << std::endl;
-      continue;
-    }
-
-    // Rule 2: main_user must be a member of the group
-    struct passwd *main_pw = getpwnam(main_user.c_str());
-    if (!main_pw) {
-      std::cerr << "WARNING: cannot resolve main user '" << main_user
-                << "' for group check" << std::endl;
-      continue;
-    }
-
-    bool main_in_group = false;
-    // Check primary group
-    if (main_pw->pw_gid == grp->gr_gid) {
-      main_in_group = true;
-    }
-    // Check supplementary groups
-    if (!main_in_group) {
-      int ngroups = 0;
-      getgrouplist(main_user.c_str(), main_pw->pw_gid, nullptr, &ngroups);
-      if (ngroups > 0) {
-        std::vector<gid_t> groups(ngroups);
-        if (getgrouplist(main_user.c_str(), main_pw->pw_gid, groups.data(),
-                         &ngroups) >= 0) {
-          for (int i = 0; i < ngroups; ++i) {
-            if (groups[i] == grp->gr_gid) {
-              main_in_group = true;
-              break;
+    {
+      fs::path passwd_home = utils::get_home_dir(main_user);
+      std::string env_home = utils::get_effective_home();
+      if (!passwd_home.empty() && !env_home.empty() &&
+          passwd_home != env_home) {
+        fs::path old_ssh = passwd_home / ".ssh";
+        fs::path new_ssh = fs::path(env_home) / ".ssh";
+        std::error_code ec;
+        if (fs::exists(new_ssh) && !fs::exists(old_ssh, ec)) {
+          fs::create_symlink(new_ssh, old_ssh, ec);
+          if (!ec) {
+            struct passwd *main_pw = getpwnam(main_user.c_str());
+            if (!main_pw) {
+              utils::get_logger()->warn("Cannot resolve uid for main user '{}'",
+                                        main_user);
+            } else {
+              auto chown_r =
+                  utils::exec_safe({"chown", "-h",
+                                    std::to_string(main_pw->pw_uid) + ":" +
+                                        std::to_string(main_pw->pw_gid),
+                                    old_ssh.string()});
+              if (chown_r.exit_code == 0) {
+                utils::get_logger()->info("Created symlink {} -> {}",
+                                          old_ssh.string(), new_ssh.string());
+                fixes++;
+              }
             }
           }
         }
       }
     }
 
-    if (!main_in_group) {
-      std::cerr << "SECURITY: refusing to add ai-user to '" << group_name
-                << "' group (main user '" << main_user << "' is not a member)"
-                << std::endl;
-      continue;
-    }
+    // Fix AM home directory permissions for collaboration
+    // This allows main user to create sub-projects inside AM home
+    core::UserManager::fix_home_dir_permissions(home_dir, main_user);
+    fixes++; // Count as a fix even if permissions were already correct
 
-    // Check if ai-user is already in the group
-    bool ai_in_group = false;
-    struct passwd *ai_pw = getpwnam(username.c_str());
-    if (ai_pw) {
-      int ai_ngroups = 0;
-      getgrouplist(username.c_str(), ai_pw->pw_gid, nullptr, &ai_ngroups);
-      if (ai_ngroups > 0) {
-        std::vector<gid_t> ai_groups(ai_ngroups);
-        if (getgrouplist(username.c_str(), ai_pw->pw_gid, ai_groups.data(),
-                         &ai_ngroups) >= 0) {
-          for (int i = 0; i < ai_ngroups; ++i) {
-            if (ai_groups[i] == grp->gr_gid) {
-              ai_in_group = true;
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    if (ai_in_group) {
-      utils::get_logger()->info("ai-user '{}' already in group '{}'", username,
-                                group_name);
-      continue;
-    }
-
-    auto supp_result =
-        utils::exec_safe({"usermod", "-aG", group_name, username});
-    if (supp_result.exit_code == 0) {
+    auto grp_result = utils::exec_safe({"usermod", "-aG", main_user, username});
+    if (grp_result.exit_code == 0) {
       fixes++;
-      utils::get_logger()->info(
-          "Added ai-user '{}' to supplementary group '{}'", username,
-          group_name);
     } else {
-      std::cerr << "WARNING: failed to add ai-user to '" << group_name
-                << "' group: " << supp_result.stderr_output << std::endl;
+      utils::get_logger()->warn("Failed to add {} to {} group: {}", username,
+                                main_user, grp_result.stderr_output);
     }
-  }
 
-  ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
-  ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
-
-  // Check if authorized_keys exists AND contains current user's public key
-  fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
-  fs::path key_pub = fs::path(ctx.config.ssh.key_path.string() + ".pub");
-  bool need_ssh_fix = false;
-
-  // Use error_code version to avoid exception on permission denied
-  std::error_code ec;
-  if (!fs::exists(auth_keys, ec)) {
-    // Permission error means we can't check - assume need fix (root can access)
-    if (ec.value() == EACCES || ec.value() == EPERM) {
-      utils::get_logger()->debug(
-          "Cannot check {} (permission denied), assuming need fix",
-          auth_keys.string());
+    // Add main_user to ai_user's group for file access
+    auto grp_result2 =
+        utils::exec_safe({"usermod", "-aG", username, main_user});
+    if (grp_result2.exit_code == 0) {
+      fixes++;
+      if (ctx.verbose) {
+        std::cout << "newgrp=" << username << std::endl;
+      }
+    } else {
+      utils::get_logger()->warn("Failed to add {} to {} group: {}", main_user,
+                                username, grp_result2.stderr_output);
     }
-    need_ssh_fix = true;
-    utils::get_logger()->info("authorized_keys missing for {}", username);
-  } else {
-    // Check if authorized_keys contains the key_path's public key
-    bool key_found = false;
-    if (fs::exists(key_pub, ec) && !ec) {
-      try {
-        std::ifstream pub_file(key_pub);
-        std::string pub_key_line;
-        if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
-          // Extract the base64 key body (second field) for exact matching
-          auto first_space = pub_key_line.find(' ');
-          auto second_space = (first_space != std::string::npos)
-                                  ? pub_key_line.find(' ', first_space + 1)
-                                  : std::string::npos;
-          std::string key_body =
-              (first_space != std::string::npos &&
-               second_space != std::string::npos)
-                  ? pub_key_line.substr(first_space + 1,
-                                        second_space - first_space - 1)
-                  : std::string();
-          if (!key_body.empty()) {
-            std::ifstream auth_file(auth_keys);
-            std::string auth_line;
-            while (std::getline(auth_file, auth_line)) {
-              if (auth_line.find(key_body) != std::string::npos) {
-                key_found = true;
+
+    // Supplementary groups from [ai-user] config
+    // Security rules:
+    //   1. ai-mirror group is ALWAYS rejected (ai-user must never be in
+    //   ai-mirror)
+    //   2. If main_user is not a member of the requested group, reject (no
+    //   privilege escalation)
+    //   3. If the group does not exist on the system, warn and skip
+    for (const auto &group_name : ctx.config.ai_user.groups) {
+      // Rule 1: Never allow ai-mirror group
+      if (group_name == "ai-mirror") {
+        std::cerr << "SECURITY: refusing to add ai-user to 'ai-mirror' group"
+                  << std::endl;
+        continue;
+      }
+
+      // Check group exists
+      struct group *grp = getgrnam(group_name.c_str());
+      if (!grp) {
+        std::cerr << "WARNING: group '" << group_name
+                  << "' does not exist, skipping" << std::endl;
+        continue;
+      }
+
+      // Rule 2: main_user must be a member of the group
+      struct passwd *main_pw = getpwnam(main_user.c_str());
+      if (!main_pw) {
+        std::cerr << "WARNING: cannot resolve main user '" << main_user
+                  << "' for group check" << std::endl;
+        continue;
+      }
+
+      bool main_in_group = false;
+      // Check primary group
+      if (main_pw->pw_gid == grp->gr_gid) {
+        main_in_group = true;
+      }
+      // Check supplementary groups
+      if (!main_in_group) {
+        int ngroups = 0;
+        getgrouplist(main_user.c_str(), main_pw->pw_gid, nullptr, &ngroups);
+        if (ngroups > 0) {
+          std::vector<gid_t> groups(ngroups);
+          if (getgrouplist(main_user.c_str(), main_pw->pw_gid, groups.data(),
+                           &ngroups) >= 0) {
+            for (int i = 0; i < ngroups; ++i) {
+              if (groups[i] == grp->gr_gid) {
+                main_in_group = true;
                 break;
               }
             }
           }
         }
-      } catch (const std::exception &e) {
-        utils::get_logger()->warn("Cannot read SSH keys: {}", e.what());
+      }
+
+      if (!main_in_group) {
+        std::cerr << "SECURITY: refusing to add ai-user to '" << group_name
+                  << "' group (main user '" << main_user << "' is not a member)"
+                  << std::endl;
+        continue;
+      }
+
+      // Check if ai-user is already in the group
+      bool ai_in_group = false;
+      struct passwd *ai_pw = getpwnam(username.c_str());
+      if (ai_pw) {
+        int ai_ngroups = 0;
+        getgrouplist(username.c_str(), ai_pw->pw_gid, nullptr, &ai_ngroups);
+        if (ai_ngroups > 0) {
+          std::vector<gid_t> ai_groups(ai_ngroups);
+          if (getgrouplist(username.c_str(), ai_pw->pw_gid, ai_groups.data(),
+                           &ai_ngroups) >= 0) {
+            for (int i = 0; i < ai_ngroups; ++i) {
+              if (ai_groups[i] == grp->gr_gid) {
+                ai_in_group = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (ai_in_group) {
+        utils::get_logger()->info("ai-user '{}' already in group '{}'",
+                                  username, group_name);
+        continue;
+      }
+
+      auto supp_result =
+          utils::exec_safe({"usermod", "-aG", group_name, username});
+      if (supp_result.exit_code == 0) {
+        fixes++;
+        utils::get_logger()->info(
+            "Added ai-user '{}' to supplementary group '{}'", username,
+            group_name);
+      } else {
+        std::cerr << "WARNING: failed to add ai-user to '" << group_name
+                  << "' group: " << supp_result.stderr_output << std::endl;
       }
     }
-    if (!key_found) {
+
+    ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
+    ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
+
+    // Check if authorized_keys exists AND contains current user's public key
+    fs::path auth_keys = fs::path(home_dir) / ".ssh" / "authorized_keys";
+    fs::path key_pub = fs::path(ctx.config.ssh.key_path.string() + ".pub");
+    bool need_ssh_fix = false;
+
+    // Use error_code version to avoid exception on permission denied
+    std::error_code ec;
+    if (!fs::exists(auth_keys, ec)) {
+      // Permission error means we can't check - assume need fix (root can
+      // access)
+      if (ec.value() == EACCES || ec.value() == EPERM) {
+        utils::get_logger()->debug(
+            "Cannot check {} (permission denied), assuming need fix",
+            auth_keys.string());
+      }
       need_ssh_fix = true;
-      utils::get_logger()->info(
-          "authorized_keys exists but missing {}'s key, re-authorizing",
-          main_user);
-    }
-  }
-
-  if (need_ssh_fix) {
-    utils::get_logger()->info("Fixing SSH: setup_passwordless for {}",
-                              username);
-    if (ctx.ssh_mgr->setup_passwordless(main_user, username)) {
-      fixes++;
+      utils::get_logger()->info("authorized_keys missing for {}", username);
     } else {
-      utils::get_logger()->warn("Failed to fix SSH for {}", username);
+      // Check if authorized_keys contains the key_path's public key
+      bool key_found = false;
+      if (fs::exists(key_pub, ec) && !ec) {
+        try {
+          std::ifstream pub_file(key_pub);
+          std::string pub_key_line;
+          if (std::getline(pub_file, pub_key_line) && !pub_key_line.empty()) {
+            // Extract the base64 key body (second field) for exact matching
+            auto first_space = pub_key_line.find(' ');
+            auto second_space = (first_space != std::string::npos)
+                                    ? pub_key_line.find(' ', first_space + 1)
+                                    : std::string::npos;
+            std::string key_body =
+                (first_space != std::string::npos &&
+                 second_space != std::string::npos)
+                    ? pub_key_line.substr(first_space + 1,
+                                          second_space - first_space - 1)
+                    : std::string();
+            if (!key_body.empty()) {
+              std::ifstream auth_file(auth_keys);
+              std::string auth_line;
+              while (std::getline(auth_file, auth_line)) {
+                if (auth_line.find(key_body) != std::string::npos) {
+                  key_found = true;
+                  break;
+                }
+              }
+            }
+          }
+        } catch (const std::exception &e) {
+          utils::get_logger()->warn("Cannot read SSH keys: {}", e.what());
+        }
+      }
+      if (!key_found) {
+        need_ssh_fix = true;
+        utils::get_logger()->info(
+            "authorized_keys exists but missing {}'s key, re-authorizing",
+            main_user);
+      }
     }
-  }
 
-  if (!ctx.config.ssh.ai_default_key.empty()) {
-    ctx.ssh_mgr->setup_default_key_from_file(username,
-                                             ctx.config.ssh.ai_default_key);
-  }
+    if (need_ssh_fix) {
+      utils::get_logger()->info("Fixing SSH: setup_passwordless for {}",
+                                username);
+      if (ctx.ssh_mgr->setup_passwordless(main_user, username)) {
+        fixes++;
+      } else {
+        utils::get_logger()->warn("Failed to fix SSH for {}", username);
+      }
+    }
 
-  // Sync known_hosts from main_user so AI user can SSH to known hosts
-  ctx.ssh_mgr->sync_known_hosts(main_user, username);
+    if (!ctx.config.ssh.ai_default_key.empty()) {
+      ctx.ssh_mgr->setup_default_key_from_file(username,
+                                               ctx.config.ssh.ai_default_key);
+    }
+
+    // Sync known_hosts from main_user so AI user can SSH to known hosts
+    ctx.ssh_mgr->sync_known_hosts(main_user, username);
+  } // end if (!mount_only)
 
   ctx.graft->invalidate_cache();
   auto existing = ctx.graft->list_mounts(username);
@@ -717,138 +730,144 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
 
   // Third pass: recursively fix ownership of ALL entries in home_dir
   // Skip .am_status (root:root by design) and bind mount targets (read-only)
-  {
-    fs::path am_status_path = fs::path(home_dir) / ".am_status";
+  // [P1-performance] Skip in mount_only mode — ownership is not a mount
+  // concern.
+  if (!mount_only) {
+    {
+      fs::path am_status_path = fs::path(home_dir) / ".am_status";
 
-    // Get device number of home_dir for mount boundary detection
-    struct stat home_st;
-    dev_t home_dev = 0;
-    if (stat(home_dir.c_str(), &home_st) == 0) {
-      home_dev = home_st.st_dev;
+      // Get device number of home_dir for mount boundary detection
+      struct stat home_st;
+      dev_t home_dev = 0;
+      if (stat(home_dir.c_str(), &home_st) == 0) {
+        home_dev = home_st.st_dev;
+      }
+
+      // Recursive helper: chown all entries under a directory, skipping mount
+      // points Returns number of fixes applied
+      std::function<int(const fs::path &, int)> recursive_chown =
+          [&](const fs::path &dir_path, int depth) -> int {
+        constexpr int max_depth = 3;
+        if (depth > max_depth) {
+          utils::get_logger()->debug("Third pass: skipping depth {} > {} at {}",
+                                     depth, max_depth, dir_path.string());
+          return 0;
+        }
+        int local_fixes = 0;
+        std::error_code iter_ec;
+        for (const auto &entry : fs::directory_iterator(dir_path, iter_ec)) {
+          if (iter_ec)
+            break;
+          auto ep = entry.path();
+
+          // Skip .am_status
+          if (ep == am_status_path)
+            continue;
+
+          struct stat st;
+          if (lstat(ep.c_str(), &st) != 0)
+            continue;
+
+          // Skip symlinks — only fix symlink ownership, don't recurse
+          if (S_ISLNK(st.st_mode)) {
+            if ((st.st_uid != state.uid || st.st_gid != state.gid)) {
+              if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
+                utils::get_logger()->info(
+                    "Third pass: fixed symlink {} -> {}:{}", ep.string(),
+                    state.uid, state.gid);
+                local_fixes++;
+              } else {
+                // Expected for read-only bind mounts or permission issues
+                utils::get_logger()->debug(
+                    "Third pass: failed to fix symlink {}", ep.string());
+              }
+            }
+            continue;
+          }
+
+          // Check if this is a mount point by comparing device numbers
+          // Bind mounts on same filesystem have same dev, so also check
+          // is_mounted()
+          bool is_mount_point = false;
+          if (S_ISDIR(st.st_mode)) {
+            // Device number changed = crossed a mount boundary
+            if (home_dev != 0 && st.st_dev != home_dev) {
+              is_mount_point = true;
+            }
+            // Also check via mount table (catches same-filesystem bind mounts)
+            if (!is_mount_point && ctx.graft->is_mounted_live(ep)) {
+              is_mount_point = true;
+            }
+          } else if (S_ISREG(st.st_mode)) {
+            // Regular files can also be bind-mounted (e.g. dotfile mounts on
+            // beegfs)
+            if (ctx.graft->is_mounted_live(ep)) {
+              is_mount_point = true;
+            }
+          }
+
+          if (is_mount_point) {
+            // Don't chown or recurse into mount points (read-only bind mounts)
+            continue;
+          }
+
+          bool needs_chown = (st.st_uid != state.uid || st.st_gid != state.gid);
+          if (needs_chown) {
+            int fd = open(ep.c_str(),
+                          O_RDONLY | (S_ISDIR(st.st_mode) ? O_DIRECTORY : 0) |
+                              O_NOFOLLOW);
+            if (fd >= 0) {
+              if (fchown(fd, state.uid, state.gid) == 0) {
+                utils::get_logger()->info("Third pass: fixed {} -> {}:{}",
+                                          ep.string(), state.uid, state.gid);
+                local_fixes++;
+              } else {
+                // Expected for read-only bind mounts; these are caught by mount
+                // detection above
+                utils::get_logger()->debug("Third pass: failed to fix {}",
+                                           ep.string());
+              }
+              close(fd);
+            } else if (errno == ELOOP) {
+              if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
+                utils::get_logger()->info(
+                    "Third pass: fixed symlink {} -> {}:{}", ep.string(),
+                    state.uid, state.gid);
+                local_fixes++;
+              }
+            }
+          }
+
+          // Recurse into sub-directories (non-mount, non-symlink)
+          if (S_ISDIR(st.st_mode)) {
+            // .git directories need full recursive chown regardless of depth
+            // limit because git internals (objects/pack/, refs/heads/feature/)
+            // can be 4-5+ levels deep, and incorrect ownership causes
+            // Permission denied on git ops.
+            if (ep.filename() == ".git") {
+              if (safe_chown_path(ep, username)) {
+                utils::get_logger()->info("Third pass: deep chown .git -> {}",
+                                          username);
+                local_fixes++;
+              } else {
+                // error: chown .git failed, git operations may fail with
+                // Permission denied downgrade to warn because ai-user can still
+                // function, only git ops affected
+                utils::get_logger()->warn(
+                    "Third pass: deep chown .git failed (git ops may fail): {}",
+                    ep.string());
+              }
+            } else {
+              local_fixes += recursive_chown(ep, depth + 1);
+            }
+          }
+        }
+        return local_fixes;
+      };
+
+      fixes += recursive_chown(fs::path(home_dir), 0);
     }
-
-    // Recursive helper: chown all entries under a directory, skipping mount
-    // points Returns number of fixes applied
-    std::function<int(const fs::path &, int)> recursive_chown =
-        [&](const fs::path &dir_path, int depth) -> int {
-      constexpr int max_depth = 3;
-      if (depth > max_depth) {
-        utils::get_logger()->debug("Third pass: skipping depth {} > {} at {}",
-                                   depth, max_depth, dir_path.string());
-        return 0;
-      }
-      int local_fixes = 0;
-      std::error_code iter_ec;
-      for (const auto &entry : fs::directory_iterator(dir_path, iter_ec)) {
-        if (iter_ec)
-          break;
-        auto ep = entry.path();
-
-        // Skip .am_status
-        if (ep == am_status_path)
-          continue;
-
-        struct stat st;
-        if (lstat(ep.c_str(), &st) != 0)
-          continue;
-
-        // Skip symlinks — only fix symlink ownership, don't recurse
-        if (S_ISLNK(st.st_mode)) {
-          if ((st.st_uid != state.uid || st.st_gid != state.gid)) {
-            if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
-              utils::get_logger()->info("Third pass: fixed symlink {} -> {}:{}",
-                                        ep.string(), state.uid, state.gid);
-              local_fixes++;
-            } else {
-              // Expected for read-only bind mounts or permission issues
-              utils::get_logger()->debug("Third pass: failed to fix symlink {}",
-                                         ep.string());
-            }
-          }
-          continue;
-        }
-
-        // Check if this is a mount point by comparing device numbers
-        // Bind mounts on same filesystem have same dev, so also check
-        // is_mounted()
-        bool is_mount_point = false;
-        if (S_ISDIR(st.st_mode)) {
-          // Device number changed = crossed a mount boundary
-          if (home_dev != 0 && st.st_dev != home_dev) {
-            is_mount_point = true;
-          }
-          // Also check via mount table (catches same-filesystem bind mounts)
-          if (!is_mount_point && ctx.graft->is_mounted_live(ep)) {
-            is_mount_point = true;
-          }
-        } else if (S_ISREG(st.st_mode)) {
-          // Regular files can also be bind-mounted (e.g. dotfile mounts on
-          // beegfs)
-          if (ctx.graft->is_mounted_live(ep)) {
-            is_mount_point = true;
-          }
-        }
-
-        if (is_mount_point) {
-          // Don't chown or recurse into mount points (read-only bind mounts)
-          continue;
-        }
-
-        bool needs_chown = (st.st_uid != state.uid || st.st_gid != state.gid);
-        if (needs_chown) {
-          int fd = open(ep.c_str(),
-                        O_RDONLY | (S_ISDIR(st.st_mode) ? O_DIRECTORY : 0) |
-                            O_NOFOLLOW);
-          if (fd >= 0) {
-            if (fchown(fd, state.uid, state.gid) == 0) {
-              utils::get_logger()->info("Third pass: fixed {} -> {}:{}",
-                                        ep.string(), state.uid, state.gid);
-              local_fixes++;
-            } else {
-              // Expected for read-only bind mounts; these are caught by mount
-              // detection above
-              utils::get_logger()->debug("Third pass: failed to fix {}",
-                                         ep.string());
-            }
-            close(fd);
-          } else if (errno == ELOOP) {
-            if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
-              utils::get_logger()->info("Third pass: fixed symlink {} -> {}:{}",
-                                        ep.string(), state.uid, state.gid);
-              local_fixes++;
-            }
-          }
-        }
-
-        // Recurse into sub-directories (non-mount, non-symlink)
-        if (S_ISDIR(st.st_mode)) {
-          // .git directories need full recursive chown regardless of depth
-          // limit because git internals (objects/pack/, refs/heads/feature/)
-          // can be 4-5+ levels deep, and incorrect ownership causes Permission
-          // denied on git ops.
-          if (ep.filename() == ".git") {
-            if (safe_chown_path(ep, username)) {
-              utils::get_logger()->info("Third pass: deep chown .git -> {}",
-                                        username);
-              local_fixes++;
-            } else {
-              // error: chown .git failed, git operations may fail with
-              // Permission denied downgrade to warn because ai-user can still
-              // function, only git ops affected
-              utils::get_logger()->warn(
-                  "Third pass: deep chown .git failed (git ops may fail): {}",
-                  ep.string());
-            }
-          } else {
-            local_fixes += recursive_chown(ep, depth + 1);
-          }
-        }
-      }
-      return local_fixes;
-    };
-
-    fixes += recursive_chown(fs::path(home_dir), 0);
-  }
+  } // end if (!mount_only) — skip third pass recursive chown
 
   if (mount_failures > 0) {
     utils::get_logger()->warn("do_configure completed with {} mount failure(s)",
@@ -860,114 +879,120 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                               proj.string());
   }
 
-  // Fix SSH StrictModes compatibility: sshd requires the user's home directory
-  // and ~/.ssh to NOT be group-writable. Since home_dir == proj and we just
-  // set it to 775 (g+rwx) via grant_write_access, we must:
-  //   1. Remove g+w from home_dir to satisfy sshd StrictModes
-  //   2. Ensure .ssh directory is 700
-  //   3. Ensure .ssh/authorized_keys is 600
-  // The main user can still access files via group membership + setgid on
-  // subdirectories created after newgrp.
-  {
-    std::error_code ec;
-    auto hp = fs::status(home_dir, ec);
-    if (!ec && (hp.permissions() & fs::perms::set_gid) != fs::perms::none) {
-      fs::permissions(home_dir, hp.permissions() & ~fs::perms::set_gid, ec);
-      if (!ec) {
-        utils::get_logger()->info("Cleared setgid on home_dir {}", home_dir);
+  // [P1-performance] Skip SSH StrictModes in mount_only mode.
+  if (!mount_only) {
+    // Fix SSH StrictModes compatibility: sshd requires the user's home
+    // directory and ~/.ssh to NOT be group-writable. Since home_dir == proj and
+    // we just set it to 775 (g+rwx) via grant_write_access, we must:
+    //   1. Remove g+w from home_dir to satisfy sshd StrictModes
+    //   2. Ensure .ssh directory is 700
+    //   3. Ensure .ssh/authorized_keys is 600
+    // The main user can still access files via group membership + setgid on
+    // subdirectories created after newgrp.
+    {
+      std::error_code ec;
+      auto hp = fs::status(home_dir, ec);
+      if (!ec && (hp.permissions() & fs::perms::set_gid) != fs::perms::none) {
+        fs::permissions(home_dir, hp.permissions() & ~fs::perms::set_gid, ec);
+        if (!ec) {
+          utils::get_logger()->info("Cleared setgid on home_dir {}", home_dir);
+        }
       }
     }
-  }
 
-  {
-    // Remove g+w from home_dir for sshd StrictModes compatibility
-    std::error_code ec;
-    auto hp = fs::status(home_dir, ec);
-    if (!ec && (hp.permissions() & fs::perms::group_write) != fs::perms::none) {
-      fs::permissions(home_dir, hp.permissions() & ~fs::perms::group_write, ec);
-      if (!ec) {
-        utils::get_logger()->info(
-            "Removed g+w from home_dir {} (sshd StrictModes compatibility)",
-            home_dir);
-        fixes++;
+    {
+      // Remove g+w from home_dir for sshd StrictModes compatibility
+      std::error_code ec;
+      auto hp = fs::status(home_dir, ec);
+      if (!ec &&
+          (hp.permissions() & fs::perms::group_write) != fs::perms::none) {
+        fs::permissions(home_dir, hp.permissions() & ~fs::perms::group_write,
+                        ec);
+        if (!ec) {
+          utils::get_logger()->info(
+              "Removed g+w from home_dir {} (sshd StrictModes compatibility)",
+              home_dir);
+          fixes++;
+        }
       }
     }
-  }
 
-  {
-    // Ensure .ssh is 700 and authorized_keys is 600, owned by ai-user
-    // (sshd StrictModes requires correct ownership)
-    fs::path ssh_dir = fs::path(home_dir) / ".ssh";
-    fs::path auth_keys = ssh_dir / "authorized_keys";
-    std::error_code ec;
-    struct passwd *ai_pw = getpwnam(username.c_str());
+    {
+      // Ensure .ssh is 700 and authorized_keys is 600, owned by ai-user
+      // (sshd StrictModes requires correct ownership)
+      fs::path ssh_dir = fs::path(home_dir) / ".ssh";
+      fs::path auth_keys = ssh_dir / "authorized_keys";
+      std::error_code ec;
+      struct passwd *ai_pw = getpwnam(username.c_str());
 
-    if (fs::exists(ssh_dir, ec) && !ec) {
-      // Fix ownership
-      if (ai_pw) {
+      if (fs::exists(ssh_dir, ec) && !ec) {
+        // Fix ownership
+        if (ai_pw) {
+          int ssh_fd =
+              open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+          if (ssh_fd >= 0) {
+            struct stat st;
+            if (fstat(ssh_fd, &st) == 0 &&
+                (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
+              if (fchown(ssh_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
+                utils::get_logger()->info(
+                    "Fixed .ssh ownership to {} (was uid={})", username,
+                    st.st_uid);
+                fixes++;
+              }
+            }
+            close(ssh_fd);
+          }
+        }
+        // Fix permissions
         int ssh_fd = open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
         if (ssh_fd >= 0) {
-          struct stat st;
-          if (fstat(ssh_fd, &st) == 0 &&
-              (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
-            if (fchown(ssh_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
-              utils::get_logger()->info(
-                  "Fixed .ssh ownership to {} (was uid={})", username,
-                  st.st_uid);
-              fixes++;
-            }
+          if (fchmod(ssh_fd, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
+            utils::get_logger()->warn("Failed to chmod .ssh to 700: {}",
+                                      strerror(errno));
+          } else {
+            utils::get_logger()->info(
+                "Set .ssh to 700 for StrictModes compatibility");
+            fixes++;
           }
           close(ssh_fd);
         }
       }
-      // Fix permissions
-      int ssh_fd = open(ssh_dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-      if (ssh_fd >= 0) {
-        if (fchmod(ssh_fd, S_IRUSR | S_IWUSR | S_IXUSR) != 0) {
-          utils::get_logger()->warn("Failed to chmod .ssh to 700: {}",
-                                    strerror(errno));
-        } else {
-          utils::get_logger()->info(
-              "Set .ssh to 700 for StrictModes compatibility");
-          fixes++;
-        }
-        close(ssh_fd);
-      }
-    }
 
-    if (fs::exists(auth_keys, ec) && !ec) {
-      // Fix ownership
-      if (ai_pw) {
+      if (fs::exists(auth_keys, ec) && !ec) {
+        // Fix ownership
+        if (ai_pw) {
+          int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
+          if (ak_fd >= 0) {
+            struct stat st;
+            if (fstat(ak_fd, &st) == 0 &&
+                (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
+              if (fchown(ak_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
+                utils::get_logger()->info(
+                    "Fixed authorized_keys ownership to {} (was uid={})",
+                    username, st.st_uid);
+                fixes++;
+              }
+            }
+            close(ak_fd);
+          }
+        }
+        // Fix permissions
         int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
         if (ak_fd >= 0) {
-          struct stat st;
-          if (fstat(ak_fd, &st) == 0 &&
-              (st.st_uid != ai_pw->pw_uid || st.st_gid != ai_pw->pw_gid)) {
-            if (fchown(ak_fd, ai_pw->pw_uid, ai_pw->pw_gid) == 0) {
-              utils::get_logger()->info(
-                  "Fixed authorized_keys ownership to {} (was uid={})",
-                  username, st.st_uid);
-              fixes++;
-            }
+          if (fchmod(ak_fd, S_IRUSR | S_IWUSR) != 0) {
+            utils::get_logger()->warn(
+                "Failed to chmod authorized_keys to 600: {}", strerror(errno));
+          } else {
+            utils::get_logger()->info(
+                "Set authorized_keys to 600 for StrictModes compatibility");
+            fixes++;
           }
           close(ak_fd);
         }
       }
-      // Fix permissions
-      int ak_fd = open(auth_keys.c_str(), O_RDONLY | O_NOFOLLOW);
-      if (ak_fd >= 0) {
-        if (fchmod(ak_fd, S_IRUSR | S_IWUSR) != 0) {
-          utils::get_logger()->warn(
-              "Failed to chmod authorized_keys to 600: {}", strerror(errno));
-        } else {
-          utils::get_logger()->info(
-              "Set authorized_keys to 600 for StrictModes compatibility");
-          fixes++;
-        }
-        close(ak_fd);
-      }
     }
-  }
+  } // end if (!mount_only) — skip SSH StrictModes
 
   // Persist mount info to .am_status so mount_watch can read it
   if (!core::UserManager::update_state_mounts(username, home_dir,
@@ -2848,58 +2873,33 @@ int cmd_auto_fix_all(bool verbose) {
     return 1;
   }
 
-  // Step 3: Fix each project via cmd_update
+  // Step 3: Fix each project's mounts via mount-only do_configure
+  // [P1-performance] Use mount_only=true to skip SSH/groups/permissions setup.
+  // auto-fix-all's sole job is fixing mounts — not reconfiguring the project.
   std::cout << "Fixing " << projects_to_fix.size()
-            << " project(s):" << std::endl;
+            << " project(s) (mounts only):" << std::endl;
   int failures = 0;
   for (const auto &proj : projects_to_fix) {
-    std::cout << "\n=== Fixing: " << proj.string() << " ===" << std::endl;
-    if (cmd_update(proj.string(), verbose) != 0) {
-      std::cerr << "Failed to fix: " << proj.string() << std::endl;
+    std::cout << "\n=== Fixing mounts for: " << proj.string()
+              << " ===" << std::endl;
+    auto state = core::UserManager::read_state(proj);
+    if (!state) {
+      std::cerr << "No .am_status found in: " << proj.string() << std::endl;
+      failures++;
+      continue;
+    }
+    std::string main_user = state->main_user.empty()
+                                ? utils::get_effective_username()
+                                : state->main_user;
+    if (do_configure(ctx, *state, proj, main_user, true) != 0) {
+      std::cerr << "Failed to fix mounts for: " << proj.string() << std::endl;
       failures++;
     } else {
-      std::cout << "Fixed: " << proj.string() << std::endl;
+      std::cout << "Fixed mounts for: " << proj.string() << std::endl;
     }
   }
 
-  // Step 4: Fix AM home permissions for all existing ai-users
-  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x), NO
-  // g+w Main user operates via SSH, not via shared group write permission
-  {
-    auto all_users = ctx.user_mgr->list_ai_users();
-    std::string main_user = utils::get_effective_username();
-    std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
-    int perm_fixes = 0;
-
-    for (const auto &u : all_users) {
-      if (u.username.size() <= expected_prefix.size() ||
-          u.username.substr(0, expected_prefix.size()) != expected_prefix) {
-        continue;
-      }
-      if (u.home_dir.empty())
-        continue;
-
-      struct stat st;
-      if (stat(u.home_dir.c_str(), &st) == 0) {
-        if ((st.st_mode & S_IWGRP) != 0) { // HAS g+w → violation
-          std::cout << "  [PERM] " << u.home_dir
-                    << " has g+w (violates root.md §2.3, fixing...)"
-                    << std::endl;
-          core::UserManager::fix_home_dir_permissions(fs::path(u.home_dir),
-                                                      main_user);
-          perm_fixes++;
-        }
-      }
-    }
-
-    if (perm_fixes > 0) {
-      std::cout << "Fixed " << perm_fixes
-                << " AM home(s) to 0755 (removed g+w per root.md §2.3)."
-                << std::endl;
-    }
-  }
-
-  // Step 5: Re-check health after fixes
+  // Step 4: Re-check health after fixes
   std::cout << "\n=== Re-checking health ===" << std::endl;
   graft.invalidate_cache();
   auto remaining = graft.health_check();

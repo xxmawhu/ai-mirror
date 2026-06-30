@@ -358,8 +358,16 @@ int main(int argc, char *argv[]) {
           std::istringstream iss(line);
           int id, parent_id;
           std::string dev, root, target, options, sep, fstype, source;
-          if (!(iss >> id >> parent_id >> dev >> root >> target >> options >>
-                sep >> fstype >> source))
+          // Read fixed-position fields up to options (field 6)
+          if (!(iss >> id >> parent_id >> dev >> root >> target >> options))
+            continue;
+          // Skip optional fields (e.g., shared:1, master:5) until separator '-'
+          while (iss >> sep && sep != "-") {
+          }
+          if (iss.fail())
+            continue;
+          // Read fstype and mount source after '-'
+          if (!(iss >> fstype >> source))
             continue;
           parent_targets[id] = target;
           if (root != "/" && target.find(home_dir.string()) == 0 &&

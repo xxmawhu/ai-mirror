@@ -39,6 +39,7 @@ build/
 build-release/
 build-test/
 build-test2/
+build-docker-test/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

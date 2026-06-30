@@ -1,5 +1,4 @@
-build-release/*/
-build-release/CMakeFiles/
+build-release/
 build-test/*
 !build-test/bin/
 build/*

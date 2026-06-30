@@ -827,21 +827,71 @@ bool UserManager::update_state_mounts(const std::string &username,
     return false;
   }
 
-  // 2. Build target→existing mount map from current .am_status
-  //    Virtual devices (BeeGFS) have no real device path in /proc/mounts —
-  //    the device column shows "beegfs_nodev" instead of the actual source.
-  //    We preserve the original source and source_stat from the previous
-  //    .am_status so that am update doesn't lose the real path information.
-  std::unordered_map<std::string, const MountInfo *> existing_by_target;
-  for (const auto &em : info_opt->mounts) {
-    existing_by_target[em.target] = &em;
-  }
-
-  // 3. Get current mount list via Graft
+  // 2. Get current mount list via Graft (reads /proc/mounts → device + fstype)
   Graft graft(prefix);
   auto mount_entries = graft.list_mounts(username);
 
-  // 4. Convert MountEntry → MountInfo with source stat
+  // 3. Read /proc/self/mountinfo to get the REAL source path.
+  //    /proc/mounts column 1 (device) shows "beegfs_nodev" for all BeeGFS
+  //    mounts — this is the FUSE device name, not the actual source path.
+  //    /proc/self/mountinfo field 4 (root) contains the ORIGINAL source
+  //    path of a bind mount, relative to the filesystem root:
+  //      beegfs_nodev /target/path/.bashrc beegfs ...
+  //      mountinfo field 4 (root) = /usr/maxx/.bashrc  ← REAL source!
+  //    Full source = filesystem_root_mount + root_field
+  //    = /mnt/beegfs_data + /usr/maxx/.bashrc
+  //    = /mnt/beegfs_data/usr/maxx/.bashrc
+  //
+  //    We parse mountinfo once, walk parent IDs to find the filesystem root
+  //    mount point, and construct the absolute source path for each target.
+  std::unordered_map<std::string, std::string>
+      mountinfo_source; // target→source
+  {
+    std::ifstream mi("/proc/self/mountinfo");
+    if (mi.is_open()) {
+      // Parse all mountinfo entries into lookup tables
+      struct MiEntry {
+        int id, parent;
+        std::string root, mount, fstype;
+      };
+      std::unordered_map<int, MiEntry> entries;
+      std::string line;
+      while (std::getline(mi, line)) {
+        std::istringstream iss(line);
+        MiEntry e;
+        std::string dummy, src;
+        iss >> e.id >> e.parent >> dummy >> e.root >> e.mount;
+        while (iss >> dummy && dummy != "-") {
+        }
+        iss >> e.fstype >> src;
+        entries[e.id] = std::move(e);
+      }
+      // For each entry, find the filesystem root (root="/") by walking parents
+      for (auto &[id, e] : entries) {
+        if (e.root == "/")
+          continue; // skip root mounts themselves
+        // Walk up to find the root mount (same fstype)
+        std::string fs_root;
+        int pid = e.parent;
+        for (int i = 0; i < 10 && pid > 0; i++) {
+          auto pit = entries.find(pid);
+          if (pit == entries.end())
+            break;
+          if (pit->second.root == "/") {
+            fs_root = pit->second.mount;
+            break;
+          }
+          pid = pit->second.parent;
+        }
+        if (!fs_root.empty() && !e.root.empty() && e.root[0] == '/') {
+          // Construct the real source path
+          mountinfo_source[e.mount] = fs_root + e.root;
+        }
+      }
+    }
+  }
+
+  // 4. Convert MountEntry → MountInfo with real source and stat
   std::vector<MountInfo> mounts;
   for (const auto &me : mount_entries) {
     MountInfo mi;
@@ -850,35 +900,16 @@ bool UserManager::update_state_mounts(const std::string &username,
     mi.fstype = me.fstype;
     mi.read_only = me.read_only;
 
-    // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
-    // device backing — the device column (/proc/mounts col 1) shows a
-    // pseudo-device name like "beegfs_nodev" instead of the real path.
-    // We preserve the original source + source_stat from .am_status if
-    // available, because /proc/mounts can't tell us the real source path.
-    // When reading from /proc/self/mountinfo (via Graft::parse_mount_table),
-    // BeeGFS bind mounts now have a real source path (e.g.,
-    // "/mnt/beegfs_data/usr/maxx/.local/lib") instead of the virtual device
-    // name "beegfs_nodev".  Only enter the virtual fallback if the source
-    // truly isn't a real path — mountinfo provides absolute paths starting
-    // with '/'.
-    bool mi_source_virtual = is_virtual_source(mi.source, mi.fstype);
-    if (mi_source_virtual && (mi.source.empty() || mi.source[0] != '/')) {
-      auto it = existing_by_target.find(mi.target);
-      if (it != existing_by_target.end() && !it->second->source.empty()) {
-        // Preserve the original source path and stat from .am_status
-        mi.source = it->second->source;
-        mi.source_stat = it->second->source_stat;
-        // Clear fstype so make_mounts_json uses source heuristic and
-        // includes source_stat in the output (virtual fstype would skip it)
-        mi.fstype.clear();
-      } else if (it != existing_by_target.end() && it->second->source.empty()) {
-        // Source was cleared by a previous buggy version.
-        // Use the target path as source (same BeeGFS filesystem),
-        // and stat the target to get real inode/dev/size data.
-        mi.source = mi.target;
-        mi.fstype.clear(); // make_mounts_json will include source_stat
+    // For virtual filesystems (BeeGFS), /proc/mounts only shows the FUSE
+    // device name.  Get the REAL source path from /proc/self/mountinfo
+    // field 4 (root), then stat() it for real inode/dev/size.
+    if (is_virtual_source(mi.source, mi.fstype)) {
+      auto sit = mountinfo_source.find(mi.target);
+      if (sit != mountinfo_source.end()) {
+        mi.source = sit->second; // real source path
+        mi.fstype.clear();       // let make_mounts_json include stat
         struct stat st;
-        if (::stat(mi.target.c_str(), &st) == 0) {
+        if (::stat(mi.source.c_str(), &st) == 0) {
           mi.source_stat.ino = st.st_ino;
           mi.source_stat.dev = st.st_dev;
           mi.source_stat.mode = st.st_mode;
@@ -888,7 +919,6 @@ bool UserManager::update_state_mounts(const std::string &username,
           mi.source_stat.mtime = st.st_mtime;
         }
       }
-      // else: new mount with no history — keep source empty (no data)
     } else {
       struct stat st;
       if (::stat(me.source.c_str(), &st) == 0) {

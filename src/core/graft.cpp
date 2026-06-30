@@ -14,6 +14,7 @@
 #include <sstream>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <unordered_map>
 
 namespace ai_mirror::core {
 
@@ -243,9 +244,8 @@ bool Graft::execute_umount(const fs::path &target, bool lazy) {
 
 std::vector<MountEntry> Graft::parse_mount_table() const {
   std::vector<MountEntry> entries;
-  std::ifstream mounts("/proc/mounts");
-  std::string line;
 
+  // Collect AI user home directories
   std::vector<std::string> ai_homes;
   setpwent();
   while (auto *pw = getpwent()) {
@@ -259,20 +259,58 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
   }
   endpwent();
 
+  if (ai_homes.empty())
+    return entries;
+
+  // Read /proc/self/mountinfo which preserves the real source path for bind
+  // mounts on all filesystem types (unlike /proc/mounts which shows virtual
+  // device names like "beegfs_nodev" with no path).
+  //
+  // mountinfo format: id parent_id major:minor root target options - fstype
+  // source super_opts For bind mounts (root != "/"), real source =
+  // parent_mount_target + root_field
+  std::ifstream mi("/proc/self/mountinfo");
+  if (!mi)
+    return entries;
+
+  // First pass: build parent target lookup (mount_id -> target path)
+  std::unordered_map<int, fs::path> parent_targets;
+  // Collect candidate mounts for second pass
+  struct Candidate {
+    int parent_id;
+    std::string root;
+    std::string target;
+    std::string fstype;
+    bool read_only;
+  };
+  std::vector<Candidate> candidates;
   std::set<std::string> seen_targets;
 
-  while (std::getline(mounts, line)) {
+  std::string line;
+  while (std::getline(mi, line)) {
     std::istringstream iss(line);
-    std::string device, mount_point, fs_type, options;
-    iss >> device >> mount_point >> fs_type >> options;
-
-    if (seen_targets.count(mount_point))
+    int id, parent_id;
+    std::string dev, root, target, options, sep, fstype, source;
+    iss >> id >> parent_id >> dev >> root >> target >> options >> sep >>
+        fstype >> source;
+    if (iss.fail())
       continue;
 
+    parent_targets[id] = target;
+
+    // Skip non-bind mounts (root == "/" means full filesystem mount)
+    if (root == "/")
+      continue;
+
+    // Deduplicate by target (keep first occurrence, same as original logic)
+    if (seen_targets.count(target))
+      continue;
+
+    // Check if this mount is under an AI user home directory
     bool is_ai_user_mount = false;
     for (const auto &home : ai_homes) {
-      if (mount_point.find(home) == 0) {
-        std::string rest = mount_point.substr(home.size());
+      if (target.find(home) == 0) {
+        std::string rest = target.substr(home.size());
         if (rest.empty() || rest[0] == '/') {
           is_ai_user_mount = true;
           break;
@@ -281,15 +319,31 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
     }
 
     if (is_ai_user_mount) {
-      MountEntry entry;
-      entry.source = device;
-      entry.target = mount_point;
-      entry.fstype = fs_type;
-      entry.read_only = options.find("ro") != std::string::npos;
-      entry.active = true;
-      entries.push_back(entry);
-      seen_targets.insert(mount_point);
+      candidates.push_back({parent_id, root, target, fstype,
+                            options.find("ro") != std::string::npos});
+      seen_targets.insert(target);
     }
+  }
+
+  // Second pass: construct MountEntry with properly resolved source path
+  for (const auto &c : candidates) {
+    MountEntry entry;
+    entry.target = c.target;
+    entry.fstype = c.fstype;
+    entry.read_only = c.read_only;
+    entry.active = true;
+
+    // For bind mounts, reconstruct the absolute source path:
+    //   absolute_source = parent_mount_target + root_field
+    auto parent_it = parent_targets.find(c.parent_id);
+    if (parent_it != parent_targets.end() && !c.root.empty()) {
+      entry.source = (parent_it->second / c.root).string();
+    } else {
+      // Fallback: keep root as source (rare edge case)
+      entry.source = c.root;
+    }
+
+    entries.push_back(std::move(entry));
   }
 
   return entries;

@@ -855,7 +855,14 @@ bool UserManager::update_state_mounts(const std::string &username,
     // pseudo-device name like "beegfs_nodev" instead of the real path.
     // We preserve the original source + source_stat from .am_status if
     // available, because /proc/mounts can't tell us the real source path.
-    if (is_virtual_source(mi.source, mi.fstype)) {
+    // When reading from /proc/self/mountinfo (via Graft::parse_mount_table),
+    // BeeGFS bind mounts now have a real source path (e.g.,
+    // "/mnt/beegfs_data/usr/maxx/.local/lib") instead of the virtual device
+    // name "beegfs_nodev".  Only enter the virtual fallback if the source
+    // truly isn't a real path — mountinfo provides absolute paths starting
+    // with '/'.
+    bool mi_source_virtual = is_virtual_source(mi.source, mi.fstype);
+    if (mi_source_virtual && (mi.source.empty() || mi.source[0] != '/')) {
       auto it = existing_by_target.find(mi.target);
       if (it != existing_by_target.end() && !it->second->source.empty()) {
         // Preserve the original source path and stat from .am_status

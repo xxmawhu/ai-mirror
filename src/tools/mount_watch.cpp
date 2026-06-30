@@ -41,6 +41,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -71,29 +72,85 @@ read_expected_mounts(const fs::path &home_dir) {
   return std::move(info->mounts);
 }
 
-/// Read /proc/mounts for mount entries under the given home directory.
-/// This is used for the one-time fill when .am_status has no mounts field yet
-/// (legacy AI users).
+/// Read /proc/self/mountinfo for mount entries under the given home directory.
+/// Unlike /proc/mounts, mountinfo preserves the real source path for bind
+/// mounts even on virtual filesystems like BeeGFS (where /proc/mounts shows
+/// only "beegfs_nodev" with no path).
+///
+/// mountinfo format (space-separated):
+///   id parent_id major:minor root target options... - fstype source super_opts
+///
+/// For bind mounts (root != "/"), the real source path is:
+///   parent_mount_target + root_field
+/// This works for ALL filesystem types:
+///   - ext4:  parent_target("/") + root("/home/x/dir") = "/home/x/dir"  U2713
+///   - beegfs: parent_target("/mnt/b") + root("/usr/x/lib") =
+///   "/mnt/b/usr/x/lib"  U2713
+///   - tmpfs: parent_target("/run") + root("/user/1000") = "/run/user/1000"
+///   U2713
 static std::vector<core::MountEntry>
-read_proc_mounts_for_user(const fs::path &home_dir) {
+read_mountinfo_for_user(const fs::path &home_dir) {
   std::vector<core::MountEntry> entries;
-  std::ifstream mounts("/proc/mounts");
+  std::ifstream mi("/proc/self/mountinfo");
+  if (!mi)
+    return entries;
+
+  // First pass: build map of mount_id U2192 mount_target for parent lookups
+  std::unordered_map<int, fs::path> parent_targets;
+  // Collect bind mounts under home_dir for second pass
+  struct BindMountInfo {
+    int parent_id;
+    fs::path root;
+    fs::path target;
+    std::string fstype;
+    bool read_only;
+  };
+  std::vector<BindMountInfo> bind_mounts;
+
   std::string line;
-  while (std::getline(mounts, line)) {
+  while (std::getline(mi, line)) {
     std::istringstream iss(line);
-    std::string device, mount_point, fs_type, options;
-    iss >> device >> mount_point >> fs_type >> options;
-    if (mount_point.find(home_dir.string()) == 0 &&
-        mount_point.size() > home_dir.string().size()) {
-      core::MountEntry me;
-      me.source = device;
-      me.target = mount_point;
-      me.fstype = fs_type;
-      me.read_only = options.find("ro") != std::string::npos;
-      me.active = true;
-      entries.push_back(std::move(me));
+    int id, parent_id;
+    std::string dev, root, target, options, sep, fstype, source;
+    iss >> id >> parent_id >> dev >> root >> target >> options >> sep >>
+        fstype >> source;
+    if (iss.fail())
+      continue;
+
+    parent_targets[id] = target;
+
+    // Skip non-bind mounts (root == "/" means full filesystem mount)
+    if (root == "/")
+      continue;
+
+    // Check if mount is under the target home directory
+    if (target.find(home_dir.string()) == 0 &&
+        target.size() > home_dir.string().size()) {
+      bind_mounts.push_back({parent_id, root, target, fstype,
+                             options.find("ro") != std::string::npos});
     }
   }
+
+  // Second pass: construct absolute source paths
+  for (const auto &bm : bind_mounts) {
+    core::MountEntry me;
+    // For bind mounts, reconstruct the absolute source path:
+    //   absolute_source = parent_mount_target + root_field
+    auto parent_it = parent_targets.find(bm.parent_id);
+    if (parent_it != parent_targets.end() && !bm.root.empty()) {
+      me.source = parent_it->second / bm.root;
+    } else {
+      // Fallback: use target as source (legacy behavior)
+      me.source = bm.target;
+    }
+
+    me.target = bm.target;
+    me.fstype = bm.fstype;
+    me.read_only = bm.read_only;
+    me.active = true;
+    entries.push_back(std::move(me));
+  }
+
   return entries;
 }
 
@@ -228,7 +285,7 @@ int main(int argc, char *argv[]) {
     // [补充机制] Legacy AI user: .am_status exists but no mounts field yet.
     // Read actual mounts from /proc/mounts, stat sources, and write back.
     if (expected_mounts.empty()) {
-      auto proc_mounts = read_proc_mounts_for_user(home_dir);
+      auto proc_mounts = read_mountinfo_for_user(home_dir);
       if (!proc_mounts.empty()) {
         logger->info(
             "  user {}: .am_status has no mounts, filling {} from /proc/mounts",

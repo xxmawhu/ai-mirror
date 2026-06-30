@@ -197,12 +197,12 @@ phase_system_deps() {
 	if [[ ${#missing[@]} -gt 0 ]]; then
 		require_sudo
 		info "Installing missing packages: ${missing[*]}"
-		if ! sudo apt-get update -qq >>"$INSTALL_LOG" 2>&1; then
+		if ! sudo apt-get update -qq 2>&1 | sudo tee -a "$INSTALL_LOG" >/dev/null; then
 			ERROR_MSG="apt-get update failed"
 			fail "依赖安装失败 (apt-get update)"
 			return 1
 		fi
-		if ! sudo apt-get install -y -qq "${missing[@]}" >>"$INSTALL_LOG" 2>&1; then
+		if ! sudo apt-get install -y -qq "${missing[@]}" 2>&1 | sudo tee -a "$INSTALL_LOG" >/dev/null; then
 			ERROR_MSG="apt-get install failed for: ${missing[*]}"
 			fail "依赖安装失败: ${missing[*]}"
 			return 1
@@ -238,8 +238,8 @@ phase_build() {
 		_log_file "CMakeLists.txt changed (hash: ${prev_hash:-none} -> $current_hash)"
 		need_configure=true
 	else
-		local cache_mtime
-		cache_mtime=$(stat -c '%Y' "${BUILD_DIR}/CMakeCache.txt" 2>/dev/null || echo 0)
+		# cache_mtime intentionally removed: we use find -newer below which is
+		# more reliable (handles mtime comparison correctly across filesystems)
 		local newer_src
 		newer_src=$(find "${SCRIPT_DIR}/src" "${SCRIPT_DIR}/include" \
 			-type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
@@ -327,17 +327,22 @@ cleanup_old_versions() {
 	local current_version="$3"
 	local max_keep=2 # Keep at most 2 old versions
 
-	# List all versioned files, sorted by modification time (oldest first)
-	local versions
-	versions=$(ls -t "${bin_dir}/${name}."* 2>/dev/null | grep -E "${name}\.[0-9]+\.[0-9]+$" || true)
+	# Find all versioned files, sorted by modification time (oldest first)
+	local versions=()
+	while IFS= read -r -d '' f; do
+		versions+=("$f")
+	done < <(find "${bin_dir}" -maxdepth 1 -type f -name "${name}.*" \
+		-regextype posix-extended -regex ".*/${name}\.[0-9]+\.[0-9]+$" \
+		-printf '%T@ %p\0' 2>/dev/null | sort -rn | cut -z -d' ' -f2-)
 
-	local count=$(echo "$versions" | wc -l)
+	local count
+	count=${#versions[@]}
 	local to_delete=$((count - max_keep))
 
 	if [[ $to_delete -gt 0 ]]; then
-		local old_files
-		old_files=$(echo "$versions" | tail -n $to_delete)
-		for f in $old_files; do
+		local i
+		for ((i = 0; i < to_delete; i++)); do
+			local f="${versions[$i]}"
 			if [[ "$f" != "${bin_dir}/${name}.${current_version}" ]]; then
 				log "  Removing old version: $(basename "$f")"
 				sudo rm -f "$f"

@@ -136,9 +136,23 @@ read_mountinfo_for_user(const fs::path &home_dir) {
     core::MountEntry me;
     // For bind mounts, reconstruct the absolute source path:
     //   absolute_source = parent_mount_target + root_field
+    //
+    // ⚠️ mountinfo root field is absolute (starts with '/'), e.g.,
+    //    "/usr/maxx/.bashrc".  Using fs::path::operator/ would REPLACE
+    //    the parent target with root (since root is absolute), giving the
+    //    wrong result.  String concatenation preserves both parts:
+    //      parent_target("/mnt/beegfs_data") + root("/usr/maxx/.bashrc")
+    //      = "/mnt/beegfs_data/usr/maxx/.bashrc"  ✓
     auto parent_it = parent_targets.find(bm.parent_id);
     if (parent_it != parent_targets.end() && !bm.root.empty()) {
-      me.source = parent_it->second / bm.root;
+      // String concatenation to avoid fs::path::operator/ replacement bug
+      // when root starts with '/'
+      std::string parent_str = parent_it->second.string();
+      if (!bm.root.empty() && bm.root.string()[0] == '/') {
+        me.source = fs::path(parent_str + bm.root.string());
+      } else {
+        me.source = parent_it->second / bm.root;
+      }
     } else {
       // Fallback: use target as source (legacy behavior)
       me.source = bm.target;

@@ -335,9 +335,23 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
 
     // For bind mounts, reconstruct the absolute source path:
     //   absolute_source = parent_mount_target + root_field
+    //
+    // ⚠️ mountinfo root field is absolute (starts with '/'), e.g.,
+    //    "/usr/maxx/.bashrc".  Using fs::path::operator/ would REPLACE
+    //    the parent target with root (since root is absolute), giving the
+    //    wrong result.  String concatenation preserves both parts:
+    //      parent_target("/mnt/beegfs_data") + root("/usr/maxx/.bashrc")
+    //      = "/mnt/beegfs_data/usr/maxx/.bashrc"  ✓
     auto parent_it = parent_targets.find(c.parent_id);
     if (parent_it != parent_targets.end() && !c.root.empty()) {
-      entry.source = (parent_it->second / c.root).string();
+      // String concatenation to avoid fs::path::operator/ replacement bug
+      // when root starts with '/'
+      std::string parent_str = parent_it->second.string();
+      if (!c.root.empty() && c.root[0] == '/') {
+        entry.source = parent_str + c.root;
+      } else {
+        entry.source = (parent_it->second / c.root).string();
+      }
     } else {
       // Fallback: keep root as source (rare edge case)
       entry.source = c.root;

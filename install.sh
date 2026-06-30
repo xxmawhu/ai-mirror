@@ -41,11 +41,13 @@ _log() {
 	ts=$(date '+%Y-%m-%d %H:%M:%S')
 	local msg="${ts} $1"
 	echo -e "$msg"
-	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$msg" >>"$INSTALL_LOG"
+	# [防御] Permission denied 时静默降级（log 文件被其他用户创建时），set -e 不阻断
+	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$msg" >>"$INSTALL_LOG" 2>/dev/null || true
 }
 # Log only (verbose steps — never shown on screen)
 _log_file() {
-	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$(date '+%Y-%m-%d %H:%M:%S') $1" >>"$INSTALL_LOG"
+	# [防御] Permission denied 时静默降级，set -e 不阻断
+	[[ -n "${LOG_DIR_READY:-}" ]] && echo -e "$(date '+%Y-%m-%d %H:%M:%S') $1" >>"$INSTALL_LOG" 2>/dev/null || true
 }
 
 log() { _log "${GREEN}[install]${NC} $*"; }
@@ -77,11 +79,15 @@ generate_fail_report() {
 	report_ts=$(date '+%Y%m%d-%H%M%S')
 	local report_file="${LOG_DIR}/install-fail-${report_ts}.md"
 
-	mkdir -p "${LOG_DIR}"
+	mkdir -p "${LOG_DIR}" 2>/dev/null || true
 
 	# Atomic write: use tempfile then mv (Rule 11)
 	local tmp_file
-	tmp_file=$(mktemp "${LOG_DIR}/install-fail-XXXXXX.tmp")
+	tmp_file=$(mktemp "${LOG_DIR}/install-fail-XXXXXX.tmp" 2>/dev/null) || {
+		echo "[install] INSTALL FAILED (exit=$exit_code)" >&2
+		echo "[install] Cannot write failure report to ${LOG_DIR}/ (Permission denied)" >&2
+		return $exit_code
+	}
 
 	local report_content
 	report_content=$(
@@ -163,11 +169,12 @@ trap generate_fail_report EXIT
 # ---- Phase: Setup ----
 phase_setup() {
 	CURRENT_PHASE="setup"
-	mkdir -p "${LOG_DIR}"
-	mkdir -p "${BUILD_DIR}"
+	mkdir -p "${LOG_DIR}" 2>/dev/null || true
+	mkdir -p "${BUILD_DIR}" 2>/dev/null || true
 	LOG_DIR_READY=1
 
-	: >"$INSTALL_LOG"
+	# [防御] 清空 log 文件可能因权限失败（文件被其他用户创建），静默降级
+	: >"$INSTALL_LOG" 2>/dev/null || true
 
 	info "ai-mirror installer v0.1.0 (log: ${INSTALL_LOG})"
 	_log_file "Install started at $(date)"
@@ -220,7 +227,8 @@ phase_build() {
 	CURRENT_PHASE="build"
 	info "构建中 (C++20)..."
 
-	mkdir -p "${BUILD_DIR}"
+	# [防御] build dir 创建失败时静默降级（Permission denied）
+	mkdir -p "${BUILD_DIR}" 2>/dev/null || true
 
 	# Check CMakeLists.txt content hash for reliable change detection
 	# (timestamp -nt fails when git pull or cp -p preserves timestamps)
@@ -267,7 +275,7 @@ phase_build() {
 			return 1
 		fi
 		# Save hash after successful configure (only if cmake succeeded)
-		echo "$current_hash" >"$cmake_hash_file"
+		echo "$current_hash" >"$cmake_hash_file" 2>/dev/null || true
 	fi
 
 	if ! cmake --build "${BUILD_DIR}" -j"$(nproc)" >>"$INSTALL_LOG" 2>&1; then

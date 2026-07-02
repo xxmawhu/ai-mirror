@@ -27,6 +27,7 @@ MOUNT_WATCH_NAME="am-mount-watch"
 CURRENT_PHASE="init"
 ERROR_MSG=""
 
+# ---- Helpers: sudo check ----
 # ---- Colors ----
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -59,12 +60,44 @@ info() { _log "${CYAN}[info]${NC} $*"; }
 ok() { _log "${GREEN}[OK]${NC}   $*"; }
 fail() { _log "${RED}[FAIL]${NC} $*"; }
 
+_print_no_sudo_info() {
+	echo ""
+	echo "=============================================="
+	echo "  sudo 不可用 — 无法安装到系统目录"
+	echo "=============================================="
+	echo ""
+	echo "  install.sh 需要 sudo 权限将二进制部署到 ${PREFIX}/bin/"
+	echo "  以及其他系统目录（${CONFIG_DIR}/, ${DATA_DIR}/）。"
+	echo ""
+	echo "  当前用户 ($(whoami)) 没有 sudo 权限。请使用以下方式之一："
+	echo ""
+	echo "  1) 主用户运行: maxx 用户在 ~/release/ai-mirror/ 执行 git pull"
+	echo "     (post-merge hook 自动触发 install.sh)"
+	echo ""
+	echo "  2) 仅构建: bash install.sh --build"
+	echo "     (无需 sudo，构建产物在 ${BUILD_DIR}/bin/)"
+	echo ""
+	echo "=============================================="
+	echo ""
+}
+
 require_sudo() {
 	if ! command -v sudo &>/dev/null; then
-		error "sudo command not found. Please install sudo or run as root."
-		exit 1
+		_print_no_sudo_info
+		exit 0
 	fi
+
+	# Test if user can actually run sudo (passwordless or with password)
 	if ! sudo -n true 2>/dev/null; then
+		# sudo exists but passwordless access failed
+		# Check if they can run ANY sudo command (will prompt for password)
+		if ! sudo -v 2>/dev/null; then
+			# User is not in sudoers at all — can't run any sudo command
+			_print_no_sudo_info
+			exit 0
+		fi
+		# User has sudo but needs password — that's fine, subsequent commands
+		# will prompt interactively
 		log "This step requires sudo privileges. You may be prompted for password."
 	fi
 }
@@ -411,6 +444,11 @@ phase_install() {
 			log "配置 am-mount-watch systemd 服务（内联）..."
 			_log_file "Setting up am-mount-watch systemd service (inline)"
 
+			# 创建日志目录（world-readable，供 AI user 读取）
+			local log_dir="/var/log/ai-mirror"
+			sudo mkdir -p "$log_dir"
+			sudo chmod 755 "$log_dir"
+
 			# 1) 创建 service 单元文件
 			local svc_file="/etc/systemd/system/am-mount-watch.service"
 			sudo tee "$svc_file" >/dev/null <<UNIT_EOF
@@ -424,16 +462,20 @@ Type=oneshot
 ExecStart=${PREFIX}/bin/${MOUNT_WATCH_NAME}
 User=root
 Group=root
-StandardOutput=journal
-StandardError=journal
+StandardOutput=journal+file:/var/log/ai-mirror/mount-watch.log
+StandardError=journal+file:/var/log/ai-mirror/mount-watch.log
 SyslogIdentifier=am-mount-watch
 
-# Hardening
+# Log file permissions (world-readable, AI user can read)
+LogFileMode=0644
+
+# Hardening — allow writing to our log dir
 CapabilityBoundingSet=
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only
+ReadWritePaths=/var/log/ai-mirror
 RestrictSUIDSGID=yes
 
 [Install]
@@ -498,13 +540,12 @@ UNIT_EOF
 		_log_file "Removed legacy /etc/profile.d/am.sh"
 	fi
 
-	# Configure git safe.directory for project repository (fix dubious ownership)
-	local project_repo
-	project_repo=$(cd "${SCRIPT_DIR}" && git rev-parse --show-toplevel 2>/dev/null || echo "${SCRIPT_DIR}")
-	if [[ -d "$project_repo" ]]; then
-		sudo git config --system --add safe.directory "$project_repo" 2>/dev/null || true
-		_log_file "git safe.directory += $project_repo"
-	fi
+	# Configure git safe.directory using '*' wildcard at user level (--global)
+	# Use --replace-all to deduplicate; fallback to --add if key doesn't exist
+	# Note: --global (user-level) to avoid /etc/gitconfig bloat that affects all users
+	git config --global --replace-all safe.directory '*' 2>/dev/null ||
+		git config --global --add safe.directory '*' 2>/dev/null || true
+	_log_file "git safe.directory = * (global, user-level)"
 
 	# Install bash completion
 	local completion_src="${SCRIPT_DIR}/completions/am-completion.bash"

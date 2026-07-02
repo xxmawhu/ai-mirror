@@ -201,3 +201,41 @@ ai-mirror-bin: 以 root 执行实际逻辑
 - 推送无关文件到子模块 = 违反 root.md 最高准则
 - 需要立即清理子模块历史（git filter-branch 或 BFG）
 - 严重违规需重新初始化子模块
+
+## 11. 代码变更必须合并到 main（硬性规则）
+
+### 原则
+- **所有代码变更必须合并到 main 分支**，不得长期停留在 feature branch
+- main 是唯一的生产分支，所有发布都从 main 部署
+
+### 原因
+- release 目录的 `git pull` + `post-merge hook` 是唯一部署通道
+- post-merge hook 只在 main 分支的 pull/merge 时触发
+- 代码留在 feature branch = 永远不会部署到生产环境
+
+### 约束
+- ✅ 开发可在 feature branch 进行，但完成后必须合并到 main
+- ✅ push 到 main 后 release 目录 git pull 即可自动部署
+- ❌ 禁止以"暂存"为由让代码长期停留在非 main 分支
+- ❌ 禁止在 release 目录直接修改代码（必须走 dev → commit → pull 链路）
+
+## 12. 禁止 /tmp/ 目录操作（硬性规则）
+
+### 原则
+- **禁止在 `/tmp/` 目录下创建、写入或交付任何文件**
+- 所有临时文件必须放在项目内的 `tmp-issues/` 或 `log/` 目录
+
+### 原因
+- `/tmp/` 是系统临时目录，可能被系统自动清理（systemd tmpfiles.d）
+- `/tmp/` 可能使用 tmpfs（内存文件系统），重启后数据丢失
+- `/tmp/` 是跨用户共享目录，存在安全风险
+- raise-issue 工具已强制校验：源文件路径必须包含 `/tmp-issues/`
+
+### 约束
+- ✅ 临时 issue 文件 → `./tmp-issues/`
+- ✅ 临时构建产物 → `./build/` 或 `./build-release/`
+- ✅ 日志文件 → `./log/<type>/`
+- ❌ 禁止 `cat > /tmp/xxx`、`touch /tmp/xxx`、`cp xxx /tmp/xxx`
+- ❌ 禁止将 issue 文件写入 `/tmp/` 再 raise-issue
+- ❌ 禁止脚本在 `/tmp/` 创建临时工作目录
+- ❌ 禁止以"临时"为由绕过此规则

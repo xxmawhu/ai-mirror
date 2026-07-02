@@ -423,11 +423,17 @@ int main(int argc, char *argv[]) {
         auto mit = mountinfo_sources.find(mi.target);
         if (mit != mountinfo_sources.end() && source_exists(mit->second)) {
           // mountinfo 中有正确的 source 路径且文件存在 — 说明 .am_status
-          // 过期，mount 本身健康。记录警告，自动修正 source 路径。
-          // [log-review] 降级为 warning：旧版本 .am_status 未持久化 fstype，
-          // 导致 source 路径拼接错误，属已知遗留问题，不影响 mount 健康。
+          // 过期，mount 本身健康。自动修正 source 路径到 .am_status，
+          // 避免这条 warning 每 5 分钟重复一次。
           logger->warn("  stale source in .am_status: {} -> {} (correct: {})",
                        mi.source, mi.target, mit->second);
+          if (core::UserManager::update_state_mounts(username, home_dir,
+                                                     prefix)) {
+            logger->info("  corrected .am_status source for {} from mountinfo",
+                         mi.target);
+          } else {
+            logger->warn("  failed to update .am_status for {}", username);
+          }
           if (verbose) {
             logger->info("  mount is healthy, source path corrected from "
                          "mountinfo: {} -> {}",

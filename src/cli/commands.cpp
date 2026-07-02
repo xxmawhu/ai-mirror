@@ -497,19 +497,16 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     }
 
     if (is_mounted && !is_stale) {
-      // Already mounted — still fix ownership of intermediate dirs and target
-      // This handles the case where dirs were created by root on first run
+      // Already mounted — fix ownership of intermediate directories only.
+      // Bind mount targets are read-only (sourced from main user's home),
+      // chown on them always fails with EPERM. Only the parent path chain
+      // from project root needs ownership correction for AI user access.
       if (state.uid != 0 || state.gid != 0) {
-        utils::get_logger()->info(
-            "Fixing ownership for already-mounted target: {}", target.string());
         fs::path boundary = home_dir.empty()
                                 ? fs::path(target.parent_path().parent_path())
                                 : fs::path(home_dir);
-        // Fix intermediate directories
         fs::path parent = target.parent_path();
         if (!parent.empty()) {
-          // chown intermediate dirs via exec_safe (chown_path_chain is static
-          // in graft.cpp)
           fs::path p = parent;
           std::vector<fs::path> to_fix;
           while (!p.empty() && p != "/" && p != boundary) {
@@ -519,6 +516,11 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
               to_fix.push_back(p);
             }
             p = p.parent_path();
+          }
+          if (!to_fix.empty()) {
+            utils::get_logger()->info(
+                "Fixing ownership for {} intermediate dir(s) under {}",
+                to_fix.size(), parent.string());
           }
           for (auto it = to_fix.rbegin(); it != to_fix.rend(); ++it) {
             auto r = utils::exec_safe(
@@ -531,19 +533,8 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
             }
           }
         }
-        // Fix target itself
-        struct stat tgt_st;
-        if (stat(target.c_str(), &tgt_st) == 0 &&
-            (tgt_st.st_uid != state.uid || tgt_st.st_gid != state.gid)) {
-          auto r = utils::exec_safe(
-              {"chown",
-               std::to_string(state.uid) + ":" + std::to_string(state.gid),
-               target.string()});
-          if (r.exit_code == 0) {
-            utils::get_logger()->info("Fixed ownership: {} -> {}:{}",
-                                      target.string(), state.uid, state.gid);
-          }
-        }
+        // NOTE: target is a read-only bind mount — skip chown.
+        // chown on a read-only bind mount always fails with EPERM.
       }
       continue;
     }
@@ -772,7 +763,7 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
           if (S_ISLNK(st.st_mode)) {
             if ((st.st_uid != state.uid || st.st_gid != state.gid)) {
               if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
-                utils::get_logger()->info(
+                utils::get_logger()->debug(
                     "Third pass: fixed symlink {} -> {}:{}", ep.string(),
                     state.uid, state.gid);
                 local_fixes++;
@@ -818,8 +809,8 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                               O_NOFOLLOW);
             if (fd >= 0) {
               if (fchown(fd, state.uid, state.gid) == 0) {
-                utils::get_logger()->info("Third pass: fixed {} -> {}:{}",
-                                          ep.string(), state.uid, state.gid);
+                utils::get_logger()->debug("Third pass: fixed {} -> {}:{}",
+                                           ep.string(), state.uid, state.gid);
                 local_fixes++;
               } else {
                 // Expected for read-only bind mounts; these are caught by mount
@@ -830,7 +821,7 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
               close(fd);
             } else if (errno == ELOOP) {
               if (lchown(ep.c_str(), state.uid, state.gid) == 0) {
-                utils::get_logger()->info(
+                utils::get_logger()->debug(
                     "Third pass: fixed symlink {} -> {}:{}", ep.string(),
                     state.uid, state.gid);
                 local_fixes++;
@@ -846,8 +837,8 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
             // Permission denied on git ops.
             if (ep.filename() == ".git") {
               if (safe_chown_path(ep, username)) {
-                utils::get_logger()->info("Third pass: deep chown .git -> {}",
-                                          username);
+                utils::get_logger()->debug("Third pass: deep chown .git -> {}",
+                                           username);
                 local_fixes++;
               } else {
                 // error: chown .git failed, git operations may fail with
@@ -865,7 +856,12 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
         return local_fixes;
       };
 
-      fixes += recursive_chown(fs::path(home_dir), 0);
+      int chown_fixes = recursive_chown(fs::path(home_dir), 0);
+      if (chown_fixes > 0) {
+        utils::get_logger()->info("Third pass: fixed {} entries in {}",
+                                  chown_fixes, home_dir);
+      }
+      fixes += chown_fixes;
     }
   } // end if (!mount_only) — skip third pass recursive chown
 
@@ -1173,20 +1169,25 @@ static bool chown_recursive_fd(int dirfd, uid_t uid, gid_t gid, int depth = 0) {
       continue;
     }
 
+    bool needs_chown = (st.st_uid != uid || st.st_gid != gid);
     if (S_ISDIR(st.st_mode)) {
       // chown the directory itself before recursing into it
-      if (fchown(fd, uid, gid) != 0) {
-        utils::get_logger()->warn("safe_chown_path: fchown dir {} failed: {}",
-                                  entry->d_name, strerror(errno));
+      if (needs_chown) {
+        if (fchown(fd, uid, gid) != 0) {
+          utils::get_logger()->warn("safe_chown_path: fchown dir {} failed: {}",
+                                    entry->d_name, strerror(errno));
+        }
       }
       if (!chown_recursive_fd(fd, uid, gid, depth + 1)) {
         closedir(d);
         return false;
       }
     } else {
-      if (fchown(fd, uid, gid) != 0) {
-        utils::get_logger()->warn("safe_chown_path: fchown {} failed: {}",
-                                  entry->d_name, strerror(errno));
+      if (needs_chown) {
+        if (fchown(fd, uid, gid) != 0) {
+          utils::get_logger()->warn("safe_chown_path: fchown {} failed: {}",
+                                    entry->d_name, strerror(errno));
+        }
       }
       close(fd);
     }

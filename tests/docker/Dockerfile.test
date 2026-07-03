@@ -1,3 +1,7 @@
+# Optional: path to pre-built ai-mirror-bin for security tests
+#   docker build --build-arg PREBUILT_BIN=build/bin/ai-mirror-bin ...
+ARG PREBUILT_BIN=
+
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -66,10 +70,21 @@ RUN mkdir -p /data/home/datauser/.ssh && \
     ssh-keygen -t ed25519 -f /data/home/datauser/.ssh/testkey -N "" -C "test" && \
     chown -R datauser:datauser /data/home/datauser/.ssh
 
+# If PREBUILT_BIN is provided, install the real binary for security tests
+COPY $PREBUILT_BIN /usr/local/bin/ai-mirror-bin 2>/dev/null || true
+RUN if [ -f /usr/local/bin/ai-mirror-bin ]; then \
+      chmod +x /usr/local/bin/ai-mirror-bin && \
+      # Create wrapper link (am script, not the C++ wrapper for simplicity)
+      ln -sf ai-mirror-bin /usr/local/bin/am; \
+    fi
+
 COPY tests/docker/run_tests.sh /run_tests.sh
 RUN chmod +x /run_tests.sh
 
 COPY tests/docker/test_install.sh /test_install.sh
 RUN chmod +x /test_install.sh
 
-CMD ["/bin/bash", "-c", "/run_tests.sh && /test_install.sh"]
+COPY tests/docker/test_am_status_security.sh /test_am_status_security.sh
+RUN chmod +x /test_am_status_security.sh
+
+CMD ["/bin/bash", "-c", "/run_tests.sh && /test_install.sh && /test_am_status_security.sh"]

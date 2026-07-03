@@ -1,0 +1,46 @@
+# tests/docker/Dockerfile.security-test
+# Builds the real ai-mirror-bin binary and runs .am_status security tests.
+# Usage:
+#   docker build -t am-security-test -f tests/docker/Dockerfile.security-test .
+#   docker run --rm am-security-test
+#
+# Or with dev build binary (faster, skips compilation):
+#   docker build -t am-security-test \
+#     --build-arg PREBUILT_BIN=build/bin/ai-mirror-bin \
+#     -f tests/docker/Dockerfile.security-test .
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+
+RUN apt-get update && apt-get install -y \
+    build-essential g++ git \
+    openssh-server sudo python3-pip wget \
+    libssl-dev \
+    time \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -q https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.sh -O /tmp/cmake.sh && \
+    chmod +x /tmp/cmake.sh && \
+    /tmp/cmake.sh --prefix=/usr/local --skip-license && \
+    rm /tmp/cmake.sh
+
+RUN groupadd ai-mirror && \
+    usermod -aG ai-mirror root
+
+WORKDIR /app
+
+# Copy full source for building
+COPY . /app/
+
+# Install am wrapper (copies ai-mirror-bin, sets up symlinks)
+RUN bash install.sh 2>&1 || true
+
+# Copy test script
+COPY tests/docker/test_am_status_security.sh /test_am_status_security.sh
+RUN chmod +x /test_am_status_security.sh
+
+CMD ["/bin/bash", "-c", "/test_am_status_security.sh"]

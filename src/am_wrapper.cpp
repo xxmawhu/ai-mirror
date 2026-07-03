@@ -95,9 +95,10 @@ int main(int argc, char **argv) {
 
   // Gate: only ai-mirror group members may use the `am` CLI.
   // Main users (maxx) are in ai-mirror group.  AI users (imaxx_xxx) are not.
-  // This is the sole authorization criterion — no username prefix, no
-  // .am_status check, no TTY check.
-  {
+  // Exception: `init` is used in `.bashrc` (eval "$(am init bash)") and
+  // must work for all users — it only outputs shell configuration.
+  std::string first_arg = (argc > 1) ? argv[1] : "";
+  if (first_arg != "init") {
     if (!is_ai_mirror_group_member()) {
       struct passwd *pw = getpwuid(getuid());
       std::cerr << "error: '" << (pw ? pw->pw_name : "unknown")

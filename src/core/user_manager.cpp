@@ -166,16 +166,11 @@ static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
     return false;
   }
 
-  // Chown temp file before rename (rename preserves source inode's owner).
-  // [P0-chown] Chown state file to AI user so `am update` can read/write it.
-  // When write_state_file is called by am-mount-watch (running as root), the
-  // file would otherwise stay root:root, blocking non-root reads.
-  if ((info.uid != 0 || info.gid != 0) &&
-      ::fchown(ufd.get(), info.uid, info.gid) != 0) {
-    // [log-review] 降级为 warning: chown 失败不影响核心功能，文件仍可读
-    utils::get_logger()->warn("Failed to chown state file to {}:{}: {}",
-                              info.uid, info.gid, strerror(errno));
-  }
+  // State file stays root:root (0644, world-readable).
+  // All writers (am via sudo, am-mount-watch as root systemd) run as root.
+  // AI user never needs to write .am_status directly — all access is through
+  // `am` CLI which elevates via sudo.  Keeping ownership root prevents
+  // tampering by AI user.
   // fd closed by unique_fd destructor
 
   // Atomic rename: replace target atomically on the same filesystem.
@@ -947,6 +942,73 @@ bool UserManager::update_state_mounts(const std::string &username,
   utils::get_logger()->info(
       "update_state_mounts: updated {} mount(s) in .am_status for {}",
       info_opt->mounts.size(), username);
+  return true;
+}
+
+bool UserManager::rebuild_state(const fs::path &home_dir,
+                                const std::string &username,
+                                const std::string &main_user,
+                                const fs::path &project_path,
+                                const std::string &prefix) {
+  // 1. Lookup uid/gid from /etc/passwd
+  struct passwd *pw = getpwnam(username.c_str());
+  if (!pw) {
+    utils::get_logger()->error("rebuild_state: user '{}' not found in /etc/passwd",
+                               username);
+    return false;
+  }
+
+  // 2. Build UserInfo from authoritative sources
+  UserInfo info;
+  info.username = username;
+  info.uid = pw->pw_uid;
+  info.gid = pw->pw_gid;
+  info.home_dir = home_dir.string();
+  info.main_user = main_user;
+  info.project_path = project_path.string();
+  info.path_hash = compute_path_hash(project_path);
+  info.exists = true;
+
+  // 3. Get mounts from kernel via Graft
+  Graft graft(prefix);
+  auto mount_entries = graft.list_mounts(username);
+  for (const auto &me : mount_entries) {
+    MountInfo mi;
+    mi.source = me.source.string();
+    mi.target = me.target.string();
+    mi.fstype = me.fstype;
+    mi.read_only = me.read_only;
+    struct stat st;
+    if (::stat(me.source.c_str(), &st) == 0) {
+      mi.source_stat.ino = st.st_ino;
+      mi.source_stat.dev = st.st_dev;
+      mi.source_stat.mode = st.st_mode;
+      mi.source_stat.uid = st.st_uid;
+      mi.source_stat.gid = st.st_gid;
+      mi.source_stat.size = st.st_size;
+      mi.source_stat.mtime = st.st_mtime;
+    }
+    info.mounts.push_back(std::move(mi));
+  }
+
+  // 4. Atomic write
+  if (!write_state_file(home_dir, info, main_user)) {
+    utils::get_logger()->error("rebuild_state: failed to write .am_status for {}",
+                               username);
+    return false;
+  }
+
+  // 5. Verify the written file is readable
+  auto verify = read_state_file(home_dir);
+  if (!verify) {
+    utils::get_logger()->error(
+        "rebuild_state: wrote .am_status for {} but read-back failed", username);
+    return false;
+  }
+
+  utils::get_logger()->info(
+      "rebuild_state: recovered .am_status for {} ({} mounts, path_hash={})",
+      username, info.mounts.size(), info.path_hash);
   return true;
 }
 

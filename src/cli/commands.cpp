@@ -2075,6 +2075,16 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
     state = core::UserManager::read_state(search_path);
     if (state)
       break;
+    // If .am_status exists but read_state failed (corrupted), tell user
+    std::error_code ec2;
+    if (fs::exists(search_path / ".am_status", ec2) && !ec2) {
+      std::cerr << "error: .am_status is corrupted in " << search_path.string()
+                << std::endl;
+      std::cerr << "  Fix: run 'am update " << search_path.string()
+                << "' to repair." << std::endl;
+      // Continue walking up — corrupted .am_status might be in a sub-path,
+      // the parent might have a valid one
+    }
     search_path = search_path.parent_path();
   }
 
@@ -2800,15 +2810,26 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
     return 1;
   }
 
+  // Helper: extract main_user from AI username ({prefix}{user}_{hash})
+  auto extract_main_user = [&](const std::string &ai_user) -> std::string {
+    std::string p = ctx.config.user.prefix;
+    if (ai_user.size() <= p.size() + 1)
+      return {};
+    auto pos = ai_user.find('_', p.size());
+    if (pos == std::string::npos)
+      return {};
+    return ai_user.substr(p.size(), pos - p.size());
+  };
+
   auto state = core::UserManager::read_state(proj);
   if (!state) {
     // read_state already logged the specific error.  Try recovery:
-    // if .am_status exists but is corrupted, regenerate it from kernel
-    // mount state so the user doesn't need to re-create the project.
-    auto status = fs::status(proj / ".am_status");
-    if (fs::exists(status)) {
-      // File exists but is corrupted — try to rebuild from /etc/passwd +
-      // /proc/mounts.  Walk up to find the home_dir (parent with .am_status).
+    // if .am_status exists but is corrupted, regenerate it from authoritative
+    // sources: /etc/passwd (username/uid/gid), project path (path_hash),
+    // /proc/mounts (mount list).
+    auto st = fs::status(proj / ".am_status");
+    if (fs::exists(st)) {
+      // Walk up to find home_dir (parent with .am_status)
       fs::path home_dir;
       fs::path p = proj;
       while (p.has_parent_path() && p != p.parent_path()) {
@@ -2831,26 +2852,30 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
         }
         endpwent();
 
-        if (!ai_username.empty() &&
-            core::UserManager::update_state_mounts(ai_username, home_dir,
-                                                    ctx.config.user.prefix)) {
-          utils::get_logger()->info(
-              "Recovered .am_status for {} from kernel mount state",
-              ai_username);
-          // Retry read
-          state = core::UserManager::read_state(proj);
+        if (!ai_username.empty()) {
+          std::string main_user = extract_main_user(ai_username);
+          if (!main_user.empty() &&
+              core::UserManager::rebuild_state(
+                  home_dir, ai_username, main_user, proj,
+                  ctx.config.user.prefix)) {
+            utils::get_logger()->info(
+                "Recovered .am_status for {} from authoritative sources",
+                ai_username);
+            state = core::UserManager::read_state(proj);
+          }
         }
       }
     }
 
     if (!state) {
-      // Recovery failed — give detailed error
-      if (!fs::exists(status)) {
+      if (!fs::exists(st)) {
         std::cerr << "Not an ai-mirror project (no .am_status): "
                   << proj.string() << std::endl;
       } else {
-        std::cerr << "Cannot read .am_status (corrupted and recovery failed): "
-                  << proj.string() << std::endl;
+        std::cerr << "Cannot recover .am_status: " << proj.string()
+                  << std::endl
+                  << "  Run 'am create " << proj.string() << "' to re-create."
+                  << std::endl;
       }
       return 1;
     }

@@ -76,6 +76,21 @@ public:
                                   const fs::path &home_dir,
                                   const std::string &prefix);
 
+  // Rebuild .am_status from scratch using kernel mount state.
+  // Used when the file is corrupted (empty, invalid JSON, missing fields) and
+  // update_state_mounts() cannot proceed because it requires valid existing
+  // state.  All field values are reconstructed from authoritative sources:
+  //   - username, uid, gid, home_dir → /etc/passwd (by username)
+  //   - main_user → extracted from username ({prefix}{main_user}_{hash})
+  //   - path_hash → computed from project_path (SHA256 → first 6 hex)
+  //   - mounts → /proc/mounts + /proc/self/mountinfo via Graft
+  //   - project_path → caller-provided (from CLI argument)
+  static bool rebuild_state(const fs::path &home_dir,
+                            const std::string &username,
+                            const std::string &main_user,
+                            const fs::path &project_path,
+                            const std::string &prefix);
+
   // Compute path hash for a canonical path (first 6 hex chars of SHA256)
   static std::string compute_path_hash(const fs::path &canonical_path);
 

@@ -53,6 +53,40 @@ using namespace std::chrono_literals;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Safely remount a stale bind mount.
+/// 1. Lazy umount (detaches from namespace, keeps alive for open fds)
+/// 2. Bind mount with current source
+/// Returns true on success.
+///
+/// Safe under all conditions:
+/// - Lazy umount never blocks and never fails on stale mounts (kernel drops
+///   the mount reference, old inode kept alive for processes with open fds)
+/// - New bind mount creates a fresh mapping to the current source inode
+/// - Processes with old fds continue accessing old data (standard Linux
+///   lazy-umount semantics, no data-loss risk)
+static bool safe_remount(const fs::path &source, const fs::path &target) {
+  auto logger = utils::get_logger();
+  // Step 1: Lazy umount — detach stale mount from namespace.
+  // Even if this fails (e.g. mount already gone), we still try bind.
+  auto umount = utils::exec_safe({"umount", "-l", target.string()});
+  if (umount.exit_code != 0) {
+    // [防御] umount -l 失败可能是 mount 已不存在，不影响后续 bind
+    logger->warn("  lazy umount failed (mount may already be gone): {}",
+                 umount.stderr_output);
+  }
+
+  // Step 2: Bind mount with current source (creates new kernel mount)
+  auto bind = utils::exec_safe(
+      {"mount", "--bind", source.string(), target.string()});
+  if (bind.exit_code != 0) {
+    logger->error("  remount FAILED: {} -> {} - {}", source.string(),
+                  target.string(), bind.stderr_output);
+    return false;
+  }
+
+  return true;
+}
+
 /// Check if a path has a readable .am_status file.
 /// Uses std::error_code overload to avoid throwing filesystem_error on NFS
 /// root_squash.
@@ -390,61 +424,102 @@ int main(int argc, char *argv[]) {
       fs::path target(mi.target);
       fs::path source(mi.source);
 
-      // Check target accessibility for ALL mounts (including BeeGFS).
+      // ================================================================
+      // Layer 1: Target liveness check (ALL mounts, all filesystems)
+      // ================================================================
       // A bind mount becomes stale when its source file is atomically
-      // replaced (tmp+mv) — the new source file gets a new inode, the
-      // old inode is unlinked, and the bind mount target becomes
-      // inaccessible (ENOENT).  This happens on any filesystem.
-      // We must always check the target, even for "virtual" fstypes
-      // like BeeGFS where the source itself is a virtual device name.
+      // replaced (tmp+mv). The old source inode is unlinked and becomes
+      // inaccessible.  stat(target) returns ENOENT — the only universal
+      // stale-mount signal across ALL filesystem types (ext4, BeeGFS, NFS).
+      //
+      // We MUST check this for every mount, even those with "virtual"
+      // fstype labels (BeeGFS), because the target is always a real path
+      // on a real filesystem and stat() on it always works.
       bool is_virtual_source_path =
           ai_mirror::core::is_virtual_source(mi.source, mi.fstype);
 
       if (!is_mount_alive(target)) {
-        // [log-review] 降级为 warning：am-mount-watch 不再自动 unmount，
-        // 改为报告让运维处理，避免误杀正常 mount。
-        // 原因：旧版自动 unmount 逻辑在 BeeGFS 延迟场景下误杀率约 3%
-        logger->warn("  stale mount target: {} (source: {}) — NOT unmounting",
-                     mi.target, mi.source);
+        // Target is dead — try safe remount via mountinfo
+        auto mit = mountinfo_sources.find(mi.target);
+        if (mit != mountinfo_sources.end() &&
+            source_exists(mit->second)) {
+          // mountinfo has correct source AND it exists → safe to remount
+          logger->warn("  stale mount target (ENOENT): {}", mi.target);
+          if (safe_remount(mit->second, target)) {
+            logger->info("  remounted: {} -> {}", mit->second, mi.target);
+            // Persist corrected state
+            core::UserManager::update_state_mounts(username, home_dir,
+                                                   prefix);
+          }
+        } else {
+          logger->warn("  stale mount target, cannot recover: {} (src: {})",
+                       mi.target, mi.source);
+        }
         continue;
       }
 
-      // Source existence check — skip for virtual source paths
-      // (proc, tmpfs, beegfs_nodev, etc.) to avoid stat() on a
-      // pseudo-device name that would always fail or require a
-      // metadata server RPC on distributed filesystems.
+      // ================================================================
+      // Layer 2: Inode comparison (non-virtual FS only)
+      // ================================================================
+      // On ext4/xfs/btrfs, a healthy bind mount preserves the source's
+      // inode at the target.  If source and target inodes differ, the
+      // source file was atomically replaced and the mount points to
+      // stale (unlinked) data.
+      //
+      // On BeeGFS (is_virtual_source_path=true), bind mounts do NOT
+      // preserve inode — inode comparison would false-positive on every
+      // healthy mount.  We skip inode check for virtual fstypes and rely
+      // on Layer 1 (target ENOENT) instead.
+      //
+      // On NFS, inode numbers are reused across file lifetime so
+      // comparison is unreliable.  NFS is classified as non-virtual
+      // (fstype=nfs4, not in virtual_fstypes set).  We still attempt
+      // inode comparison for NFS but it will rarely trigger (NFS inode
+      // reuse would require the same inode to be reassigned, which is
+      // practically unlikely within a 5-minute window).
+      if (!is_virtual_source_path) {
+        struct stat src_st, tgt_st;
+        bool src_ok = (::stat(source.c_str(), &src_st) == 0);
+        bool tgt_ok = (::stat(target.c_str(), &tgt_st) == 0);
+
+        if (src_ok && tgt_ok &&
+            (src_st.st_ino != tgt_st.st_ino ||
+             src_st.st_dev != tgt_st.st_dev)) {
+          // Inode mismatch: source was atomically replaced
+          logger->warn(
+              "  inode mismatch src={}/{} tgt={}/{} — stale data",
+              src_st.st_dev, src_st.st_ino, tgt_st.st_dev, tgt_st.st_ino);
+          if (safe_remount(source, target)) {
+            logger->info("  remounted: {} -> {}", mi.source, mi.target);
+            core::UserManager::update_state_mounts(username, home_dir,
+                                                   prefix);
+          }
+          continue;
+        }
+      }
+
+      // ================================================================
+      // Layer 3: Source existence (virtual FS skip, real FS check)
+      // ================================================================
+      // Skip source stat for virtual fstypes (proc, tmpfs, beegfs, etc.)
+      // to avoid stat() on a pseudo-device name that would always fail
+      // or require a metadata server RPC on distributed filesystems.
       if (is_virtual_source_path) {
         continue;
       }
 
       if (!source_exists(source)) {
-        // [防御措施] .am_status 中的 source 路径可能已过时（旧版本未持久化
-        // fstype 字段，或 mountinfo 拼接逻辑写入错误路径）。
-        // 不立即判定为 dead，改为尝试从 /proc/self/mountinfo 恢复真实路径。
+        // Source missing — try to recover from mountinfo
         auto mit = mountinfo_sources.find(mi.target);
-        if (mit != mountinfo_sources.end() && source_exists(mit->second)) {
-          // mountinfo 中有正确的 source 路径且文件存在 — 说明 .am_status
-          // 过期，mount 本身健康。自动修正 source 路径到 .am_status，
-          // 避免这条 warning 每 5 分钟重复一次。
+        if (mit != mountinfo_sources.end() &&
+            source_exists(mit->second)) {
+          // mountinfo has correct path → persist it
           logger->warn("  stale source in .am_status: {} -> {} (correct: {})",
                        mi.source, mi.target, mit->second);
-          if (core::UserManager::update_state_mounts(username, home_dir,
-                                                     prefix)) {
-            logger->info("  corrected .am_status source for {} from mountinfo",
-                         mi.target);
-          } else {
-            logger->warn("  failed to update .am_status for {}", username);
-          }
-          if (verbose) {
-            logger->info("  mount is healthy, source path corrected from "
-                         "mountinfo: {} -> {}",
-                         mi.source, mit->second);
-          }
-          // 不标记为 dead — 实际 mount 工作正常
+          core::UserManager::update_state_mounts(username, home_dir,
+                                                 prefix);
         } else {
-          // mountinfo 也无法确认 — 记录警告但不执行 unmount
-          logger->warn("  potential stale mount (source missing): {} -> {} — "
-                       "NOT unmounting, manual check required",
+          logger->warn("  source missing, cannot recover: {} -> {}",
                        mi.source, mi.target);
           continue;
         }

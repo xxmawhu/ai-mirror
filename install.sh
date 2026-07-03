@@ -517,13 +517,11 @@ StandardError=append:/var/log/ai-mirror/mount-watch.log
 SyslogIdentifier=am-mount-watch
 LogFileMode=0644
 
-# Hardening — mount_watch needs CAP_SYS_ADMIN for mount/umount,
-# and full filesystem access to read .am_status on BeeGFS FUSE.
-# ProtectSystem=full and CapabilityBoundingSet= would block both.
-CapabilityBoundingSet=CAP_SYS_ADMIN
-PrivateTmp=yes
-NoNewPrivileges=yes
-RestrictSUIDSGID=yes
+# mount_watch: minimal privileges.  It runs as root and needs:
+# - Full filesystem access (reads .am_status on BeeGFS FUSE mounts)
+# - CAP_SYS_ADMIN (calls mount/umount to remount stale bind mounts)
+# - Socket access (stat() on FUSE requires communication with FUSE daemon)
+# No hardening options that would block BeeGFS FUSE access.
 
 [Install]
 WantedBy=multi-user.target

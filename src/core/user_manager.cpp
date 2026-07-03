@@ -182,17 +182,24 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
     if (content.empty())
       return std::nullopt;
 
-    // Quick JSON check before expensive verify
-    auto j = nlohmann::json::parse(content, nullptr, false);
-    if (j.is_discarded()) {
-      utils::get_logger()->error("State file is not valid JSON: {}",
-                                 state_path.string());
+    // Parse JSON with exception to get detailed error info
+    nlohmann::json j;
+    try {
+      j = nlohmann::json::parse(content);
+    } catch (const nlohmann::json::parse_error &e) {
+      // Show exact byte position and brief message
+      auto err_msg = fmt::format("JSON parse error at byte {}: {}", e.byte,
+                                 e.what());
+      utils::get_logger()->error("State file is corrupted: {} — {}",
+                                 state_path.string(), err_msg);
       return std::nullopt;
     }
 
     if (!verify_state_content(content)) {
-      utils::get_logger()->error("State file JSON parse failed: {}",
-                                 state_path.string());
+      utils::get_logger()->error(
+          "State file content validation failed: {} — structure missing or "
+          "invalid fields",
+          state_path.string());
       return std::nullopt;
     }
 

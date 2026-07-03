@@ -2802,7 +2802,20 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
 
   auto state = core::UserManager::read_state(proj);
   if (!state) {
-    std::cerr << "No .am_status found in: " << proj.string() << std::endl;
+    // read_state already logged the specific error (missing / empty / invalid
+    // JSON / field validation).  We give a summary here so the CLI output is
+    // self-contained without requiring the reader to cross-check the log.
+    auto status = fs::status(proj / ".am_status");
+    if (!fs::exists(status)) {
+      std::cerr << "Not an ai-mirror project (no .am_status): "
+                << proj.string() << std::endl;
+    } else if (fs::file_size(proj / ".am_status") == 0) {
+      std::cerr << "Corrupted .am_status (empty file): " << proj.string()
+                << std::endl;
+    } else {
+      std::cerr << "Corrupted .am_status (see log for details): "
+                << proj.string() << std::endl;
+    }
     return 1;
   }
 
@@ -2885,7 +2898,17 @@ int cmd_auto_fix_all(bool verbose) {
               << " ===" << std::endl;
     auto state = core::UserManager::read_state(proj);
     if (!state) {
-      std::cerr << "No .am_status found in: " << proj.string() << std::endl;
+      auto status = fs::status(proj / ".am_status");
+      if (!fs::exists(status)) {
+        std::cerr << "  Skipped (no .am_status): " << proj.string()
+                  << std::endl;
+      } else if (fs::file_size(proj / ".am_status") == 0) {
+        std::cerr << "  Skipped (empty .am_status): " << proj.string()
+                  << std::endl;
+      } else {
+        std::cerr << "  Skipped (corrupted .am_status, see log): "
+                  << proj.string() << std::endl;
+      }
       failures++;
       continue;
     }

@@ -266,7 +266,9 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Logger: file-based, no screen output (systemd service)
+  // Logger: stderr → journal (systemd captures it).  The AI user cannot
+  // read journal directly; use 'journalctl -u am-mount-watch.service' as
+  // root/main user.
   auto logger = utils::get_logger();
   logger->set_level(spdlog::level::info);
 

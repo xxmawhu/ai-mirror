@@ -495,11 +495,6 @@ phase_install() {
 			log "配置 am-mount-watch systemd 服务（内联）..."
 			_log_file "Setting up am-mount-watch systemd service (inline)"
 
-			# 创建日志目录（world-readable，供 AI user 读取）
-			local log_dir="/var/log/ai-mirror"
-			sudo mkdir -p "$log_dir"
-			sudo chmod 755 "$log_dir"
-
 			# 1) 创建 service 单元文件
 			local svc_file="/etc/systemd/system/am-mount-watch.service"
 			sudo tee "$svc_file" >/dev/null <<UNIT_EOF
@@ -513,20 +508,16 @@ Type=oneshot
 ExecStart=${PREFIX}/bin/${MOUNT_WATCH_NAME}
 User=root
 Group=root
-StandardOutput=journal+file:/var/log/ai-mirror/mount-watch.log
-StandardError=journal+file:/var/log/ai-mirror/mount-watch.log
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=am-mount-watch
 
-# Log file permissions (world-readable, AI user can read)
-LogFileMode=0644
-
-# Hardening — allow writing to our log dir
+# Hardening
 CapabilityBoundingSet=
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/var/log/ai-mirror
 RestrictSUIDSGID=yes
 
 [Install]
@@ -563,14 +554,7 @@ UNIT_EOF
 
 			# 3) 重载 daemon + 启用 timer + 启动 timer + 立即运行一次
 			if [[ $svc_rc -eq 0 && $tmr_rc -eq 0 ]]; then
-				if sudo systemctl daemon-reload 2>/dev/null; then
-					_log_file "systemd: daemon-reload OK"
-				else
-					# [防御] daemon-reload 可能因非交互 sudo 失败（post-merge hook）
-					# 此时 systemd 使用旧配置，但 service 文件已更新。
-					# 后续 install.sh 末尾的 daemon-reload 块会重试。
-					_log_file "systemd: daemon-reload failed (non-interactive sudo?)"
-				fi
+				sudo systemctl daemon-reload 2>/dev/null || true
 				sudo systemctl enable am-mount-watch.timer 2>/dev/null || true
 				sudo systemctl start am-mount-watch.timer 2>/dev/null || true
 				_log_file "systemd: timer enabled and started"

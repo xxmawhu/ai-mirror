@@ -95,17 +95,6 @@ static bool has_status_file(const fs::path &home_dir) {
   return fs::exists(home_dir / ".am_status", ec);
 }
 
-/// Read .am_status and return the mounts array.
-/// Returns empty vector if the file is missing or unreadable (graceful
-/// degradation).
-static std::vector<core::MountInfo>
-read_expected_mounts(const fs::path &home_dir) {
-  auto info = core::UserManager::read_state(home_dir);
-  if (!info)
-    return {};
-  return std::move(info->mounts);
-}
-
 /// Read /proc/self/mountinfo for mount entries under the given home directory.
 /// Unlike /proc/mounts, mountinfo preserves the real source path for bind
 /// mounts even on virtual filesystems like BeeGFS (where /proc/mounts shows
@@ -334,8 +323,14 @@ int main(int argc, char *argv[]) {
       logger->info("Checking user: {} (home: {})", username, home_dir.string());
     }
 
-    // Read expected mounts from .am_status
-    auto expected_mounts = read_expected_mounts(home_dir);
+    // Read full state from .am_status (includes main_user, project_path, mounts)
+    auto user_info = core::UserManager::read_state(home_dir);
+    std::vector<core::MountInfo> expected_mounts;
+    std::string main_user;
+    if (user_info) {
+      expected_mounts = user_info->mounts;
+      main_user = user_info->main_user;
+    }
 
     // [补充机制] Legacy AI user: .am_status exists but no mounts field yet.
     // Read actual mounts from /proc/mounts, stat sources, and write back.
@@ -552,6 +547,55 @@ int main(int argc, char *argv[]) {
           logger->warn("  source missing, cannot recover: {} -> {}",
                        mi.source, mi.target);
           continue;
+        }
+      }
+    }
+
+    // ================================================================
+    // Layer 4: Config consistency check — detect MISSING mounts
+    // ================================================================
+    // Compare the project's .ai-mirror.toml mount paths against the
+    // mounts recorded in .am_status.  If the config lists a mount that
+    // .am_status doesn't have, the mount was added to the config AFTER
+    // the AI user was created, and 'am update' was not run.
+    // Mark the project as needing an update so the user is notified.
+    if (user_info && !main_user.empty()) {
+      fs::path config_path = home_dir / ".ai-mirror.toml";
+      std::error_code ec;
+      if (fs::exists(config_path, ec)) {
+        auto project_config = core::ConfigParser::load(config_path);
+        if (project_config.loaded && !project_config.mount.paths.empty()) {
+          // Build set of target paths from .am_status
+          std::unordered_set<std::string> status_targets;
+          for (const auto &m : expected_mounts) {
+            status_targets.insert(m.target);
+          }
+          // Check each config mount path
+          std::vector<std::string> missing;
+          auto main_home = utils::get_home_dir(main_user);
+          for (const auto &mp : project_config.mount.paths) {
+            // Resolve ~ to main user's home directory
+            fs::path resolved = mp;
+            std::string ps = mp.string();
+            if (!ps.empty() && ps[0] == '~') {
+              resolved = fs::path(main_home + ps.substr(1));
+            }
+            auto expected_target = core::PathResolver::to_ai_user_path(
+                resolved, username, main_user, home_dir);
+            if (status_targets.find(expected_target.string()) ==
+                status_targets.end()) {
+              missing.push_back(mp.string());
+            }
+          }
+          if (!missing.empty()) {
+            logger->warn(
+                "  user {}: {} config mount(s) not in .am_status — "
+                "run 'am update {}'",
+                username, missing.size(), home_dir.string());
+            for (const auto &m : missing) {
+              logger->warn("    missing: {}", m);
+            }
+          }
         }
       }
     }

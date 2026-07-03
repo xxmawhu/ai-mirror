@@ -332,6 +332,25 @@ int main(int argc, char *argv[]) {
   logger->info("passwd scan: {} entries, {} with .am_status", total_passwd_entries,
                status_file_found);
 
+  // Fix ownership of .am_status files that are still owned by AI users
+  // (legacy from old write_state_file that chowned to AI user).
+  // All .am_status must be root:root (0644) per security policy.
+  {
+    int fixed = 0;
+    for (const auto &[uname, hdir] : ai_users) {
+      fs::path sp = hdir / ".am_status";
+      struct stat st;
+      if (::stat(sp.c_str(), &st) == 0 && st.st_uid != 0) {
+        if (::chown(sp.c_str(), 0, 0) == 0) {
+          fixed++;
+        }
+      }
+    }
+    if (fixed > 0) {
+      logger->info("Fixed ownership of {} .am_status file(s) to root:root", fixed);
+    }
+  }
+
   if (ai_users.empty()) {
     logger->info("No AI users found (no .am_status files found)");
     return 0;

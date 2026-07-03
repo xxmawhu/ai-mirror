@@ -9,22 +9,6 @@
 
 namespace ai_mirror::cli {
 
-static bool is_ai_user() {
-  auto config = core::ConfigParser::load_default();
-  std::string prefix = config.user.prefix;
-  std::string current = utils::get_effective_username();
-
-  if (current.empty() || prefix.empty())
-    return false;
-  if (current.length() <= prefix.length())
-    return false;
-  if (current.substr(0, prefix.length()) != prefix)
-    return false;
-
-  size_t underscore_pos = current.find('_', prefix.length());
-  return underscore_pos != std::string::npos;
-}
-
 int parse_and_run(int argc, char **argv) {
   CLI::App app{
       "ai-mirror — AI 时代的 Linux 用户隔离方案\n"
@@ -222,14 +206,6 @@ int parse_and_run(int argc, char **argv) {
   // init can run without group check (it helps user set up membership)
   if (init_cmd->parsed()) {
     return cmd_init(init_shell, verbose);
-  }
-
-  if (is_ai_user()) {
-    std::cerr << "ai-mirror: AI users cannot use this tool." << std::endl;
-    std::cerr << "This command manages AI user isolation and must be run by "
-                 "the main user."
-              << std::endl;
-    return 1;
   }
 
   if (!utils::is_group_member("ai-mirror")) {

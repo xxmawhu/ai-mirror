@@ -93,33 +93,22 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // AI user detection: if the caller's home directory has .am_status, they are
-  // an AI user and must NOT use the `am` CLI.
-  // Print to stderr only when stderr is a TTY (interactive use).  When called
-  // non-interactively (from shell startup scripts, git hooks, etc.), exit
-  // silently to avoid polluting logs and terminal output.
+  // Gate: only ai-mirror group members may use the `am` CLI.
+  // Main users (maxx) are in ai-mirror group.  AI users (imaxx_xxx) are not.
+  // This is the sole authorization criterion — no username prefix check, no
+  // .am_status check.  Print error only on TTY (interactive); non-interactive
+  // calls (shell startup scripts, hooks) exit silently.
   {
-    struct passwd *pw = getpwuid(getuid());
-    if (pw) {
-      std::string home(pw->pw_dir);
-      if (!home.empty()) {
-        std::error_code ec;
-        if (std::filesystem::exists(home + "/.am_status", ec)) {
-          if (isatty(STDERR_FILENO)) {
-            std::cerr
-                << "error: AI user '" << pw->pw_name
-                << "' cannot use the 'am' command." << std::endl;
-            std::cerr << "  The 'am' CLI is for the main user only.  AI users "
-                         "operate through"
-                      << std::endl;
-            std::cerr
-                << "  their project directory and raise-issue for "
-                   "cross-project tasks."
-                << std::endl;
-          }
-          return 1;
-        }
+    if (!is_ai_mirror_group_member()) {
+      struct passwd *pw = getpwuid(getuid());
+      if (isatty(STDERR_FILENO)) {
+        std::cerr << "error: '" << (pw ? pw->pw_name : "unknown")
+                  << "' is not a member of the 'ai-mirror' group."
+                  << std::endl;
+        std::cerr << "  The 'am' CLI is for the main user only." << std::endl;
+        std::cerr << "  Fix: sudo usermod -aG ai-mirror $USER" << std::endl;
       }
+      return 1;
     }
   }
 

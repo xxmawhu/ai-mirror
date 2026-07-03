@@ -71,11 +71,14 @@ RUN mkdir -p /data/home/datauser/.ssh && \
     chown -R datauser:datauser /data/home/datauser/.ssh
 
 # If PREBUILT_BIN is provided, install the real binary for security tests
-COPY $PREBUILT_BIN /usr/local/bin/ai-mirror-bin 2>/dev/null || true
-RUN if [ -f /usr/local/bin/ai-mirror-bin ]; then \
+ARG PREBUILT_BIN=""
+COPY $PREBUILT_BIN /usr/local/bin/ai-mirror-bin
+RUN if [ -f /usr/local/bin/ai-mirror-bin ] && [ ! -L /usr/local/bin/ai-mirror-bin ]; then \
       chmod +x /usr/local/bin/ai-mirror-bin && \
-      # Create wrapper link (am script, not the C++ wrapper for simplicity)
       ln -sf ai-mirror-bin /usr/local/bin/am; \
+      echo "Using pre-built binary: $(/usr/local/bin/ai-mirror-bin --version 2>&1)"; \
+    else \
+      echo "Using mock binary (no PREBUILT_BIN provided)"; \
     fi
 
 COPY tests/docker/run_tests.sh /run_tests.sh

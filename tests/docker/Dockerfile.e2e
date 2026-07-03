@@ -1,0 +1,40 @@
+# tests/docker/Dockerfile.e2e
+# Builds from source, runs .am_status E2E tests with real binary.
+# Usage:
+#   docker build -t am-e2e -f tests/docker/Dockerfile.e2e .
+#   docker run --rm --cap-add SYS_ADMIN am-e2e
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN apt-get update && apt-get install -y \
+    build-essential g++ git cmake \
+    libssl-dev python3 sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd ai-mirror && usermod -aG ai-mirror root
+
+WORKDIR /app
+
+# Copy full source
+COPY CMakeLists.txt ./
+COPY src/ src/
+COPY include/ include/
+COPY third_party/ third_party/
+COPY tests/ tests/
+COPY install.sh .
+
+# Build real binary
+RUN mkdir -p build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) ai-mirror-bin am 2>&1 | tail -5 && \
+    cp bin/ai-mirror-bin /usr/local/bin/ai-mirror-bin && \
+    cp bin/am /usr/local/bin/am && \
+    echo "Build OK: $(/usr/local/bin/ai-mirror-bin --version 2>&1)"
+
+# Copy test script
+COPY tests/docker/test_e2e_am_status.sh /test_e2e.sh
+RUN chmod +x /test_e2e.sh
+
+CMD ["/bin/bash", "-c", "/test_e2e.sh"]

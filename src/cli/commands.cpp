@@ -2811,6 +2811,7 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
   }
 
   // Helper: extract main_user from AI username ({prefix}{user}_{hash})
+  // Returns empty string if format is invalid.
   auto extract_main_user = [&](const std::string &ai_user) -> std::string {
     std::string p = ctx.config.user.prefix;
     if (ai_user.size() <= p.size() + 1)
@@ -2829,19 +2830,25 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
     // /proc/mounts (mount list).
     auto st = fs::status(proj / ".am_status");
     if (fs::exists(st)) {
-      // Walk up to find home_dir (parent with .am_status)
+      // Step 1: Find home_dir (parent with .am_status, may be proj itself)
       fs::path home_dir;
-      fs::path p = proj;
-      while (p.has_parent_path() && p != p.parent_path()) {
-        if (fs::exists(p / ".am_status")) {
-          home_dir = p;
-          break;
+      {
+        fs::path p2 = proj;
+        while (p2.has_parent_path() && p2 != p2.parent_path()) {
+          if (fs::exists(p2 / ".am_status")) {
+            home_dir = p2;
+            break;
+          }
+          p2 = p2.parent_path();
         }
-        p = p.parent_path();
       }
 
-      if (!home_dir.empty()) {
-        // Find AI user by home directory
+      if (home_dir.empty()) {
+        std::cerr << "  .am_status exists at " << proj.string()
+                  << " but no parent directory has one (walk-up failed)"
+                  << std::endl;
+      } else {
+        // Step 2: Find AI user by home directory in /etc/passwd
         std::string ai_username;
         setpwent();
         while (auto *pw = getpwent()) {
@@ -2852,12 +2859,31 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
         }
         endpwent();
 
-        if (!ai_username.empty()) {
+        if (ai_username.empty()) {
+          std::cerr << "  No AI user found in /etc/passwd with home="
+                    << home_dir.string() << std::endl;
+          std::cerr << "  The AI user may have been deleted manually."
+                    << std::endl;
+          std::cerr << "  Fix: run 'am create " << proj.string()
+                    << "' to re-create." << std::endl;
+        } else {
+          // Step 3: Extract main_user from username format
           std::string main_user = extract_main_user(ai_username);
-          if (!main_user.empty() &&
-              core::UserManager::rebuild_state(
-                  home_dir, ai_username, main_user, proj,
-                  ctx.config.user.prefix)) {
+          if (main_user.empty()) {
+            std::cerr << "  AI user '" << ai_username
+                      << "' has unexpected format" << std::endl;
+            std::cerr << "  Expected: " << ctx.config.user.prefix
+                      << "{main_user}_{hash}" << std::endl;
+            std::cerr << "  Fix: run 'am create " << proj.string()
+                      << "' to re-create." << std::endl;
+          } else if (!core::UserManager::rebuild_state(
+                         home_dir, ai_username, main_user, proj,
+                         ctx.config.user.prefix)) {
+            std::cerr << "  Failed to rebuild .am_status for " << ai_username
+                      << " (see log for details)" << std::endl;
+            std::cerr << "  Fix: run 'am create " << proj.string()
+                      << "' to re-create." << std::endl;
+          } else {
             utils::get_logger()->info(
                 "Recovered .am_status for {} from authoritative sources",
                 ai_username);
@@ -2872,9 +2898,7 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
         std::cerr << "Not an ai-mirror project (no .am_status): "
                   << proj.string() << std::endl;
       } else {
-        std::cerr << "Cannot recover .am_status: " << proj.string()
-                  << std::endl
-                  << "  Run 'am create " << proj.string() << "' to re-create."
+        std::cerr << "Cannot recover .am_status for " << proj.string()
                   << std::endl;
       }
       return 1;

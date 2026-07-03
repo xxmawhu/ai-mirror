@@ -95,19 +95,16 @@ int main(int argc, char **argv) {
 
   // Gate: only ai-mirror group members may use the `am` CLI.
   // Main users (maxx) are in ai-mirror group.  AI users (imaxx_xxx) are not.
-  // This is the sole authorization criterion — no username prefix check, no
-  // .am_status check.  Print error only on TTY (interactive); non-interactive
-  // calls (shell startup scripts, hooks) exit silently.
+  // This is the sole authorization criterion — no username prefix, no
+  // .am_status check, no TTY check.
   {
     if (!is_ai_mirror_group_member()) {
       struct passwd *pw = getpwuid(getuid());
-      if (isatty(STDERR_FILENO)) {
-        std::cerr << "error: '" << (pw ? pw->pw_name : "unknown")
-                  << "' is not a member of the 'ai-mirror' group."
-                  << std::endl;
-        std::cerr << "  The 'am' CLI is for the main user only." << std::endl;
-        std::cerr << "  Fix: sudo usermod -aG ai-mirror $USER" << std::endl;
-      }
+      std::cerr << "error: '" << (pw ? pw->pw_name : "unknown")
+                << "' is not a member of the 'ai-mirror' group."
+                << std::endl;
+      std::cerr << "  The 'am' CLI is for the main user only." << std::endl;
+      std::cerr << "  Fix: sudo usermod -aG ai-mirror $USER" << std::endl;
       return 1;
     }
   }

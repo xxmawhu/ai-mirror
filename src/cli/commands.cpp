@@ -12,6 +12,7 @@
 #include "ai_mirror/utils/shell.hpp"
 #include <algorithm>
 #include <chrono>
+#include <unordered_set>
 #include <cmath>
 #include <cstring>
 #include <dirent.h>
@@ -2091,15 +2092,41 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
   if (state) {
     std::string ai_user = state->username;
 
-    // NOTE: am cd deliberately does NOT perform health check or mount repair.
-    // Background: stat()/fs::canonical() on a stale BeeGFS bind mount target
+    // NOTE: am cd must NOT perform any filesystem operations (stat, mount)
+    // on the target mount path.  stat() on a stale BeeGFS bind mount target
     // enters uninterruptible D (uninterruptible sleep) state and hangs
-    // indefinitely — not even SIGKILL can interrupt it mid-syscall. This
-    // caused `am cd` to hang when any ai-user bind mount was stale.
-    // Health checks and mount repair belong to `am health` / `am auto-fix-all`
-    // which run in a context where a hang is tolerable. cd must remain a
-    // pure, fast switch operation so users can always reach their ai-user
-    // (SSH itself does not depend on bind mounts).
+    // indefinitely.  See issue 2026-06-23-stale-mount-d-state.
+    //
+    // However, we CAN do a safe in-memory check: compare the project's
+    // config mount paths against the mounts recorded in .am_status.
+    // If the config expects a mount that .am_status doesn't have, the user
+    // needs to run 'am update' to sync the new mount.  This is a pure
+    // string comparison — no stat(), no mount operations, no hang risk.
+    {
+      // Build set of mount TARGETS from .am_status
+      std::unordered_set<std::string> status_targets;
+      for (const auto &m : state->mounts) {
+        status_targets.insert(m.target);
+      }
+      // Check config mount paths against status targets
+      std::vector<std::string> missing;
+      for (const auto &mp : config.mount.paths) {
+        auto expected = core::PathResolver::to_ai_user_path(
+            mp, ai_user, main_user, state->home_dir);
+        if (status_targets.find(expected.string()) == status_targets.end()) {
+          missing.push_back(mp.string());
+        }
+      }
+      if (!missing.empty()) {
+        std::cerr << "warning: " << missing.size()
+                  << " mount(s) not configured for this project:" << std::endl;
+        for (const auto &m : missing) {
+          std::cerr << "  - " << m << std::endl;
+        }
+        std::cerr << "  Run 'am update " << target_str << "' to sync."
+                  << std::endl;
+      }
+    }
 
     // Validate SSH key exists
     std::string ssh_key = config.ssh.key_path.string();

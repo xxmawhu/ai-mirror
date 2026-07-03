@@ -390,22 +390,16 @@ int main(int argc, char *argv[]) {
       fs::path target(mi.target);
       fs::path source(mi.source);
 
-      // Virtual filesystems (proc, tmpfs, beegfs_nodev, etc.) have no real
-      // device backing.  The mount entry comes from /proc/mounts — if the
-      // kernel reports it, the target path exists by definition.
-      // Skip ALL stat() calls for virtual devices to avoid blocking on
-      // distributed filesystems (BeeGFS stat() requires metadata server
-      // RPC — 500 stat() calls every 5 minutes causes cascading latency).
-      bool is_virtual_device =
+      // Check target accessibility for ALL mounts (including BeeGFS).
+      // A bind mount becomes stale when its source file is atomically
+      // replaced (tmp+mv) — the new source file gets a new inode, the
+      // old inode is unlinked, and the bind mount target becomes
+      // inaccessible (ENOENT).  This happens on any filesystem.
+      // We must always check the target, even for "virtual" fstypes
+      // like BeeGFS where the source itself is a virtual device name.
+      bool is_virtual_source_path =
           ai_mirror::core::is_virtual_source(mi.source, mi.fstype);
 
-      if (is_virtual_device) {
-        // Virtual device: mount is healthy by definition (/proc/mounts
-        // guarantees target exists).  Skip stat() entirely.
-        continue;
-      }
-
-      // Real path mount: check target accessibility
       if (!is_mount_alive(target)) {
         // [log-review] 降级为 warning：am-mount-watch 不再自动 unmount，
         // 改为报告让运维处理，避免误杀正常 mount。
@@ -415,7 +409,14 @@ int main(int argc, char *argv[]) {
         continue;
       }
 
-      // Source existence check (only for real path mounts)
+      // Source existence check — skip for virtual source paths
+      // (proc, tmpfs, beegfs_nodev, etc.) to avoid stat() on a
+      // pseudo-device name that would always fail or require a
+      // metadata server RPC on distributed filesystems.
+      if (is_virtual_source_path) {
+        continue;
+      }
+
       if (!source_exists(source)) {
         // [防御措施] .am_status 中的 source 路径可能已过时（旧版本未持久化
         // fstype 字段，或 mountinfo 拼接逻辑写入错误路径）。

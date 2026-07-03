@@ -517,13 +517,12 @@ StandardError=append:/var/log/ai-mirror/mount-watch.log
 SyslogIdentifier=am-mount-watch
 LogFileMode=0644
 
-# Hardening — ReadWritePaths for log dir
-CapabilityBoundingSet=
+# Hardening — mount_watch needs CAP_SYS_ADMIN for mount/umount,
+# and full filesystem access to read .am_status on BeeGFS FUSE.
+# ProtectSystem=full and CapabilityBoundingSet= would block both.
+CapabilityBoundingSet=CAP_SYS_ADMIN
 PrivateTmp=yes
 NoNewPrivileges=yes
-ProtectSystem=full
-ProtectHome=read-only
-ReadWritePaths=/var/log/ai-mirror
 RestrictSUIDSGID=yes
 
 [Install]

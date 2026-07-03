@@ -407,14 +407,37 @@ phase_install() {
 		return 1
 	fi
 
-	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${WRAPPER_NAME}" "${PREFIX}/bin/${WRAPPER_NAME}"; then
+	local _install_verified=false
+	local _src_chk _dst_chk _attempt
+	for _attempt in 1 2 3; do
+		_src_chk=$(md5sum "${BUILD_DIR}/bin/${WRAPPER_NAME}" 2>/dev/null | cut -d' ' -f1)
+		if sudo install -m 0755 "${BUILD_DIR}/bin/${WRAPPER_NAME}" "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null; then
+			_dst_chk=$(md5sum "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null | cut -d' ' -f1)
+			if [[ "$_src_chk" == "$_dst_chk" ]]; then
+				_install_verified=true; break
+			fi
+		fi
+		sleep 1
+	done
+	if ! $_install_verified; then
 		ERROR_MSG="Failed to install wrapper to ${PREFIX}/bin/${WRAPPER_NAME}"
 		fail "安装失败 (${WRAPPER_NAME})"
 		return 1
 	fi
 
 	local VERSIONED_BIN="${BIN_NAME}.${VERSION}"
-	if ! sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${VERSIONED_BIN}"; then
+	_install_verified=false
+	for _attempt in 1 2 3; do
+		_src_chk=$(md5sum "${BUILD_DIR}/bin/${BIN_NAME}" 2>/dev/null | cut -d' ' -f1)
+		if sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null; then
+			_dst_chk=$(md5sum "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null | cut -d' ' -f1)
+			if [[ "$_src_chk" == "$_dst_chk" ]]; then
+				_install_verified=true; break
+			fi
+		fi
+		sleep 1
+	done
+	if ! $_install_verified; then
 		ERROR_MSG="Failed to install versioned binary to ${PREFIX}/bin/${VERSIONED_BIN}"
 		fail "安装失败 (${VERSIONED_BIN})"
 		return 1
@@ -432,7 +455,32 @@ phase_install() {
 
 	# Install am-mount-watch (standalone mount health checker for systemd)
 	if [[ -f "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" ]]; then
-		if ! sudo install -m 0755 "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" "${PREFIX}/bin/${MOUNT_WATCH_NAME}"; then
+		# Build expected checksum (source binary) for verification
+		local SRC_CHECK
+		SRC_CHECK=$(md5sum "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null | cut -d' ' -f1)
+		_log_file "install ${MOUNT_WATCH_NAME}: src_checksum=${SRC_CHECK}"
+
+		# sudo install 在某些环境下可能静默失败（缓存/权限），
+		# 这里尝试 3 次，每次间隔 1 秒，并校验 checksum
+		local INSTALL_OK=false
+		for attempt in 1 2 3; do
+			if sudo install -m 0755 "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null; then
+				local DST_CHECK
+				DST_CHECK=$(md5sum "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null | cut -d' ' -f1)
+				if [[ "$SRC_CHECK" == "$DST_CHECK" ]]; then
+					INSTALL_OK=true
+					_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} OK (checksum match)"
+					break
+				else
+					_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} checksum mismatch (src=${SRC_CHECK} dst=${DST_CHECK})"
+				fi
+			else
+				_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} failed"
+			fi
+			sleep 1
+		done
+
+		if ! $INSTALL_OK; then
 			ERROR_MSG="Failed to install ${MOUNT_WATCH_NAME}"
 			fail "安装失败 (${MOUNT_WATCH_NAME})"
 			return 1

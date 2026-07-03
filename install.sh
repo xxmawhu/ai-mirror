@@ -646,6 +646,47 @@ SUDOERS
 phase_summary() {
 	local VERSION
 	VERSION=$(get_version)
+
+	# Final binary integrity check: verify ALL installed binaries match
+	# their build sources.  'sudo install' may appear to succeed without
+	# actually updating the file due to caching or concurrent overwrites.
+	_log_file "phase_summary: verifying installed binaries..."
+	local _binaries=("${WRAPPER_NAME}" "${MOUNT_WATCH_NAME}")
+	local _b
+	for _b in "${_binaries[@]}"; do
+		if [[ -f "${BUILD_DIR}/bin/${_b}" ]]; then
+			local _src_chk
+			_src_chk=$(md5sum "${BUILD_DIR}/bin/${_b}" 2>/dev/null | cut -d' ' -f1)
+			local _dst_chk
+			_dst_chk=$(md5sum "${PREFIX}/bin/${_b}" 2>/dev/null | cut -d' ' -f1)
+			if [[ "$_src_chk" != "$_dst_chk" ]]; then
+				_log_file "phase_summary: ${_b} checksum mismatch (src=${_src_chk} dst=${_dst_chk}), reinstalling..."
+				if ! sudo install -m 0755 "${BUILD_DIR}/bin/${_b}" "${PREFIX}/bin/${_b}" 2>/dev/null; then
+					sudo cp "${BUILD_DIR}/bin/${_b}" "${PREFIX}/bin/${_b}" 2>/dev/null
+					sudo chmod 0755 "${PREFIX}/bin/${_b}"
+				fi
+				_dst_chk=$(md5sum "${PREFIX}/bin/${_b}" 2>/dev/null | cut -d' ' -f1)
+				if [[ "$_src_chk" == "$_dst_chk" ]]; then
+					_log_file "phase_summary: ${_b} reinstall OK (checksum match)"
+				else
+					warn "${_b} 安装后校验不一致 (src=${_src_chk} dst=${_dst_chk})"
+				fi
+			fi
+		fi
+	done
+	# Also verify the versioned ai-mirror-bin (symlink target)
+	local _versioned_bin="${BIN_NAME}.${VERSION}"
+	if [[ -f "${BUILD_DIR}/bin/${BIN_NAME}" && -f "${PREFIX}/bin/${_versioned_bin}" ]]; then
+		local _src_chk _dst_chk
+		_src_chk=$(md5sum "${BUILD_DIR}/bin/${BIN_NAME}" 2>/dev/null | cut -d' ' -f1)
+		_dst_chk=$(md5sum "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null | cut -d' ' -f1)
+		if [[ "$_src_chk" != "$_dst_chk" ]]; then
+			_log_file "phase_summary: ${_versioned_bin} checksum mismatch, reinstalling..."
+			sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null || \
+			sudo cp "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null
+		fi
+	fi
+
 	ok "安装完成 v${VERSION}: ${PREFIX}/bin/${WRAPPER_NAME}  (source ~/.bashrc 生效)"
 
 	# Show systemd service/timer status if am-mount-watch was installed

@@ -4,8 +4,8 @@
 # detection correctly handle all edge cases.
 set -euo pipefail
 
-LOG_DIR="/var/log/ai-mirror-tests"
-mkdir -p "$LOG_DIR"
+LOG_DIR="${LOG_DIR:-/var/log/ai-mirror-tests}"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
 BIN="${BIN:-/usr/local/bin/ai-mirror-bin}"
 WRAPPER="${WRAPPER:-/usr/local/bin/am}"
 TEST_HOME="/tmp/am-status-test-$$"
@@ -162,10 +162,17 @@ main() {
   echo ""
 
   # Verify we have a real binary
-  if ! "$BIN" --help 2>&1 | grep -qi "update"; then
+  # Note: use grep -c + file redirect instead of grep -q | pipe.
+  # grep -q exits immediately on first match, killing the pipe writer
+  # with SIGPIPE (141).  With 'set -o pipefail' this 141 propagates as
+  # the pipeline exit code, causing a false negative.
+  if ! "$BIN" --help > /tmp/am-test-help.txt 2>&1; then
+    echo "SKIP: binary not found at $BIN"
+    exit 0
+  fi
+  if ! grep -qi "update" /tmp/am-test-help.txt; then
     echo "SKIP: binary does not support 'update' subcommand"
-    echo "  Build and install the real ai-mirror-bin, then re-run."
-    echo "  Dev build: /mnt/beegfs_data/usr/maxx/dev/aimirror/ai-mirror/build/bin/ai-mirror-bin"
+    echo "  Path: $BIN"
     exit 0
   fi
 

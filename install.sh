@@ -540,13 +540,6 @@ UNIT_EOF
 		_log_file "Removed legacy /etc/profile.d/am.sh"
 	fi
 
-	# Configure git safe.directory using '*' wildcard at user level (--global)
-	# Use --replace-all to deduplicate; fallback to --add if key doesn't exist
-	# Note: --global (user-level) to avoid /etc/gitconfig bloat that affects all users
-	git config --global --replace-all safe.directory '*' 2>/dev/null ||
-		git config --global --add safe.directory '*' 2>/dev/null || true
-	_log_file "git safe.directory = * (global, user-level)"
-
 	# Install bash completion
 	local completion_src="${SCRIPT_DIR}/completions/am-completion.bash"
 	if [[ -f "$completion_src" ]]; then

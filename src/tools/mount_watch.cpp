@@ -38,6 +38,7 @@
 #include <pwd.h>
 #include <sstream>
 #include <string>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -75,7 +76,15 @@ static bool safe_remount(const fs::path &source, const fs::path &target) {
                  umount.stderr_output);
   }
 
-  // Step 2: Bind mount with current source (creates new kernel mount)
+  // Step 2: Ensure target file exists — lazy umount may have freed the
+  // mount point dentry on distributed filesystems (BeeGFS), causing
+  // mount --bind to fail with ENOENT.  Use direct open() (touch is not
+  // in exec_safe whitelist).
+  int touch_fd = ::open(target.c_str(), O_CREAT | O_WRONLY | O_NOFOLLOW, 0644);
+  if (touch_fd >= 0)
+    ::close(touch_fd);
+
+  // Step 3: Bind mount with current source (creates new kernel mount)
   auto bind = utils::exec_safe(
       {"mount", "--bind", source.string(), target.string()});
   if (bind.exit_code != 0) {

@@ -563,7 +563,14 @@ UNIT_EOF
 
 			# 3) 重载 daemon + 启用 timer + 启动 timer + 立即运行一次
 			if [[ $svc_rc -eq 0 && $tmr_rc -eq 0 ]]; then
-				sudo systemctl daemon-reload 2>/dev/null || true
+				if sudo systemctl daemon-reload 2>/dev/null; then
+					_log_file "systemd: daemon-reload OK"
+				else
+					# [防御] daemon-reload 可能因非交互 sudo 失败（post-merge hook）
+					# 此时 systemd 使用旧配置，但 service 文件已更新。
+					# 后续 install.sh 末尾的 daemon-reload 块会重试。
+					_log_file "systemd: daemon-reload failed (non-interactive sudo?)"
+				fi
 				sudo systemctl enable am-mount-watch.timer 2>/dev/null || true
 				sudo systemctl start am-mount-watch.timer 2>/dev/null || true
 				_log_file "systemd: timer enabled and started"

@@ -459,6 +459,36 @@ int main(int argc, char *argv[]) {
       }
 
       // ================================================================
+      // Layer 1b: Kernel mount table consistency check
+      // ================================================================
+      // A bind mount can be silently removed (umounted externally) while
+      // leaving the target file behind.  stat(target) returns 0 (the file
+      // exists), but the mount is MISSING — the file is a regular file,
+      // not a mount point.  Verify by checking /proc/self/mountinfo.
+      //
+      // mountinfo_sources is built from /proc/self/mountinfo at the start
+      // of each user's check cycle.  If target is in mountinfo_sources,
+      // the kernel has a mount entry for it → it's a real bind mount.
+      // If not, the mount was removed — remount it.
+      if (mountinfo_sources.find(mi.target) == mountinfo_sources.end()) {
+        // Mount is missing from kernel table but target file exists
+        logger->warn("  mount missing from kernel table: {} (src: {})",
+                     mi.target, mi.source);
+        // Try to remount using source from .am_status
+        if (source_exists(source)) {
+          if (safe_remount(source, target)) {
+            logger->info("  remounted missing mount: {} -> {}", mi.source,
+                         mi.target);
+            core::UserManager::update_state_mounts(username, home_dir,
+                                                   prefix);
+          }
+        } else {
+          logger->warn("  cannot remount, source missing: {}", mi.source);
+        }
+        continue;
+      }
+
+      // ================================================================
       // Layer 2: Inode comparison (non-virtual FS only)
       // ================================================================
       // On ext4/xfs/btrfs, a healthy bind mount preserves the source's

@@ -495,6 +495,10 @@ phase_install() {
 			log "配置 am-mount-watch systemd 服务（内联）..."
 			_log_file "Setting up am-mount-watch systemd service (inline)"
 
+			# 创建日志目录（world-readable）
+			sudo mkdir -p /var/log/ai-mirror
+			sudo chmod 0755 /var/log/ai-mirror
+
 			# 1) 创建 service 单元文件
 			local svc_file="/etc/systemd/system/am-mount-watch.service"
 			sudo tee "$svc_file" >/dev/null <<UNIT_EOF
@@ -508,16 +512,18 @@ Type=oneshot
 ExecStart=${PREFIX}/bin/${MOUNT_WATCH_NAME}
 User=root
 Group=root
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:/var/log/ai-mirror/mount-watch.log
+StandardError=append:/var/log/ai-mirror/mount-watch.log
 SyslogIdentifier=am-mount-watch
+LogFileMode=0644
 
-# Hardening
+# Hardening — ReadWritePaths for log dir
 CapabilityBoundingSet=
 PrivateTmp=yes
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only
+ReadWritePaths=/var/log/ai-mirror
 RestrictSUIDSGID=yes
 
 [Install]

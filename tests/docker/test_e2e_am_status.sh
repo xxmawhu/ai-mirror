@@ -233,7 +233,7 @@ section_isolation() {
 
   local out
   out=$(su - "$TU" -c "/usr/local/bin/ai-mirror-bin update /tmp 2>&1" || true)
-  echo "$out" | grep -qi "member of the.*ai-mirror group\|must be a member" && pass "6a binary blocks AI user (group check)" || fail "6a AI user not blocked"
+  echo "$out" | grep -qi "not a member\|must be a member" && pass "6a binary blocks AI user (group check)" || fail "6a AI user not blocked"
 
   userdel -r "$TU" 2>/dev/null || true
 }
@@ -333,7 +333,7 @@ section_wrapper() {
   local out
   out=$(su - "$TU" -c "/usr/local/bin/am update /tmp 2>&1" || true)
   # The am wrapper first checks is_ai_user(), then ai-mirror group
-  if echo "$out" | grep -qi "cannot use\|must be a member"; then
+  if echo "$out" | grep -qi "not a member"; then
     pass "9a am wrapper blocks AI user"
   else
     echo "   out: $out" >&2

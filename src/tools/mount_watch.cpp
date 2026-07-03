@@ -309,19 +309,28 @@ int main(int argc, char *argv[]) {
   // Any user with a readable $HOME/.am_status is treated as an AI user.
   // This replaces the old naming-convention + prefix approach.
   std::vector<std::pair<std::string, fs::path>> ai_users; // username, home_dir
+  int total_passwd_entries = 0;
+  int status_file_found = 0;
   {
     setpwent();
     while (auto *pw = getpwent()) {
+      total_passwd_entries++;
       std::string home(pw->pw_dir);
       if (home.empty() || home == "/" || home == "/root")
         continue;
       // Check for .am_status (NFS-safe: uses error_code)
       if (has_status_file(home)) {
         ai_users.emplace_back(std::string(pw->pw_name), fs::path(home));
+        status_file_found++;
+        if (status_file_found <= 3) {
+          logger->debug("  found AI user: {} (home: {})", pw->pw_name, home);
+        }
       }
     }
     endpwent();
   }
+  logger->info("passwd scan: {} entries, {} with .am_status", total_passwd_entries,
+               status_file_found);
 
   if (ai_users.empty()) {
     logger->info("No AI users found (no .am_status files found)");

@@ -484,6 +484,47 @@ int main(int argc, char *argv[]) {
       }
 
       // ================================================================
+      // Layer 1c: Source-target metadata comparison (ALL mounts)
+      // ================================================================
+      // When a bind mount's source file is atomically replaced (tmp+mv),
+      // the kernel mount may still reference the old (unlinked) inode.
+      // stat(target) returns 0 (mount exists) but the file content is
+      // stale or empty.  Compare source and target size/mtime to detect.
+      //
+      // This works even for "virtual" fstypes (BeeGFS) where the source
+      // in `.am_status` has been resolved to a real path by
+      // update_state_mounts or mountinfo recovery.
+      {
+        struct stat src_st, tgt_stat;
+        bool src_ok = (::stat(source.c_str(), &src_st) == 0);
+        bool tgt_ok = (::stat(target.c_str(), &tgt_stat) == 0);
+        if (src_ok && tgt_ok &&
+            (src_st.st_size != tgt_stat.st_size ||
+             src_st.st_mtime != tgt_stat.st_mtime)) {
+          // Metadata mismatch — source was replaced after mount was created
+          logger->warn("  metadata mismatch: src={}b/mtime={} tgt={}b/mtime={}",
+                       src_st.st_size, src_st.st_mtime,
+                       tgt_stat.st_size, tgt_stat.st_mtime);
+          // Determine the correct source path (mountinfo has it for BeeGFS)
+          auto mit = mountinfo_sources.find(mi.target);
+          fs::path correct_source =
+              (mit != mountinfo_sources.end()) ? fs::path(mit->second) : source;
+          if (source_exists(correct_source)) {
+            if (safe_remount(correct_source, target)) {
+              logger->info("  remounted (metadata fix): {} -> {}",
+                           correct_source.string(), mi.target);
+              core::UserManager::update_state_mounts(username, home_dir,
+                                                     prefix);
+            }
+          } else {
+            logger->warn("  cannot remount, source missing: {}",
+                         correct_source.string());
+          }
+          continue;
+        }
+      }
+
+      // ================================================================
       // Layer 2: Inode comparison (non-virtual FS only)
       // ================================================================
       // On ext4/xfs/btrfs, a healthy bind mount preserves the source's

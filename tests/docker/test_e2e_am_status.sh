@@ -344,6 +344,93 @@ section_wrapper() {
 }
 
 # ============================================================
+# SECTION 10: Metadata mismatch detection — atomic replace
+# ============================================================
+section_metadata_mismatch() {
+  log "\n## Section 10: Metadata mismatch (atomic replace)"
+  local TDIR="/tmp/metadata-test"
+  rm -rf "$TDIR" && mkdir -p "$TDIR"
+  local src="$TDIR/source.txt"
+  local tgt="$TDIR/target.txt"
+
+  # Step 1: create source with known content
+  echo "original content 550 bytes.................................................." > "$src"
+
+  # Step 2: bind mount (requires SYS_ADMIN)
+  touch "$tgt"
+  if ! mount --bind "$src" "$tgt" 2>/dev/null; then
+    skip "10: bind mount not supported"
+    rm -rf "$TDIR"
+    return
+  fi
+  pass "10a bind mount created"
+
+  # Step 3: verify target has original content
+  local tgt_content=$(cat "$tgt")
+  if [ "$tgt_content" = "$(cat "$src")" ]; then
+    pass "10b target has original content"
+  else
+    fail "10b target content mismatch"
+  fi
+
+  # Step 4: record stat before replace
+  local src_size_before=$(stat -c%s "$src")
+  local tgt_size_before=$(stat -c%s "$tgt")
+  local src_mtime_before=$(stat -c%Y "$src")
+  local tgt_mtime_before=$(stat -c%Y "$tgt")
+  log "   before: src=${src_size_before}b/mtime=${src_mtime_before} tgt=${tgt_size_before}b/mtime=${tgt_mtime_before}"
+
+  # Step 5: atomic replace source (tmp+mv)
+  echo "NEW content after atomic replace - 42 bytes here" > "$src.new"
+  mv "$src.new" "$src"
+
+  # Step 6: verify target has STALE content (original)
+  local tgt_after=$(cat "$tgt")
+  if [ "$tgt_after" = "original content 550 bytes.................................................." ]; then
+    pass "10c target has stale content (old inode)"
+  else
+    log "   target content: '$tgt_after'"
+    fail "10c target does not have stale content"
+  fi
+
+  # Step 7: verify source has NEW content
+  local src_after=$(cat "$src")
+  if [ "$src_after" = "NEW content after atomic replace - 42 bytes here" ]; then
+    pass "10d source has new content"
+  else
+    fail "10d source content wrong"
+  fi
+
+  # Step 8: RECORD metadata mismatch manually (stat comparison)
+  local src_size=$(stat -c%s "$src")
+  local tgt_size=$(stat -c%s "$tgt")
+  local src_mtime=$(stat -c%Y "$src")
+  local tgt_mtime=$(stat -c%Y "$tgt")
+  log "   after: src=${src_size}b/mtime=${src_mtime} tgt=${tgt_size}b/mtime=${tgt_mtime}"
+
+  if [ "$src_size" != "$tgt_size" ] || [ "$src_mtime" != "$tgt_mtime" ]; then
+    pass "10e metadata mismatch detected (size/mtime differ)"
+  else
+    fail "10e metadata did not differ"
+  fi
+
+  # Step 9: verify safe_remount fixes it (umount -l + mount --bind)
+  umount -l "$tgt" 2>/dev/null
+  mount --bind "$src" "$tgt" 2>/dev/null
+
+  local tgt_after_remount=$(cat "$tgt")
+  if [ "$tgt_after_remount" = "NEW content after atomic replace - 42 bytes here" ]; then
+    pass "10f remount fixed stale content"
+  else
+    log "   after remount: '$tgt_after_remount'"
+    fail "10f remount did not fix"
+  fi
+
+  umount "$tgt" 2>/dev/null || true
+  rm -rf "$TDIR"
+}
+
+# ============================================================
 # Main
 # ============================================================
 main() {
@@ -364,6 +451,7 @@ main() {
   section_write_symlink
   section_concurrent
   section_wrapper
+  section_metadata_mismatch
 
   local total=$((pass_count + fail_count + skip_count))
   log ""

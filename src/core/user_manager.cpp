@@ -142,22 +142,31 @@ static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
                              const std::string &main_user) {
   fs::path state_path = home_dir / STATE_FILE;
 
+  // Use atomic write: write to temp file, then rename.
+  // Crash during write leaves the original file intact instead of truncating
+  // it to empty (risk of O_TRUNC + crash).
+  fs::path tmp_path = state_path;
+  tmp_path += ".tmp";
+
   std::string content = make_state_content(info, main_user);
 
   utils::unique_fd ufd(
-      ::open(state_path.c_str(),
+      ::open(tmp_path.c_str(),
              O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644));
   if (!ufd) {
-    utils::get_logger()->error("Failed to write state file: {}",
-                               state_path.string());
+    utils::get_logger()->error("Failed to write state file (tmp): {}",
+                               tmp_path.string());
     return false;
   }
   if (::write(ufd.get(), content.c_str(), content.size()) !=
       static_cast<ssize_t>(content.size())) {
-    utils::get_logger()->error("Failed to write state file: {}",
-                               state_path.string());
+    utils::get_logger()->error("Failed to write state file (tmp): {}",
+                               tmp_path.string());
+    ::unlink(tmp_path.c_str());
     return false;
   }
+
+  // Chown temp file before rename (rename preserves source inode's owner).
   // [P0-chown] Chown state file to AI user so `am update` can read/write it.
   // When write_state_file is called by am-mount-watch (running as root), the
   // file would otherwise stay root:root, blocking non-root reads.
@@ -167,6 +176,19 @@ static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
     utils::get_logger()->warn("Failed to chown state file to {}:{}: {}",
                               info.uid, info.gid, strerror(errno));
   }
+  // fd closed by unique_fd destructor
+
+  // Atomic rename: replace target atomically on the same filesystem.
+  // Other readers see either the old file or the new file, never a
+  // truncated/empty file.
+  if (::rename(tmp_path.c_str(), state_path.c_str()) != 0) {
+    utils::get_logger()->error("Failed to rename state file: {} -> {}: {}",
+                               tmp_path.string(), state_path.string(),
+                               strerror(errno));
+    ::unlink(tmp_path.c_str());
+    return false;
+  }
+
   return true;
 }
 

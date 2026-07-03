@@ -411,12 +411,11 @@ phase_install() {
 	local _src_chk _dst_chk _attempt
 	for _attempt in 1 2 3; do
 		_src_chk=$(md5sum "${BUILD_DIR}/bin/${WRAPPER_NAME}" 2>/dev/null | cut -d' ' -f1)
-		if sudo install -m 0755 "${BUILD_DIR}/bin/${WRAPPER_NAME}" "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null; then
-			_dst_chk=$(md5sum "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null | cut -d' ' -f1)
-			if [[ "$_src_chk" == "$_dst_chk" ]]; then
-				_install_verified=true; break
-			fi
-		fi
+		sudo rm -f "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null; sleep 1
+		sudo cp "${BUILD_DIR}/bin/${WRAPPER_NAME}" "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null
+		sudo chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null; sync 2>/dev/null || true
+		_dst_chk=$(md5sum "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null | cut -d' ' -f1)
+		if [[ "$_src_chk" == "$_dst_chk" ]]; then _install_verified=true; break; fi
 		sleep 1
 	done
 	if ! $_install_verified; then
@@ -429,12 +428,11 @@ phase_install() {
 	_install_verified=false
 	for _attempt in 1 2 3; do
 		_src_chk=$(md5sum "${BUILD_DIR}/bin/${BIN_NAME}" 2>/dev/null | cut -d' ' -f1)
-		if sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null; then
-			_dst_chk=$(md5sum "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null | cut -d' ' -f1)
-			if [[ "$_src_chk" == "$_dst_chk" ]]; then
-				_install_verified=true; break
-			fi
-		fi
+		sudo rm -f "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null; sleep 1
+		sudo cp "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null
+		sudo chmod 0755 "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null; sync 2>/dev/null || true
+		_dst_chk=$(md5sum "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null | cut -d' ' -f1)
+		if [[ "$_src_chk" == "$_dst_chk" ]]; then _install_verified=true; break; fi
 		sleep 1
 	done
 	if ! $_install_verified; then
@@ -455,27 +453,32 @@ phase_install() {
 
 	# Install am-mount-watch (standalone mount health checker for systemd)
 	if [[ -f "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" ]]; then
-		# Build expected checksum (source binary) for verification
+		_log_file "install ${MOUNT_WATCH_NAME}: installing from ${BUILD_DIR}/bin/..."
 		local SRC_CHECK
 		SRC_CHECK=$(md5sum "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null | cut -d' ' -f1)
 		_log_file "install ${MOUNT_WATCH_NAME}: src_checksum=${SRC_CHECK}"
 
-		# sudo install 在某些环境下可能静默失败（缓存/权限），
-		# 这里尝试 3 次，每次间隔 1 秒，并校验 checksum
+		# Use explicit rm+cp+chmod instead of 'sudo install' to avoid
+		# silent failures observed in post-merge hook context where
+		# sudo install reports success but target binary unchanged.
 		local INSTALL_OK=false
 		for attempt in 1 2 3; do
-			if sudo install -m 0755 "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null; then
-				local DST_CHECK
-				DST_CHECK=$(md5sum "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null | cut -d' ' -f1)
-				if [[ "$SRC_CHECK" == "$DST_CHECK" ]]; then
-					INSTALL_OK=true
-					_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} OK (checksum match)"
-					break
-				else
-					_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} checksum mismatch (src=${SRC_CHECK} dst=${DST_CHECK})"
-				fi
+			# Remove target first to bust any FS cache or hardlink
+			sudo rm -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null
+			sleep 1
+			# Copy fresh from source
+			sudo cp "${BUILD_DIR}/bin/${MOUNT_WATCH_NAME}" "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null
+			sudo chmod 0755 "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null
+			sync 2>/dev/null || true
+
+			local DST_CHECK
+			DST_CHECK=$(md5sum "${PREFIX}/bin/${MOUNT_WATCH_NAME}" 2>/dev/null | cut -d' ' -f1)
+			if [[ "$SRC_CHECK" == "$DST_CHECK" ]]; then
+				INSTALL_OK=true
+				_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} OK (checksum match)"
+				break
 			else
-				_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} failed"
+				_log_file "install ${MOUNT_WATCH_NAME}: attempt ${attempt} checksum mismatch (src=${SRC_CHECK} dst=${DST_CHECK})"
 			fi
 			sleep 1
 		done

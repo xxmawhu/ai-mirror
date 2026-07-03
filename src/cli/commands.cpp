@@ -2071,19 +2071,19 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
   std::optional<core::UserInfo> state;
   std::error_code ec;
 
+  // Track the closest corrupted .am_status for the error message below
+  fs::path corrupted_path;
   while (!search_path.empty() && search_path != "/" && search_path != "/home") {
     state = core::UserManager::read_state(search_path);
-    if (state)
+    if (state) {
+      corrupted_path.clear(); // found valid state, clear any corruption hint
       break;
-    // If .am_status exists but read_state failed (corrupted), tell user
+    }
+    // If .am_status exists but read_state failed, record for error message
     std::error_code ec2;
-    if (fs::exists(search_path / ".am_status", ec2) && !ec2) {
-      std::cerr << "error: .am_status is corrupted in " << search_path.string()
-                << std::endl;
-      std::cerr << "  Fix: run 'am update " << search_path.string()
-                << "' to repair." << std::endl;
-      // Continue walking up — corrupted .am_status might be in a sub-path,
-      // the parent might have a valid one
+    if (corrupted_path.empty() &&
+        fs::exists(search_path / ".am_status", ec2) && !ec2) {
+      corrupted_path = search_path;
     }
     search_path = search_path.parent_path();
   }

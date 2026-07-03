@@ -130,12 +130,63 @@ void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
   }
 }
 
-static bool verify_state_content(const std::string &content) {
-  // [P0-remove-pow] PoW 校验已移除（2026-06-30）：
-  // 之前要求 md5 以 "000" 开头，但没有安全价值且导致 am update 瘫痪。
-  // 现在只验证 JSON 可解析，不检查 md5 前缀。
-  auto j = nlohmann::json::parse(content, nullptr, false);
-  return !j.is_discarded();
+// Validate that .am_status fields are safe for root-level operations.
+// This runs BEFORE any chown/chgrp/mount operations that use these values.
+// An attacker who gains write access to .am_status could set home_dir="/"
+// and trigger a root chgrp/chmod on system directories.
+static bool verify_state_safe(const nlohmann::json &j,
+                              const fs::path &state_dir) {
+  // 1. username must be non-empty
+  auto username = j.value("username", "");
+  if (username.empty()) {
+    utils::get_logger()->error("verify: .am_status has empty 'username'");
+    return false;
+  }
+
+  // 2. home_dir must match the directory containing .am_status
+  //    Prevents home_dir="/" or home_dir="/etc" attacks
+  auto home_dir = j.value("home_dir", "");
+  if (home_dir.empty()) {
+    utils::get_logger()->error("verify: .am_status has empty 'home_dir'");
+    return false;
+  }
+  if (fs::weakly_canonical(home_dir) != fs::weakly_canonical(state_dir)) {
+    utils::get_logger()->error(
+        "verify: .am_status 'home_dir' mismatch: file says '{}', actual '{}'",
+        home_dir, state_dir.string());
+    return false;
+  }
+
+  // 3. username must exist in /etc/passwd
+  struct passwd *pw = getpwnam(username.c_str());
+  if (!pw) {
+    utils::get_logger()->error("verify: AI user '{}' not found in /etc/passwd",
+                               username);
+    return false;
+  }
+
+  // 4. uid/gid in file must match passwd
+  uid_t file_uid = j.value("uid", uid_t(0));
+  gid_t file_gid = j.value("gid", gid_t(0));
+  if (file_uid != pw->pw_uid || file_gid != pw->pw_gid) {
+    utils::get_logger()->error(
+        "verify: uid/gid mismatch for '{}': file={}/{} passwd={}/{}", username,
+        file_uid, file_gid, pw->pw_uid, pw->pw_gid);
+    return false;
+  }
+
+  // 5. main_user must exist in /etc/passwd
+  auto main_user = j.value("main_user", "");
+  if (!main_user.empty()) {
+    struct passwd *main_pw = getpwnam(main_user.c_str());
+    if (!main_pw) {
+      utils::get_logger()->error(
+          "verify: main_user '{}' not found in /etc/passwd", main_user);
+      return false;
+    }
+  }
+
+  return true;
 }
 
 static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
@@ -189,71 +240,93 @@ static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
 
 static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
   fs::path state_path = home_dir / STATE_FILE;
-  std::ifstream ifs(state_path);
-  if (!ifs.is_open())
+
+  // Open with O_NOFOLLOW to prevent symlink attacks: if .am_status has been
+  // replaced with a symlink to an arbitrary file (e.g. /etc/shadow), open
+  // fails (ELOOP) instead of following and reading attacker-controlled data.
+  // Also limit to a reasonable max size (32MB) to prevent OOM on maliciously
+  // inflated files.
+  static constexpr size_t MAX_STATE_SIZE = 32 * 1024 * 1024; // 32 MiB
+  utils::unique_fd ufd(
+      ::open(state_path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+  if (!ufd)
     return std::nullopt;
+
+  // Read file content with size limit
+  std::string content;
+  content.resize(4096);
+  ssize_t n;
+  size_t total = 0;
+  while ((n = ::read(ufd.get(), content.data() + total,
+                     content.size() - total - 1)) > 0) {
+    total += static_cast<size_t>(n);
+    if (total >= MAX_STATE_SIZE) {
+      utils::get_logger()->error("State file too large (>32 MiB): {}",
+                                 state_path.string());
+      return std::nullopt;
+    }
+    content.resize(content.size() * 2);
+  }
+  content.resize(total);
+
+  if (content.empty()) {
+    return std::nullopt;
+  }
+
+  // Parse JSON with exception to get detailed error info
+  nlohmann::json j;
   try {
-    std::string content((std::istreambuf_iterator<char>(ifs)),
-                        std::istreambuf_iterator<char>());
-    ifs.close();
-    if (content.empty())
-      return std::nullopt;
+    j = nlohmann::json::parse(content);
+  } catch (const nlohmann::json::parse_error &e) {
+    // Show exact byte position and brief message
+    auto err_msg = fmt::format("JSON parse error at byte {}: {}", e.byte,
+                               e.what());
+    utils::get_logger()->error("State file is corrupted: {} — {}",
+                               state_path.string(), err_msg);
+    return std::nullopt;
+  }
 
-    // Parse JSON with exception to get detailed error info
-    nlohmann::json j;
-    try {
-      j = nlohmann::json::parse(content);
-    } catch (const nlohmann::json::parse_error &e) {
-      // Show exact byte position and brief message
-      auto err_msg = fmt::format("JSON parse error at byte {}: {}", e.byte,
-                                 e.what());
-      utils::get_logger()->error("State file is corrupted: {} — {}",
-                                 state_path.string(), err_msg);
-      return std::nullopt;
-    }
+  // Validate critical fields before using them in root-level operations
+  if (!verify_state_safe(j, home_dir)) {
+    utils::get_logger()->error("State file rejected (unsafe fields): {}",
+                               state_path.string());
+    return std::nullopt;
+  }
 
-    if (!verify_state_content(content)) {
-      utils::get_logger()->error(
-          "State file content validation failed: {} — structure missing or "
-          "invalid fields",
-          state_path.string());
-      return std::nullopt;
-    }
+  UserInfo info;
+  info.username = j.value("username", "");
+  info.uid = j.value("uid", 0);
+  info.gid = j.value("gid", 0);
+  info.home_dir = j.value("home_dir", "");
+  info.main_user = j.value("main_user", "");
+  info.project_path = j.value("project_path", "");
+  info.path_hash = j.value("path_hash", "");
+  info.exists = true;
+  info.error = "";
 
-    UserInfo info;
-    info.username = j.value("username", "");
-    info.uid = j.value("uid", 0);
-    info.gid = j.value("gid", 0);
-    info.home_dir = j.value("home_dir", "");
-    info.main_user = j.value("main_user", "");
-    info.project_path = j.value("project_path", "");
-    info.path_hash = j.value("path_hash", "");
-    info.exists = true;
-    info.error = "";
-
-    // Parse mounts array (backward compatible: missing mounts field → empty)
-    if (j.contains("mounts") && j["mounts"].is_array()) {
-      for (const auto &mj : j["mounts"]) {
-        MountInfo mi;
-        mi.source = mj.value("source", "");
-        mi.target = mj.value("target", "");
-        mi.fstype = mj.value("fstype", "");
-        mi.read_only = mj.value("read_only", true);
-        if (mj.contains("source_stat")) {
-          const auto &sj = mj["source_stat"];
-          mi.source_stat.ino = sj.value("ino", ino_t(0));
-          mi.source_stat.dev = sj.value("dev", dev_t(0));
-          mi.source_stat.mode = sj.value("mode", mode_t(0));
-          mi.source_stat.uid = sj.value("uid", uid_t(0));
-          mi.source_stat.gid = sj.value("gid", gid_t(0));
-          mi.source_stat.size = sj.value("size", off_t(0));
-          mi.source_stat.mtime = sj.value("mtime", time_t(0));
-        }
-        info.mounts.push_back(std::move(mi));
+  // Parse mounts array (backward compatible: missing mounts field → empty)
+  if (j.contains("mounts") && j["mounts"].is_array()) {
+    for (const auto &mj : j["mounts"]) {
+      MountInfo mi;
+      mi.source = mj.value("source", "");
+      mi.target = mj.value("target", "");
+      mi.fstype = mj.value("fstype", "");
+      mi.read_only = mj.value("read_only", true);
+      if (mj.contains("source_stat")) {
+        const auto &sj = mj["source_stat"];
+        mi.source_stat.ino = sj.value("ino", ino_t(0));
+        mi.source_stat.dev = sj.value("dev", dev_t(0));
+        mi.source_stat.mode = sj.value("mode", mode_t(0));
+        mi.source_stat.uid = sj.value("uid", uid_t(0));
+        mi.source_stat.gid = sj.value("gid", gid_t(0));
+        mi.source_stat.size = sj.value("size", off_t(0));
+        mi.source_stat.mtime = sj.value("mtime", time_t(0));
       }
+      info.mounts.push_back(std::move(mi));
     }
+  }
 
-    // Backward compatibility: if project_path/path_hash missing, derive from
+  // Backward compatibility: if project_path/path_hash missing, derive from
     // username Username format: {prefix}{user}_{hash6} → extract hash6 as
     // path_hash
     if (info.path_hash.empty() && !info.username.empty()) {
@@ -317,10 +390,7 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
       }
     }
 
-    return info;
-  } catch (...) {
-    return std::nullopt;
-  }
+  return info;
 }
 
 static unsigned int compute_next_seq(uid_t base_uid) {

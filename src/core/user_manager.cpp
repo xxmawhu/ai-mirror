@@ -1096,8 +1096,10 @@ bool UserManager::rebuild_state(const fs::path &home_dir,
   }
 
   // 5. Fix home_dir ownership if it doesn't match the AI user
-  //    (e.g. accidentally chowned to main user, or after user re-creation)
-  {
+  //    (e.g. accidentally chowned to main user, or after user re-creation).
+  //    chown requires root — skip with warning if not running as root.
+  //    Only the directory itself is chowned, not its contents.
+  if (geteuid() == 0) {
     struct stat dst_st;
     if (::stat(home_dir.c_str(), &dst_st) == 0 &&
         dst_st.st_uid != info.uid) {
@@ -1110,6 +1112,15 @@ bool UserManager::rebuild_state(const fs::path &home_dir,
             "rebuild_state: cannot chown {} to {}:{}: {}",
             home_dir.string(), info.uid, info.gid, strerror(errno));
       }
+    }
+  } else {
+    struct stat dst_st;
+    if (::stat(home_dir.c_str(), &dst_st) == 0 &&
+        dst_st.st_uid != info.uid) {
+      utils::get_logger()->warn(
+          "rebuild_state: would chown {} (uid={} != expected {}), "
+          "but not running as root",
+          home_dir.string(), dst_st.st_uid, info.uid);
     }
   }
 

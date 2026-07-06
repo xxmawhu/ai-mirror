@@ -883,10 +883,37 @@ bool UserManager::update_state_mounts(const std::string &username,
   // 1. Read existing state
   auto info_opt = read_state_file(home_dir);
   if (!info_opt) {
-    utils::get_logger()->error(
-        "update_state_mounts: cannot read .am_status for {} in {}", username,
-        home_dir.string());
-    return false;
+    // read_state_file may have rejected the file due to uid/gid mismatch
+    // (user was recreated with new uid).  Try full rebuild from passwd +
+    // /proc/mounts before giving up.
+    utils::get_logger()->warn(
+        "update_state_mounts: cannot read .am_status for {} in {}, "
+        "attempting rebuild",
+        username, home_dir.string());
+
+    // Derive main_user from username format: {prefix}{main_user}_{hash}
+    std::string main_user;
+    if (prefix.empty()) {
+      main_user = utils::get_effective_username();
+    } else {
+      auto rest = username.substr(prefix.size());
+      auto pos = rest.find('_');
+      if (pos != std::string::npos) {
+        main_user = rest.substr(0, pos);
+      }
+    }
+
+    if (!main_user.empty() &&
+        rebuild_state(home_dir, username, main_user, home_dir, prefix)) {
+      info_opt = read_state_file(home_dir);
+    }
+
+    if (!info_opt) {
+      utils::get_logger()->error(
+          "update_state_mounts: cannot read .am_status for {} in {}",
+          username, home_dir.string());
+      return false;
+    }
   }
 
   // 2. Get current mount list via Graft (reads /proc/mounts → device + fstype)

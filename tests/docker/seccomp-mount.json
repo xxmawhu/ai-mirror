@@ -1,0 +1,27 @@
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    {
+      "names": ["mount", "umount", "umount2"],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "read", "write", "open", "close", "stat", "fstat", "lstat",
+        "mmap", "munmap", "mprotect", "brk", "sbrk",
+        "exit", "exit_group", "nanosleep", "clock_gettime",
+        "gettid", "getpid", "getuid", "getgid", "geteuid", "getegid",
+        "futex", "clone", "fork", "vfork", "execve", "execveat",
+        "openat", "newfstatat", "readlink", "readlinkat",
+        "dup", "dup2", "dup3", "fcntl", "ioctl",
+        "mkdir", "mkdirat", "rmdir", "unlink", "unlinkat", "rename",
+        "chdir", "fchdir", "getcwd",
+        "socket", "connect", "sendto", "recvfrom",
+        "bind", "listen", "accept",
+        "statfs", "fstatfs"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    }
+  ]
+}

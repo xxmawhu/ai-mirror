@@ -1095,7 +1095,25 @@ bool UserManager::rebuild_state(const fs::path &home_dir,
     return false;
   }
 
-  // 5. Verify the written file is readable
+  // 5. Fix home_dir ownership if it doesn't match the AI user
+  //    (e.g. accidentally chowned to main user, or after user re-creation)
+  {
+    struct stat dst_st;
+    if (::stat(home_dir.c_str(), &dst_st) == 0 &&
+        dst_st.st_uid != info.uid) {
+      if (::chown(home_dir.c_str(), info.uid, info.gid) == 0) {
+        utils::get_logger()->info(
+            "rebuild_state: fixed home_dir ownership {} -> {}:{}",
+            home_dir.string(), info.uid, info.gid);
+      } else {
+        utils::get_logger()->warn(
+            "rebuild_state: cannot chown {} to {}:{}: {}",
+            home_dir.string(), info.uid, info.gid, strerror(errno));
+      }
+    }
+  }
+
+  // 6. Verify the written file is readable
   auto verify = read_state_file(home_dir);
   if (!verify) {
     utils::get_logger()->error(

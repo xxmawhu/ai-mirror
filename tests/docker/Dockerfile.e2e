@@ -1,8 +1,11 @@
 # tests/docker/Dockerfile.e2e
 # Builds from source, runs .am_status E2E tests with real binary.
-# Usage (Section 10 requires --privileged for mount --bind):
+# Usage (Section 10 requires mount --bind — use seccomp=unconfined):
 #   docker build -t am-e2e -f tests/docker/Dockerfile.e2e .
-#   docker run --rm --privileged am-e2e
+#   docker run --rm --cap-add SYS_ADMIN --security-opt seccomp=unconfined am-e2e
+# Note: --privileged also works but is overkill.  The mount() syscall is
+# blocked by Docker's default seccomp profile, not by capability set.
+# SYS_ADMIN + seccomp=unconfined is sufficient and safer.
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive

@@ -356,7 +356,7 @@ section_metadata_mismatch() {
   # Step 1: create source with known content
   echo "original content 550 bytes.................................................." > "$src"
 
-  # Step 2: bind mount (requires SYS_ADMIN)
+  # Step 2: bind mount (requires --cap-add SYS_ADMIN --security-opt seccomp=unconfined)
   touch "$tgt"
   if ! mount --bind "$src" "$tgt" 2>/dev/null; then
     skip "10: bind mount not supported"

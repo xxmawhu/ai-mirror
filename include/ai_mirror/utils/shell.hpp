@@ -89,10 +89,13 @@ bool is_group_member(const std::string &group_name);
 //   have the same group memberships as the main user, with EXCEPTIONS:
 //     1. 'ai-mirror' group is NEVER added (sudoers root access — security)
 //     2. AI user's own primary group is NEVER removed
+//     3. Other AI users' per-project groups (matching the pattern
+//        "{prefix}{main_user}_*", e.g. "imaxx_*") are NEVER added — they
+//        belong to individual projects, not shared across AI users.
 //
 // ALGORITHM:
-//   target_groups = main_user_groups - {ai-mirror}
-//   to_add        = target_groups - ai_user_current_groups
+//   target_groups = main_user_groups - {ai-mirror, ai_primary_group,
+//   ai_user_groups} to_add        = target_groups - ai_user_current_groups
 //   to_remove     = ai_user_current_groups - target_groups - {ai_primary_group}
 //
 // PARAMS:

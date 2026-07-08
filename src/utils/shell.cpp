@@ -818,13 +818,32 @@ int reconcile_ai_user_groups(const std::string &ai_user,
     ai_primary_group = ai_primary_gr->gr_name;
   }
 
+  // ── Derive AI group prefix ──────────────────────────────────────────
+  // AI user groups follow the pattern: {prefix}{main_user}_{suffix}
+  // e.g. "imaxx_a3f2b1", "imaxx_api_dev", "imaxx_aimirror"
+  // We must exclude ALL of these from the target — they are per-project
+  // groups that belong to other AI users, not shared system groups.
+  std::string ai_group_prefix;
+  {
+    size_t main_pos = ai_user.find(main_user);
+    if (main_pos != std::string::npos && main_pos > 0) {
+      std::string prefix = ai_user.substr(0, main_pos);
+      ai_group_prefix = prefix + main_user + "_"; // e.g. "imaxx_"
+    }
+  }
+
   // ── Compute target groups ───────────────────────────────────────────
   // Target = main_user's groups minus:
   //   1. 'ai-mirror'  — SECURITY: sudoers root access, never for AI users
   //   2. ai_primary_group — AI user's own group, never removed
+  //   3. Any group starting with ai_group_prefix — these are other AI
+  //      users' per-project groups, not shared system groups
   std::set<std::string> target_groups;
   for (const auto &g : main_groups) {
-    if (g != "ai-mirror" && g != ai_primary_group) {
+    bool is_ai_group = !ai_group_prefix.empty() &&
+                       g.size() > ai_group_prefix.size() &&
+                       g.substr(0, ai_group_prefix.size()) == ai_group_prefix;
+    if (g != "ai-mirror" && g != ai_primary_group && !is_ai_group) {
       target_groups.insert(g);
     }
   }

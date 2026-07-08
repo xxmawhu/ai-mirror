@@ -747,23 +747,16 @@ bool is_group_member(const std::string &group_name) {
 
   return false;
 }
-
-// Reconcile AI user's supplementary groups to match the main user's groups.
+// Reconcile AI user's supplementary groups against the configured groups
+// from .ai-mirror.toml's [ai-user] groups field.
 // See shell.hpp for full design documentation.
-int reconcile_ai_user_groups(const std::string &ai_user,
-                             const std::string &main_user) {
+int reconcile_ai_user_groups(
+    const std::string &ai_user, const std::string &main_user,
+    const std::vector<std::string> &configured_groups) {
   auto logger = get_logger();
   int changes = 0;
 
-  // Resolve main user
-  struct passwd *main_pw = getpwnam(main_user.c_str());
-  if (!main_pw) {
-    logger->error("reconcile_ai_user_groups: cannot resolve main user '{}'",
-                  main_user);
-    return -1;
-  }
-
-  // Resolve AI user
+  // Resolve AI user (needed for primary group)
   struct passwd *ai_pw = getpwnam(ai_user.c_str());
   if (!ai_pw) {
     logger->error("reconcile_ai_user_groups: cannot resolve AI user '{}'",
@@ -806,9 +799,7 @@ int reconcile_ai_user_groups(const std::string &ai_user,
     return names;
   };
 
-  // ── Get current groups ──────────────────────────────────────────────
-  std::set<std::string> main_groups =
-      get_group_names(main_user, main_pw->pw_gid);
+  // ── Get AI user's current groups ────────────────────────────────────
   std::set<std::string> ai_groups = get_group_names(ai_user, ai_pw->pw_gid);
 
   // Get AI user's primary group name (never remove this)
@@ -818,38 +809,39 @@ int reconcile_ai_user_groups(const std::string &ai_user,
     ai_primary_group = ai_primary_gr->gr_name;
   }
 
-  // ── Derive AI group prefix ──────────────────────────────────────────
-  // AI user groups follow the pattern: {prefix}{main_user}_{suffix}
-  // e.g. "imaxx_a3f2b1", "imaxx_api_dev", "imaxx_aimirror"
-  // We must exclude ALL of these from the target — they are per-project
-  // groups that belong to other AI users, not shared system groups.
-  std::string ai_group_prefix;
-  {
-    size_t main_pos = ai_user.find(main_user);
-    if (main_pos != std::string::npos && main_pos > 0) {
-      std::string prefix = ai_user.substr(0, main_pos);
-      ai_group_prefix = prefix + main_user + "_"; // e.g. "imaxx_"
+  // ── Compute target groups ───────────────────────────────────────────
+  // Target = configured_groups from .ai-mirror.toml plus the main user's
+  // group (needed for file access), minus 'ai-mirror' (security block).
+  //
+  // The .ai-mirror.toml is the SOLE AUTHORITY.  We do NOT use the main
+  // user's system group membership because:
+  //   - The main user may have been added to AI-user-specific groups
+  //     (e.g. imaxx_*) by legacy am create flow
+  //   - The config explicitly lists what groups AI users should have
+  std::set<std::string> target_groups;
+
+  // Add main user's primary group (e.g. "maxx") — needed for file access
+  // so main user can enter AI user's home directory
+  struct passwd *main_pw = getpwnam(main_user.c_str());
+  if (main_pw) {
+    struct group *main_gr = getgrgid(main_pw->pw_gid);
+    if (main_gr) {
+      target_groups.insert(main_gr->gr_name);
     }
   }
 
-  // ── Compute target groups ───────────────────────────────────────────
-  // Target = main_user's groups minus:
-  //   1. 'ai-mirror'  — SECURITY: sudoers root access, never for AI users
-  //   2. ai_primary_group — AI user's own group, never removed
-  //   3. Any group starting with ai_group_prefix — these are other AI
-  //      users' per-project groups, not shared system groups
-  std::set<std::string> target_groups;
-  for (const auto &g : main_groups) {
-    bool is_ai_group = !ai_group_prefix.empty() &&
-                       g.size() > ai_group_prefix.size() &&
-                       g.substr(0, ai_group_prefix.size()) == ai_group_prefix;
-    if (g != "ai-mirror" && g != ai_primary_group && !is_ai_group) {
-      target_groups.insert(g);
+  // Add configured groups (from .ai-mirror.toml [ai-user] groups)
+  for (const auto &g : configured_groups) {
+    if (g == "ai-mirror") {
+      logger->warn("Config contains 'ai-mirror' in ai-user.groups — "
+                   "SECURITY BLOCKED, will not add");
+      continue;
     }
+    target_groups.insert(g);
   }
 
   // ── Compute delta ───────────────────────────────────────────────────
-  // Groups to add: target_groups - ai_groups
+  // Groups to add: target - current
   std::vector<std::string> to_add;
   for (const auto &g : target_groups) {
     if (ai_groups.find(g) == ai_groups.end()) {
@@ -857,7 +849,7 @@ int reconcile_ai_user_groups(const std::string &ai_user,
     }
   }
 
-  // Groups to remove: ai_groups - target_groups - ai_primary_group
+  // Groups to remove: current - target - ai_primary_group
   std::vector<std::string> to_remove;
   for (const auto &g : ai_groups) {
     if (g == ai_primary_group)
@@ -896,8 +888,7 @@ int reconcile_ai_user_groups(const std::string &ai_user,
   }
 
   if (changes > 0) {
-    logger->info("Reconciled groups for '{}' (main='{}'): {} changes", ai_user,
-                 main_user, changes);
+    logger->info("Reconciled groups for '{}': {} changes", ai_user, changes);
   }
 
   return changes;

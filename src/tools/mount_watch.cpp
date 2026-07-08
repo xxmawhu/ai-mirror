@@ -300,8 +300,12 @@ int main(int argc, char *argv[]) {
                      system_cfg.string(), e.what());
       }
     } else {
-      logger->info("No system config found at {}, using defaults (prefix={})",
-                   system_cfg.string(), prefix);
+      config = core::ConfigParser::load_default();
+      prefix = config.user.prefix.empty() ? "i" : config.user.prefix;
+      logger->info(
+          "No system config at {}, using defaults (prefix={}, groups={})",
+          system_cfg.string(), prefix,
+          config.ai_user.groups.empty() ? "(none)" : config.ai_user.groups[0]);
     }
   }
 
@@ -373,16 +377,45 @@ int main(int argc, char *argv[]) {
       main_user = user_info->main_user;
     }
 
+    // ── Load user config from ~main_user/.ai-mirror.toml ─────────────
+    // The [ai-user] groups in this config are the SOLE AUTHORITY for
+    // what supplementary groups AI users should have.  The system
+    // config at /etc/ai-mirror/config.toml is a fallback.
+    static std::string cached_main_user;
+    static std::vector<std::string> user_group_config;
+    if (!main_user.empty() && main_user != cached_main_user) {
+      user_group_config = config.ai_user.groups; // system config baseline
+      fs::path user_cfg =
+          fs::path(utils::get_home_dir(main_user)) / ".ai-mirror.toml";
+      std::error_code ec;
+      if (fs::exists(user_cfg, ec)) {
+        try {
+          auto uc = core::ConfigParser::load(user_cfg);
+          if (!uc.ai_user.groups.empty()) {
+            user_group_config = uc.ai_user.groups;
+            logger->info("Loaded [ai-user] groups from {}: {} group(s)",
+                         user_cfg.string(), user_group_config.size());
+          }
+        } catch (const std::exception &e) {
+          logger->warn("Failed to load {}, using system defaults: {}",
+                       user_cfg.string(), e.what());
+        }
+      }
+      cached_main_user = main_user;
+    }
+
     // ── Group audit & reconciliation ───────────────────────────────────
-    // Ensure AI user's supplementary groups match the main user's groups.
-    // This automatically cleans up any unauthorized group memberships
-    // (e.g. 'ai-mirror') and adds missing groups (e.g. 'docker').
+    // Reconcile AI user's supplementary groups against the configured
+    // groups from .ai-mirror.toml [ai-user] groups.
+    // This cleans up unauthorized group memberships (e.g. 'ai-mirror',
+    // other AI users' imaxx_* groups) and adds any missing groups.
     // Runs on every mount-watch cycle for continuous compliance.
     if (!main_user.empty()) {
-      int grp_changes = utils::reconcile_ai_user_groups(username, main_user);
+      int grp_changes = utils::reconcile_ai_user_groups(username, main_user,
+                                                        user_group_config);
       if (grp_changes > 0) {
-        logger->info("  user {}: reconciled {} group change(s) with main '{}'",
-                     username, grp_changes, main_user);
+        logger->info("  user {}: reconciled {} group change(s)", username,
+                     grp_changes);
       } else if (grp_changes < 0) {
         logger->warn("  user {}: group reconciliation failed (main='{}')",
                      username, main_user);

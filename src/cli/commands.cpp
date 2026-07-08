@@ -318,14 +318,13 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                   << "' group: " << supp_result.stderr_output << std::endl;
       }
     }
-
-    // Reconcile AI user's supplementary groups against main user's groups.
-    // This ensures the AI user has all the groups the main user has (except
-    // 'ai-mirror' which is security-blocked), and removes any groups that the
-    // main user doesn't have.  This is the group-authoritative reconciliation
-    // layer — the config-based groups above are an additional allow-list.
+    // Reconcile AI user's supplementary groups against the configured
+    // groups from .ai-mirror.toml [ai-user] groups.  This removes any
+    // group that the AI user has but is NOT in the config (cleanup), and
+    // adds any group that IS in the config but missing (belt-and-suspenders).
     {
-      int grp_changes = utils::reconcile_ai_user_groups(username, main_user);
+      int grp_changes = utils::reconcile_ai_user_groups(
+          username, main_user, ctx.config.ai_user.groups);
       if (grp_changes > 0) {
         fixes += grp_changes;
         utils::get_logger()->info(

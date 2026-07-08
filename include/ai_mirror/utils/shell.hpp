@@ -82,33 +82,38 @@ uid_t get_login_uid();
 // Checks both primary group (from passwd entry) and supplementary groups.
 bool is_group_member(const std::string &group_name);
 
-// Reconcile AI user's supplementary groups to match the main user's groups.
+// Reconcile AI user's supplementary groups against the configured groups
+// from .ai-mirror.toml's [ai-user] groups field.
 //
 // DESIGN:
-//   The main user's group membership defines the baseline. AI users should
-//   have the same group memberships as the main user, with EXCEPTIONS:
-//     1. 'ai-mirror' group is NEVER added (sudoers root access — security)
-//     2. AI user's own primary group is NEVER removed
-//     3. Other AI users' per-project groups (matching the pattern
-//        "{prefix}{main_user}_*", e.g. "imaxx_*") are NEVER added — they
-//        belong to individual projects, not shared across AI users.
+//   The .ai-mirror.toml [ai-user] groups config is the SOLE AUTHORITY for
+//   what supplementary groups an AI user should have.  The main user's
+//   system group membership is NOT used as reference because the main user
+//   may have been added to AI-user-specific groups (imaxx_*) by legacy code.
+//
+// RULES:
+//   1. AI user gets exactly: configured_groups + main_user_group
+//   2. 'ai-mirror' is NEVER added (sudoers root access — security)
+//   3. AI user's own primary group is NEVER removed
+//   4. Any group NOT in target is removed (cleans up legacy pollution)
 //
 // ALGORITHM:
-//   target_groups = main_user_groups - {ai-mirror, ai_primary_group,
-//   ai_user_groups} to_add        = target_groups - ai_user_current_groups
-//   to_remove     = ai_user_current_groups - target_groups - {ai_primary_group}
+//   target  = configured_groups ∪ {main_user_group} - {ai-mirror}
+//   to_add  = target - ai_user_current
+//   to_remove = ai_user_current - target - {ai_primary_group}
 //
 // PARAMS:
-//   ai_user   — AI username (e.g. "imaxx_a3f2b1")
-//   main_user — main username (e.g. "maxx")
+//   ai_user            — AI username (e.g. "imaxx_a3f2b1")
+//   main_user          — main username (e.g. "maxx")
+//   configured_groups  — groups from [ai-user] in .ai-mirror.toml
 //
 // RETURNS:
-//   Number of group changes applied (additions + removals), or -1 on error
-//   (e.g. user not found).
+//   Number of group changes applied (additions + removals), or -1 on error.
 //
 // THREAD SAFETY: Not thread-safe (uses getgrnam/getpwnam which return
 // pointers to static storage). Call from single-threaded context only.
 int reconcile_ai_user_groups(const std::string &ai_user,
-                             const std::string &main_user);
+                             const std::string &main_user,
+                             const std::vector<std::string> &configured_groups);
 
 } // namespace ai_mirror::utils

@@ -279,8 +279,8 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
     j = nlohmann::json::parse(content);
   } catch (const nlohmann::json::parse_error &e) {
     // Show exact byte position and brief message
-    auto err_msg = fmt::format("JSON parse error at byte {}: {}", e.byte,
-                               e.what());
+    auto err_msg =
+        fmt::format("JSON parse error at byte {}: {}", e.byte, e.what());
     utils::get_logger()->error("State file is corrupted: {} — {}",
                                state_path.string(), err_msg);
     return std::nullopt;
@@ -327,68 +327,67 @@ static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
   }
 
   // Backward compatibility: if project_path/path_hash missing, derive from
-    // username Username format: {prefix}{user}_{hash6} → extract hash6 as
-    // path_hash
-    if (info.path_hash.empty() && !info.username.empty()) {
-      // Find last underscore and extract 6-char hash suffix
-      auto last_underscore = info.username.rfind('_');
-      if (last_underscore != std::string::npos &&
-          info.username.length() - last_underscore - 1 == 6) {
-        info.path_hash = info.username.substr(last_underscore + 1);
-        utils::get_logger()->debug(
-            "Derived path_hash '{}' from username '{}' (legacy format)",
-            info.path_hash, info.username);
-      }
-    }
-    // [P0-path-hash] Fallback: compute path_hash from project_path if still
-    // empty. This handles cases where username suffix is not exactly 6 chars
-    // (e.g., new-style usernames with different formats).
-    if (info.path_hash.empty() && !info.project_path.empty()) {
-      info.path_hash = sha256_hex(info.project_path).substr(0, 6);
+  // username Username format: {prefix}{user}_{hash6} → extract hash6 as
+  // path_hash
+  if (info.path_hash.empty() && !info.username.empty()) {
+    // Find last underscore and extract 6-char hash suffix
+    auto last_underscore = info.username.rfind('_');
+    if (last_underscore != std::string::npos &&
+        info.username.length() - last_underscore - 1 == 6) {
+      info.path_hash = info.username.substr(last_underscore + 1);
       utils::get_logger()->debug(
-          "Computed path_hash '{}' from project_path '{}'", info.path_hash,
-          info.project_path);
+          "Derived path_hash '{}' from username '{}' (legacy format)",
+          info.path_hash, info.username);
     }
-    // project_path defaults to home_dir if not stored
-    if (info.project_path.empty()) {
-      info.project_path = info.home_dir;
-    }
+  }
+  // [P0-path-hash] Fallback: compute path_hash from project_path if still
+  // empty. This handles cases where username suffix is not exactly 6 chars
+  // (e.g., new-style usernames with different formats).
+  if (info.path_hash.empty() && !info.project_path.empty()) {
+    info.path_hash = sha256_hex(info.project_path).substr(0, 6);
+    utils::get_logger()->debug("Computed path_hash '{}' from project_path '{}'",
+                               info.path_hash, info.project_path);
+  }
+  // project_path defaults to home_dir if not stored
+  if (info.project_path.empty()) {
+    info.project_path = info.home_dir;
+  }
 
-    // Verify ownership: project directory owner must match uid in state file
-    struct stat st;
-    if (stat(home_dir.c_str(), &st) == 0) {
-      if (st.st_uid != info.uid) {
-        utils::get_logger()->error(
-            "Ownership mismatch: {} owner uid={} but state file claims uid={}",
-            home_dir.string(), st.st_uid, info.uid);
-        return std::nullopt;
+  // Verify ownership: project directory owner must match uid in state file
+  struct stat st;
+  if (stat(home_dir.c_str(), &st) == 0) {
+    if (st.st_uid != info.uid) {
+      utils::get_logger()->error(
+          "Ownership mismatch: {} owner uid={} but state file claims uid={}",
+          home_dir.string(), st.st_uid, info.uid);
+      return std::nullopt;
+    }
+  }
+
+  // Migrate legacy format: if hash field exists, rewrite to new format
+  if (j.contains("hash")) {
+    utils::get_logger()->info(
+        "Migrating legacy state file format (removing hash field): {}",
+        state_path.string());
+
+    // Build new content without hash field
+    std::string new_content = make_state_content(info, info.main_user);
+
+    // Write new state file
+    utils::unique_fd ufd(
+        ::open(state_path.c_str(),
+               O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644));
+    if (ufd) {
+      if (::write(ufd.get(), new_content.c_str(), new_content.size()) ==
+          static_cast<ssize_t>(new_content.size())) {
+        utils::get_logger()->info("State file migrated successfully: {}",
+                                  state_path.string());
+      } else {
+        utils::get_logger()->error("Failed to write migrated state file: {}",
+                                   state_path.string());
       }
     }
-
-    // Migrate legacy format: if hash field exists, rewrite to new format
-    if (j.contains("hash")) {
-      utils::get_logger()->info(
-          "Migrating legacy state file format (removing hash field): {}",
-          state_path.string());
-
-      // Build new content without hash field
-      std::string new_content = make_state_content(info, info.main_user);
-
-      // Write new state file
-      utils::unique_fd ufd(
-          ::open(state_path.c_str(),
-                 O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644));
-      if (ufd) {
-        if (::write(ufd.get(), new_content.c_str(), new_content.size()) ==
-            static_cast<ssize_t>(new_content.size())) {
-          utils::get_logger()->info("State file migrated successfully: {}",
-                                    state_path.string());
-        } else {
-          utils::get_logger()->error("Failed to write migrated state file: {}",
-                                     state_path.string());
-        }
-      }
-    }
+  }
 
   return info;
 }
@@ -526,15 +525,12 @@ bool UserManager::execute_useradd(const std::string &username,
     utils::exec_safe({"usermod", "-p", "", username});
   }
 
-  // Add the new AI user to the ai-mirror group so it can execute `am` commands
-  auto group_add = utils::exec_safe({"usermod", "-aG", "ai-mirror", username});
-  if (group_add.exit_code != 0) {
-    // [log-review] 降级为 warning: ai-mirror 组可能不存在（首次安装未完成时）
-    utils::get_logger()->warn("Failed to add '{}' to ai-mirror group: {}",
-                              username, group_add.stderr_output);
-  } else {
-    utils::get_logger()->info("Added '{}' to ai-mirror group", username);
-  }
+  // 🚫 SECURITY: AI users must NEVER be added to the 'ai-mirror' group.
+  // The ai-mirror group has sudoers rules granting root access via
+  // ai-mirror-bin.  Adding AI users to this group would allow them to
+  // execute arbitrary root commands, bypassing project security isolation.
+  // See memory/experiments.md 2026-07-08 CRITICAL entry for details.
+  // AI users interact with `am` indirectly through the main user only.
 
   return true;
 }
@@ -910,8 +906,8 @@ bool UserManager::update_state_mounts(const std::string &username,
 
     if (!info_opt) {
       utils::get_logger()->error(
-          "update_state_mounts: cannot read .am_status for {} in {}",
-          username, home_dir.string());
+          "update_state_mounts: cannot read .am_status for {} in {}", username,
+          home_dir.string());
       return false;
     }
   }
@@ -1050,8 +1046,8 @@ bool UserManager::rebuild_state(const fs::path &home_dir,
   // 1. Lookup uid/gid from /etc/passwd
   struct passwd *pw = getpwnam(username.c_str());
   if (!pw) {
-    utils::get_logger()->error("rebuild_state: user '{}' not found in /etc/passwd",
-                               username);
+    utils::get_logger()->error(
+        "rebuild_state: user '{}' not found in /etc/passwd", username);
     return false;
   }
 
@@ -1090,8 +1086,8 @@ bool UserManager::rebuild_state(const fs::path &home_dir,
 
   // 4. Atomic write
   if (!write_state_file(home_dir, info, main_user)) {
-    utils::get_logger()->error("rebuild_state: failed to write .am_status for {}",
-                               username);
+    utils::get_logger()->error(
+        "rebuild_state: failed to write .am_status for {}", username);
     return false;
   }
 
@@ -1101,22 +1097,20 @@ bool UserManager::rebuild_state(const fs::path &home_dir,
   //    Only the directory itself is chowned, not its contents.
   if (geteuid() == 0) {
     struct stat dst_st;
-    if (::stat(home_dir.c_str(), &dst_st) == 0 &&
-        dst_st.st_uid != info.uid) {
+    if (::stat(home_dir.c_str(), &dst_st) == 0 && dst_st.st_uid != info.uid) {
       if (::chown(home_dir.c_str(), info.uid, info.gid) == 0) {
         utils::get_logger()->info(
             "rebuild_state: fixed home_dir ownership {} -> {}:{}",
             home_dir.string(), info.uid, info.gid);
       } else {
-        utils::get_logger()->warn(
-            "rebuild_state: cannot chown {} to {}:{}: {}",
-            home_dir.string(), info.uid, info.gid, strerror(errno));
+        utils::get_logger()->warn("rebuild_state: cannot chown {} to {}:{}: {}",
+                                  home_dir.string(), info.uid, info.gid,
+                                  strerror(errno));
       }
     }
   } else {
     struct stat dst_st;
-    if (::stat(home_dir.c_str(), &dst_st) == 0 &&
-        dst_st.st_uid != info.uid) {
+    if (::stat(home_dir.c_str(), &dst_st) == 0 && dst_st.st_uid != info.uid) {
       utils::get_logger()->warn(
           "rebuild_state: would chown {} (uid={} != expected {}), "
           "but not running as root",
@@ -1128,7 +1122,8 @@ bool UserManager::rebuild_state(const fs::path &home_dir,
   auto verify = read_state_file(home_dir);
   if (!verify) {
     utils::get_logger()->error(
-        "rebuild_state: wrote .am_status for {} but read-back failed", username);
+        "rebuild_state: wrote .am_status for {} but read-back failed",
+        username);
     return false;
   }
 

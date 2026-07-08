@@ -33,12 +33,12 @@
 
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <pwd.h>
 #include <sstream>
 #include <string>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -85,8 +85,8 @@ static bool safe_remount(const fs::path &source, const fs::path &target) {
     ::close(touch_fd);
 
   // Step 3: Bind mount with current source (creates new kernel mount)
-  auto bind = utils::exec_safe(
-      {"mount", "--bind", source.string(), target.string()});
+  auto bind =
+      utils::exec_safe({"mount", "--bind", source.string(), target.string()});
   if (bind.exit_code != 0) {
     logger->error("  remount FAILED: {} -> {} - {}", source.string(),
                   target.string(), bind.stderr_output);
@@ -329,8 +329,8 @@ int main(int argc, char *argv[]) {
     }
     endpwent();
   }
-  logger->info("passwd scan: {} entries, {} with .am_status", total_passwd_entries,
-               status_file_found);
+  logger->info("passwd scan: {} entries, {} with .am_status",
+               total_passwd_entries, status_file_found);
 
   // Fix ownership of .am_status files that are still owned by AI users
   // (legacy from old write_state_file that chowned to AI user).
@@ -347,7 +347,8 @@ int main(int argc, char *argv[]) {
       }
     }
     if (fixed > 0) {
-      logger->info("Fixed ownership of {} .am_status file(s) to root:root", fixed);
+      logger->info("Fixed ownership of {} .am_status file(s) to root:root",
+                   fixed);
     }
   }
 
@@ -362,13 +363,34 @@ int main(int argc, char *argv[]) {
       logger->info("Checking user: {} (home: {})", username, home_dir.string());
     }
 
-    // Read full state from .am_status (includes main_user, project_path, mounts)
+    // Read full state from .am_status (includes main_user, project_path,
+    // mounts)
     auto user_info = core::UserManager::read_state(home_dir);
     std::vector<core::MountInfo> expected_mounts;
     std::string main_user;
     if (user_info) {
       expected_mounts = user_info->mounts;
       main_user = user_info->main_user;
+    }
+
+    // ── Group audit & reconciliation ───────────────────────────────────
+    // Ensure AI user's supplementary groups match the main user's groups.
+    // This automatically cleans up any unauthorized group memberships
+    // (e.g. 'ai-mirror') and adds missing groups (e.g. 'docker').
+    // Runs on every mount-watch cycle for continuous compliance.
+    if (!main_user.empty()) {
+      int grp_changes = utils::reconcile_ai_user_groups(username, main_user);
+      if (grp_changes > 0) {
+        logger->info("  user {}: reconciled {} group change(s) with main '{}'",
+                     username, grp_changes, main_user);
+      } else if (grp_changes < 0) {
+        logger->warn("  user {}: group reconciliation failed (main='{}')",
+                     username, main_user);
+      }
+    } else {
+      logger->debug("  user {}: no main_user in .am_status, skipping group "
+                    "reconciliation",
+                    username);
     }
 
     // [补充机制] Legacy AI user: .am_status exists but no mounts field yet.
@@ -475,15 +497,13 @@ int main(int argc, char *argv[]) {
       if (!is_mount_alive(target)) {
         // Target is dead — try safe remount via mountinfo
         auto mit = mountinfo_sources.find(mi.target);
-        if (mit != mountinfo_sources.end() &&
-            source_exists(mit->second)) {
+        if (mit != mountinfo_sources.end() && source_exists(mit->second)) {
           // mountinfo has correct source AND it exists → safe to remount
           logger->warn("  stale mount target (ENOENT): {}", mi.target);
           if (safe_remount(mit->second, target)) {
             logger->info("  remounted: {} -> {}", mit->second, mi.target);
             // Persist corrected state
-            core::UserManager::update_state_mounts(username, home_dir,
-                                                   prefix);
+            core::UserManager::update_state_mounts(username, home_dir, prefix);
           }
         } else {
           logger->warn("  stale mount target, cannot recover: {} (src: {})",
@@ -513,8 +533,7 @@ int main(int argc, char *argv[]) {
           if (safe_remount(source, target)) {
             logger->info("  remounted missing mount: {} -> {}", mi.source,
                          mi.target);
-            core::UserManager::update_state_mounts(username, home_dir,
-                                                   prefix);
+            core::UserManager::update_state_mounts(username, home_dir, prefix);
           }
         } else {
           logger->warn("  cannot remount, source missing: {}", mi.source);
@@ -542,8 +561,8 @@ int main(int argc, char *argv[]) {
              src_st.st_mtime != tgt_stat.st_mtime)) {
           // Metadata mismatch — source was replaced after mount was created
           logger->warn("  metadata mismatch: src={}b/mtime={} tgt={}b/mtime={}",
-                       src_st.st_size, src_st.st_mtime,
-                       tgt_stat.st_size, tgt_stat.st_mtime);
+                       src_st.st_size, src_st.st_mtime, tgt_stat.st_size,
+                       tgt_stat.st_mtime);
           // Determine the correct source path (mountinfo has it for BeeGFS)
           auto mit = mountinfo_sources.find(mi.target);
           fs::path correct_source =
@@ -591,13 +610,12 @@ int main(int argc, char *argv[]) {
             (src_st.st_ino != tgt_st.st_ino ||
              src_st.st_dev != tgt_st.st_dev)) {
           // Inode mismatch: source was atomically replaced
-          logger->warn(
-              "  inode mismatch src={}/{} tgt={}/{} — stale data",
-              src_st.st_dev, src_st.st_ino, tgt_st.st_dev, tgt_st.st_ino);
+          logger->warn("  inode mismatch src={}/{} tgt={}/{} — stale data",
+                       src_st.st_dev, src_st.st_ino, tgt_st.st_dev,
+                       tgt_st.st_ino);
           if (safe_remount(source, target)) {
             logger->info("  remounted: {} -> {}", mi.source, mi.target);
-            core::UserManager::update_state_mounts(username, home_dir,
-                                                   prefix);
+            core::UserManager::update_state_mounts(username, home_dir, prefix);
           }
           continue;
         }
@@ -616,16 +634,14 @@ int main(int argc, char *argv[]) {
       if (!source_exists(source)) {
         // Source missing — try to recover from mountinfo
         auto mit = mountinfo_sources.find(mi.target);
-        if (mit != mountinfo_sources.end() &&
-            source_exists(mit->second)) {
+        if (mit != mountinfo_sources.end() && source_exists(mit->second)) {
           // mountinfo has correct path → persist it
           logger->warn("  stale source in .am_status: {} -> {} (correct: {})",
                        mi.source, mi.target, mit->second);
-          core::UserManager::update_state_mounts(username, home_dir,
-                                                 prefix);
+          core::UserManager::update_state_mounts(username, home_dir, prefix);
         } else {
-          logger->warn("  source missing, cannot recover: {} -> {}",
-                       mi.source, mi.target);
+          logger->warn("  source missing, cannot recover: {} -> {}", mi.source,
+                       mi.target);
           continue;
         }
       }
@@ -668,10 +684,9 @@ int main(int argc, char *argv[]) {
             }
           }
           if (!missing.empty()) {
-            logger->warn(
-                "  user {}: {} config mount(s) not in .am_status — "
-                "run 'am update {}'",
-                username, missing.size(), home_dir.string());
+            logger->warn("  user {}: {} config mount(s) not in .am_status — "
+                         "run 'am update {}'",
+                         username, missing.size(), home_dir.string());
             for (const auto &m : missing) {
               logger->warn("    missing: {}", m);
             }

@@ -748,4 +748,140 @@ bool is_group_member(const std::string &group_name) {
   return false;
 }
 
+// Reconcile AI user's supplementary groups to match the main user's groups.
+// See shell.hpp for full design documentation.
+int reconcile_ai_user_groups(const std::string &ai_user,
+                             const std::string &main_user) {
+  auto logger = get_logger();
+  int changes = 0;
+
+  // Resolve main user
+  struct passwd *main_pw = getpwnam(main_user.c_str());
+  if (!main_pw) {
+    logger->error("reconcile_ai_user_groups: cannot resolve main user '{}'",
+                  main_user);
+    return -1;
+  }
+
+  // Resolve AI user
+  struct passwd *ai_pw = getpwnam(ai_user.c_str());
+  if (!ai_pw) {
+    logger->error("reconcile_ai_user_groups: cannot resolve AI user '{}'",
+                  ai_user);
+    return -1;
+  }
+
+  // ── Helper: get all group names for a user ──────────────────────────
+  auto get_group_names = [](const std::string &username,
+                            gid_t primary_gid) -> std::set<std::string> {
+    std::set<std::string> names;
+
+    // Include primary group
+    struct group *primary_gr = getgrgid(primary_gid);
+    if (primary_gr) {
+      names.insert(primary_gr->gr_name);
+    }
+
+    // Get supplementary groups from system database
+    struct passwd *pw = getpwnam(username.c_str());
+    if (!pw)
+      return names;
+
+    int ngroups = 0;
+    getgrouplist(username.c_str(), pw->pw_gid, nullptr, &ngroups);
+    if (ngroups <= 0)
+      return names;
+
+    std::vector<gid_t> groups(ngroups);
+    if (getgrouplist(username.c_str(), pw->pw_gid, groups.data(), &ngroups) < 0)
+      return names;
+
+    for (int i = 0; i < ngroups; i++) {
+      struct group *gr = getgrgid(groups[i]);
+      if (gr) {
+        names.insert(gr->gr_name);
+      }
+    }
+
+    return names;
+  };
+
+  // ── Get current groups ──────────────────────────────────────────────
+  std::set<std::string> main_groups =
+      get_group_names(main_user, main_pw->pw_gid);
+  std::set<std::string> ai_groups = get_group_names(ai_user, ai_pw->pw_gid);
+
+  // Get AI user's primary group name (never remove this)
+  std::string ai_primary_group;
+  struct group *ai_primary_gr = getgrgid(ai_pw->pw_gid);
+  if (ai_primary_gr) {
+    ai_primary_group = ai_primary_gr->gr_name;
+  }
+
+  // ── Compute target groups ───────────────────────────────────────────
+  // Target = main_user's groups minus:
+  //   1. 'ai-mirror'  — SECURITY: sudoers root access, never for AI users
+  //   2. ai_primary_group — AI user's own group, never removed
+  std::set<std::string> target_groups;
+  for (const auto &g : main_groups) {
+    if (g != "ai-mirror" && g != ai_primary_group) {
+      target_groups.insert(g);
+    }
+  }
+
+  // ── Compute delta ───────────────────────────────────────────────────
+  // Groups to add: target_groups - ai_groups
+  std::vector<std::string> to_add;
+  for (const auto &g : target_groups) {
+    if (ai_groups.find(g) == ai_groups.end()) {
+      to_add.push_back(g);
+    }
+  }
+
+  // Groups to remove: ai_groups - target_groups - ai_primary_group
+  std::vector<std::string> to_remove;
+  for (const auto &g : ai_groups) {
+    if (g == ai_primary_group)
+      continue; // Never remove AI user's own primary group
+    if (target_groups.find(g) == target_groups.end()) {
+      to_remove.push_back(g);
+    }
+  }
+
+  // ── Apply additions ─────────────────────────────────────────────────
+  for (const auto &g : to_add) {
+    auto result = exec_safe({"usermod", "-aG", g, ai_user});
+    if (result.exit_code == 0) {
+      logger->info("Reconciled: added '{}' to group '{}'", ai_user, g);
+      changes++;
+    } else {
+      // [log-review] warn:降级自error——usermod 失败不影响系统正常运行，
+      // 组修复将在下一轮 mount-watch 循环中重试
+      logger->warn("Reconciled: failed to add '{}' to group '{}': {}", ai_user,
+                   g, result.stderr_output);
+    }
+  }
+
+  // ── Apply removals ──────────────────────────────────────────────────
+  for (const auto &g : to_remove) {
+    auto result = exec_safe({"gpasswd", "-d", ai_user, g});
+    if (result.exit_code == 0) {
+      logger->info("Reconciled: removed '{}' from group '{}'", ai_user, g);
+      changes++;
+    } else {
+      // [log-review] warn:降级自error——gpasswd 失败不影响系统正常运行，
+      // 组修复将在下一轮 mount-watch 循环中重试
+      logger->warn("Reconciled: failed to remove '{}' from group '{}': {}",
+                   ai_user, g, result.stderr_output);
+    }
+  }
+
+  if (changes > 0) {
+    logger->info("Reconciled groups for '{}' (main='{}'): {} changes", ai_user,
+                 main_user, changes);
+  }
+
+  return changes;
+}
+
 } // namespace ai_mirror::utils

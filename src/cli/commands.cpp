@@ -12,7 +12,6 @@
 #include "ai_mirror/utils/shell.hpp"
 #include <algorithm>
 #include <chrono>
-#include <unordered_set>
 #include <cmath>
 #include <cstring>
 #include <dirent.h>
@@ -35,6 +34,7 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#include <unordered_set>
 #include <vector>
 
 // FTXUI for watch TUI
@@ -316,6 +316,25 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
       } else {
         std::cerr << "WARNING: failed to add ai-user to '" << group_name
                   << "' group: " << supp_result.stderr_output << std::endl;
+      }
+    }
+
+    // Reconcile AI user's supplementary groups against main user's groups.
+    // This ensures the AI user has all the groups the main user has (except
+    // 'ai-mirror' which is security-blocked), and removes any groups that the
+    // main user doesn't have.  This is the group-authoritative reconciliation
+    // layer — the config-based groups above are an additional allow-list.
+    {
+      int grp_changes = utils::reconcile_ai_user_groups(username, main_user);
+      if (grp_changes > 0) {
+        fixes += grp_changes;
+        utils::get_logger()->info(
+            "Group reconciliation for '{}': {} changes applied", username,
+            grp_changes);
+      } else if (grp_changes < 0) {
+        utils::get_logger()->warn(
+            "Group reconciliation failed for '{}' (main='{}')", username,
+            main_user);
       }
     }
 
@@ -2082,8 +2101,8 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
     }
     // If .am_status exists but read_state failed, record for error message
     std::error_code ec2;
-    if (corrupted_path.empty() &&
-        fs::exists(search_path / ".am_status", ec2) && !ec2) {
+    if (corrupted_path.empty() && fs::exists(search_path / ".am_status", ec2) &&
+        !ec2) {
       corrupted_path = search_path;
     }
     search_path = search_path.parent_path();

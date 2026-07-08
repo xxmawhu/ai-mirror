@@ -82,4 +82,30 @@ uid_t get_login_uid();
 // Checks both primary group (from passwd entry) and supplementary groups.
 bool is_group_member(const std::string &group_name);
 
+// Reconcile AI user's supplementary groups to match the main user's groups.
+//
+// DESIGN:
+//   The main user's group membership defines the baseline. AI users should
+//   have the same group memberships as the main user, with EXCEPTIONS:
+//     1. 'ai-mirror' group is NEVER added (sudoers root access — security)
+//     2. AI user's own primary group is NEVER removed
+//
+// ALGORITHM:
+//   target_groups = main_user_groups - {ai-mirror}
+//   to_add        = target_groups - ai_user_current_groups
+//   to_remove     = ai_user_current_groups - target_groups - {ai_primary_group}
+//
+// PARAMS:
+//   ai_user   — AI username (e.g. "imaxx_a3f2b1")
+//   main_user — main username (e.g. "maxx")
+//
+// RETURNS:
+//   Number of group changes applied (additions + removals), or -1 on error
+//   (e.g. user not found).
+//
+// THREAD SAFETY: Not thread-safe (uses getgrnam/getpwnam which return
+// pointers to static storage). Call from single-threaded context only.
+int reconcile_ai_user_groups(const std::string &ai_user,
+                             const std::string &main_user);
+
 } // namespace ai_mirror::utils

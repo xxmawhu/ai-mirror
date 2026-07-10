@@ -700,17 +700,17 @@ int main(int argc, char *argv[]) {
             status_targets.insert(m.target);
           }
           // Check each config mount path
+          // NOTE: Must resolve (canonicalize) paths the same way
+          // do_configure() does, to handle trailing slashes and symlinks.
+          // A raw path like "~/.share/" produces a different expected target
+          // than the resolved "/foo/.share" stored in .am_status.
           std::vector<std::string> missing;
-          auto main_home = utils::get_home_dir(main_user);
           for (const auto &mp : project_config.mount.paths) {
-            // Resolve ~ to main user's home directory
-            fs::path resolved = mp;
-            std::string ps = mp.string();
-            if (!ps.empty() && ps[0] == '~') {
-              resolved = fs::path(main_home + ps.substr(1));
-            }
+            auto source_opt = core::PathResolver::resolve(mp.string());
+            if (!source_opt)
+              continue;
             auto expected_target = core::PathResolver::to_ai_user_path(
-                resolved, username, main_user, home_dir);
+                *source_opt, username, main_user, home_dir);
             if (status_targets.find(expected_target.string()) ==
                 status_targets.end()) {
               missing.push_back(mp.string());

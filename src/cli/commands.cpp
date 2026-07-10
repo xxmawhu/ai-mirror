@@ -2127,10 +2127,20 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
         status_targets.insert(m.target);
       }
       // Check config mount paths against status targets
+      // NOTE: Must resolve (canonicalize) paths the same way do_configure()
+      // does, to handle trailing slashes, symlinks, etc.  do_configure() calls
+      // PathResolver::resolve() before to_ai_user_path(); if we skip that step
+      // here, a raw config path like "/foo/.share/" (trailing slash) produces a
+      // different expected target than the resolved "/foo/.share" stored in
+      // .am_status, causing a false "not configured" warning.  See issue
+      // 2026-07-10-cmd-cd-mount-check-false-positive.
       std::vector<std::string> missing;
       for (const auto &mp : config.mount.paths) {
+        auto source_opt = core::PathResolver::resolve(mp.string());
+        if (!source_opt)
+          continue; // skip unresolvable paths (no stat, safe)
         auto expected = core::PathResolver::to_ai_user_path(
-            mp, ai_user, main_user, state->home_dir);
+            *source_opt, ai_user, main_user, state->home_dir);
         if (status_targets.find(expected.string()) == status_targets.end()) {
           missing.push_back(mp.string());
         }

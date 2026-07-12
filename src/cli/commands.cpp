@@ -83,6 +83,64 @@ static CommandContext make_context(bool verbose) {
 // Forward declaration for use in do_configure's Third pass lambda
 static bool safe_chown_path(const fs::path &p, const std::string &owner);
 
+// Recursively sets copied file/dir permissions to 0644/0755. Symlinks are
+// untouched.
+//
+// Rationale: ai-mirror-bin always runs as root (via sudo wrapper).  When cp
+// creates a file, the process-umask and the source mode determine the
+// destination mode.  With the previous umask(0077) files were created with
+// mode 0600, making them unreadable by the intended (non-root) owner.  This
+// fix guarantees consistent, user-readable permissions regardless of source
+// mode or umask.
+//
+// Security note: path-based chmod is used here (rather than fd-based recursion
+// like safe_chown_path) because the path has already been validated by
+// is_path_allowed() before this function is called, and the file was just
+// created by us — no external party can inject a symlink between the two.
+static bool chmod_copied_path_recursive(const fs::path &p) {
+  std::error_code ec;
+  if (!fs::exists(p, ec) || ec) {
+    return true; // nothing to chmod
+  }
+
+  // Do not change permissions of symlinks (they have no real mode on Linux).
+  if (fs::is_symlink(p, ec) || ec) {
+    return true;
+  }
+
+  if (fs::is_regular_file(p, ec)) {
+    if (chmod(p.c_str(), 0644) != 0) {
+      utils::get_logger()->warn(
+          "chmod_copied_path_recursive: chmod 0644 {} failed: {}", p.string(),
+          strerror(errno));
+      return false;
+    }
+    return true;
+  }
+
+  if (fs::is_directory(p, ec) && !ec) {
+    if (chmod(p.c_str(), 0755) != 0) {
+      utils::get_logger()->warn(
+          "chmod_copied_path_recursive: chmod 0755 {} failed: {}", p.string(),
+          strerror(errno));
+      return false;
+    }
+    for (auto it = fs::directory_iterator(p, ec);
+         it != fs::directory_iterator(); it.increment(ec)) {
+      if (ec) {
+        utils::get_logger()->warn(
+            "chmod_copied_path_recursive: iterate {} failed: {}", p.string(),
+            ec.message());
+        return false;
+      }
+      if (!chmod_copied_path_recursive(it->path())) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                         const fs::path &proj, const std::string &main_user,
                         bool mount_only = false) {
@@ -1720,7 +1778,35 @@ int cmd_cp(const std::string &src, const std::string &dst, bool verbose) {
     chown_user = main_user;
   }
 
-  mode_t old_umask = umask(0077);
+  // FIX(issue-381129d7): When running as root but neither src nor dst
+  // involves a known ai-user (e.g. raise-issue sending a reminder to a
+  // regular-user project's issues/ directory), we must still chown the
+  // copied file to the destination directory's owner.  Without this, the
+  // file would remain as root:root and be unreadable by the intended user.
+  fs::path copied_path =
+      fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
+  if (!need_chown) {
+    fs::path dir_to_check =
+        fs::is_directory(dst_path) ? dst_path : dst_path.parent_path();
+    struct stat dir_st;
+    if (stat(dir_to_check.c_str(), &dir_st) == 0) {
+      // Only apply chown when the destination dir is owned by a real
+      // (non-root) user — root-owned dirs keep the implicit root ownership.
+      if (dir_st.st_uid != 0) {
+        struct passwd *pw = getpwuid(dir_st.st_uid);
+        if (pw) {
+          chown_user = pw->pw_name;
+          need_chown = true;
+        }
+      }
+    }
+  }
+
+  // FIX(issue-381129d7): Use 0022 instead of 0077 so that cp creates files
+  // with mode 0644 (rw-r--r--) instead of 0600 (rw-------).  The previous
+  // 0077 umask made files readable only by root, breaking any cross-user
+  // notification flow that depends on am cp.
+  mode_t old_umask = umask(0022);
   auto cp_result = utils::exec_safe({"cp", "-rP", "--no-preserve=mode",
                                      src_path.string(), dst_path.string()});
   if (cp_result.exit_code != 0) {
@@ -1730,13 +1816,24 @@ int cmd_cp(const std::string &src, const std::string &dst, bool verbose) {
   }
 
   if (need_chown) {
-    fs::path chown_target =
-        fs::is_directory(dst_path) ? dst_path / src_path.filename() : dst_path;
-    if (!safe_chown_path(chown_target, chown_user)) {
+    if (!safe_chown_path(copied_path, chown_user)) {
       umask(old_umask);
       std::cerr << "Failed to set ownership for " << chown_user << std::endl;
       return 1;
     }
+  }
+
+  // FIX(issue-381129d7): Guarantee consistent permissions after copy.  Even
+  // with umask(0022), the result depends on the source mode (src & ~0022).
+  // For sources that were already restrictive (e.g. 0600) the destination
+  // would still be 0600.  This explicit chmod normalises the result to
+  // 0644 (files) / 0755 (directories), matching the conventional
+  // user-readable layout that other project files follow.
+  if (!chmod_copied_path_recursive(copied_path)) {
+    umask(old_umask);
+    std::cerr << "Failed to set permissions on copied path: "
+              << copied_path.string() << std::endl;
+    return 1;
   }
   umask(old_umask);
 

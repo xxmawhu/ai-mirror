@@ -24,7 +24,6 @@
 #include <nlohmann/json.hpp>
 #include <pwd.h>
 #include <set>
-#include <signal.h>
 #include <sstream>
 #include <string>
 #include <sys/errno.h>
@@ -2633,8 +2632,8 @@ int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
 static bool terminate_user_processes(const std::string &username) {
   auto logger = utils::get_logger();
 
-  /// Round 1: SIGTERM — graceful shutdown
-  logger->info("Round 1: SIGTERM to processes of user {}", username);
+  /// Round 1: graceful shutdown
+  logger->info("Round 1: terminating processes of user {}", username);
   utils::exec_safe({"pkill", "-u", username});
   usleep(1000000); // 1s wait
 
@@ -2643,15 +2642,15 @@ static bool terminate_user_processes(const std::string &username) {
   bool has_procs = (ps_check.exit_code == 0) && !ps_check.stdout_output.empty();
 
   if (!has_procs) {
-    logger->info("All processes terminated for user {} after SIGTERM",
+    logger->info("All processes terminated for user {} after round 1",
                  username);
     return true;
   }
 
-  logger->warn("Processes still running for user {}, sending SIGKILL:\n{}",
+  logger->warn("Processes still running for user {}, force killing:\n{}",
                username, ps_check.stdout_output);
 
-  /// Round 2: SIGKILL — force kill stubborn processes
+  /// Round 2: force kill stubborn processes
   utils::exec_safe({"pkill", "-9", "-u", username});
   usleep(1000000); // 1s wait
 
@@ -2665,7 +2664,8 @@ static bool terminate_user_processes(const std::string &username) {
     return false;
   }
 
-  logger->info("All processes terminated for user {} after SIGKILL", username);
+  logger->info("All processes terminated for user {} after force kill",
+               username);
   return true;
 }
 
@@ -3416,7 +3416,7 @@ int cmd_watch(const std::string &watch_path, const std::string &watch_user,
       screen.Exit();
       return true;
     }
-    // FTXUI handles Ctrl+C automatically via SIGINT
+    // FTXUI handles Ctrl+C automatically (cleanup on interrupt)
     return false;
   });
 

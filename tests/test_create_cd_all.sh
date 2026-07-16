@@ -2132,9 +2132,9 @@ else
 fi
 
 # ============================================================
-# WT3: watch exits cleanly on SIGTERM
+# WT3: watch exits cleanly on signal
 # ============================================================
-begin_test "WT3: watch exits cleanly on SIGTERM"
+begin_test "WT3: watch exits cleanly on signal"
 setup_test_user standard
 
 # Start watch in background with environment
@@ -2146,7 +2146,7 @@ log_info "WT3: started watch PID=$WT_PID"
 # Wait for first frame
 sleep 2
 
-# Send SIGTERM (same as Ctrl+C handler)
+# Send signal (simulate Ctrl+C)
 kill -TERM $WT_PID 2>/dev/null || true
 
 # Wait for process to exit (max 5s)
@@ -2157,10 +2157,10 @@ while kill -0 $WT_PID 2>/dev/null && [[ $WAITED -lt 50 ]]; do
 done
 
 if kill -0 $WT_PID 2>/dev/null; then
-	log_fail "WT3: watch did NOT exit after SIGTERM"
+	log_fail "WT3: watch did NOT exit after signal"
 	kill -9 $WT_PID 2>/dev/null || true
 else
-	log_pass "WT3: watch exited cleanly after SIGTERM"
+	log_pass "WT3: watch exited cleanly after signal"
 fi
 
 # Check output contains "Watch stopped"

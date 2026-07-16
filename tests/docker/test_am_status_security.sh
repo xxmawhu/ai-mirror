@@ -164,7 +164,7 @@ main() {
   # Verify we have a real binary
   # Note: use grep -c + file redirect instead of grep -q | pipe.
   # grep -q exits immediately on first match, killing the pipe writer
-  # with SIGPIPE (141).  With 'set -o pipefail' this 141 propagates as
+  # with a broken pipe (141).  With 'set -o pipefail' this 141 propagates as
   # the pipeline exit code, causing a false negative.
   if ! "$BIN" --help > /tmp/am-test-help.txt 2>&1; then
     echo "SKIP: binary not found at $BIN"

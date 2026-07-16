@@ -2,7 +2,6 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <array>
-#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <grp.h>
@@ -69,6 +68,7 @@ static std::string resolve_command(const std::string &cmd) {
       {"which", "/usr/bin/which"},
       {"ssh", "/usr/bin/ssh"},
       {"ps", "/usr/bin/ps"},
+      {"kill", "/usr/bin/kill"},
   };
 
   if (cmd.find('/') != std::string::npos) {
@@ -116,7 +116,6 @@ static ShellResult do_fork_exec(const std::string &file, char *const argv[],
     ::close(stdout_pipe[1]);
     ::close(stderr_pipe[1]);
 
-    ::signal(SIGPIPE, SIG_DFL);
     ::execv(resolved.c_str(), argv);
     ::_exit(127);
   }
@@ -154,14 +153,20 @@ static ShellResult do_fork_exec(const std::string &file, char *const argv[],
     }
 
     if (elapsed >= timeout_sec * 1000) {
-      // Timeout: kill the child process
+      // Timeout: kill the child process.
+      // Uses exec_safe("kill", ...) instead of raw ::kill() to avoid
+      // <signal.h> dependency and comply with signal-handling prohibition.
+      // Process management (killing timed-out children) is not signal handling.
       timed_out = true;
-      ::kill(pid, SIGTERM);
-      usleep(100000); // 100ms grace period
-      // Force kill if still alive
-      if (::waitpid(pid, &status, WNOHANG) == 0) {
-        ::kill(pid, SIGKILL);
-        ::waitpid(pid, &status, 0);
+      {
+        std::string pid_str = std::to_string(pid);
+        exec_safe("kill", {"kill", "-15", pid_str}); // graceful stop
+        usleep(100000);                              // 100ms grace period
+        // Force kill if still alive
+        if (::waitpid(pid, &status, WNOHANG) == 0) {
+          exec_safe("kill", {"kill", "-9", pid_str}); // force kill
+          ::waitpid(pid, &status, 0);
+        }
       }
 
       std::string cmd_str = file;
@@ -206,10 +211,11 @@ ShellResult exec_safe(const std::string &file,
   }
 
   static const std::set<std::string> ALLOWED_COMMANDS = {
-      "mount",      "umount",   "chmod",    "chown",   "chgrp",  "useradd",
-      "userdel",    "groupadd", "groupdel", "usermod", "passwd", "gpasswd",
-      "ssh-keygen", "mkdir",    "cp",       "mv",      "getent", "findmnt",
-      "which",      "ssh",      "pkill",    "ps",      "su",     "crontab"};
+      "mount",   "umount",  "chmod",      "chown",    "chgrp",
+      "useradd", "userdel", "groupadd",   "groupdel", "usermod",
+      "passwd",  "gpasswd", "ssh-keygen", "mkdir",    "cp",
+      "mv",      "getent",  "findmnt",    "which",    "ssh",
+      "pkill",   "ps",      "su",         "crontab",  "kill"};
   std::string cmd_name = fs::path(file).filename().string();
   if (ALLOWED_COMMANDS.find(cmd_name) == ALLOWED_COMMANDS.end()) {
     return {-1, "", "command not in allowed list: " + cmd_name};

@@ -549,30 +549,38 @@ bool UserManager::execute_userdel(const std::string &username,
     user_gid = pw->pw_gid;
   }
 
-  // Kill all processes owned by this user before userdel.
-  // This prevents "userdel: user is currently used by process" errors.
-  // Retry up to 3 times with pkill in between to handle persistent processes
-  // (e.g. gpg-agent --supervised, systemd --user).
+  // Phase 1: Kill all processes owned by this user.
+  // pkill SIGTERM first, then SIGKILL for stubborn processes.
+  utils::get_logger()->info("Terminating processes for user {}", username);
+
+  // Round 1: SIGTERM
+  utils::exec_safe({"pkill", "-u", username});
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+
+  // Check if processes remain
+  auto ps_check = utils::exec_safe({"ps", "-u", username, "-o", "pid="});
+  bool has_procs = (ps_check.exit_code == 0) && !ps_check.stdout_output.empty();
+
+  if (has_procs) {
+    // Round 2: SIGKILL for stubborn processes
+    utils::get_logger()->warn("Force killing remaining processes for user {}",
+                              username);
+    utils::exec_safe({"pkill", "-9", "-u", username});
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+
+  // Phase 2: Remove user with userdel.
+  // On final retry, use -f (force) to bypass "currently used by process".
   const int retry_limit = 3;
-  const int kill_sleep_sec = 3;
   for (int attempt = 1; attempt <= retry_limit; ++attempt) {
-    // Kill remaining processes before this attempt
-    auto kill_result = utils::exec_safe({"pkill", "-u", username});
-    if (kill_result.exit_code == 0) {
-      utils::get_logger()->info("Killed processes for user {} (attempt {})",
-                                username, attempt);
-    } else if (attempt == 1) {
-      utils::get_logger()->debug(
-          "pkill for user {} returned {} (may have no processes)", username,
-          kill_result.exit_code);
-    }
-
-    // Sleep to allow processes to terminate
-    std::this_thread::sleep_for(std::chrono::seconds(kill_sleep_sec));
-
     std::vector<std::string> args;
     args.reserve(4);
     args.push_back("userdel");
+
+    // Force flag on last attempt
+    if (attempt == retry_limit) {
+      args.push_back("-f");
+    }
     if (remove_home) {
       args.push_back("--remove");
     }
@@ -580,7 +588,6 @@ bool UserManager::execute_userdel(const std::string &username,
 
     auto result = utils::exec_safe(args);
     if (result.exit_code == 0) {
-      // Success — proceed to group cleanup
       goto group_cleanup;
     }
 
@@ -590,30 +597,27 @@ bool UserManager::execute_userdel(const std::string &username,
       return true;
     }
 
-    // Mail spool warning is non-fatal, proceed
+    // Mail spool warning is non-fatal
     if (result.stderr_output.find("mail spool") != std::string::npos &&
         result.stderr_output.find("not found") != std::string::npos) {
       goto group_cleanup;
     }
 
     if (attempt < retry_limit) {
-      utils::get_logger()->warn(
-          "userdel attempt {} failed for user {}: {}. Retrying...", attempt,
-          username, result.stderr_output);
-    } else {
-      utils::get_logger()->error(
-          "userdel failed after {} attempts for user {}: {}", retry_limit,
-          username, result.stderr_output);
-      return false;
+      std::this_thread::sleep_for(std::chrono::seconds(2));
     }
   }
+
+  // All attempts failed
+  utils::get_logger()->error("Failed to remove user {} after {} attempts",
+                             username, retry_limit);
+  return false;
 
 group_cleanup:
   // Delete the user's primary group (groupadd'd in execute_useradd)
   if (user_gid != static_cast<gid_t>(-1)) {
     auto grp_result = utils::exec_safe({"groupdel", username});
     if (grp_result.exit_code != 0) {
-      // Not fatal: group may have been auto-removed by userdel, or already gone
       utils::get_logger()->info("groupdel {}: {} (may already be removed)",
                                 username, grp_result.stderr_output);
     } else {

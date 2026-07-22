@@ -2750,9 +2750,6 @@ int cmd_rm(const std::string &project_path, bool verbose) {
   // Step 1: Terminate user processes (must be before unmount)
   utils::get_logger()->info("Step 1: Terminating processes for user {}",
                             username);
-  if (verbose) {
-    std::cout << "Step 1: Terminating processes for " << username << std::endl;
-  }
   if (!terminate_user_processes(username)) {
     utils::get_logger()->warn(
         "Some processes for user {} could not be killed, attempting userdel "
@@ -2762,16 +2759,10 @@ int cmd_rm(const std::string &project_path, bool verbose) {
 
   // Step 1b: Clear user crontab (prevent process restart after kill)
   utils::get_logger()->info("Step 1b: Clearing crontab for user {}", username);
-  if (verbose) {
-    std::cout << "Step 1b: Clearing crontab for " << username << std::endl;
-  }
   utils::exec_safe({"crontab", "-r", "-u", username});
 
   // Step 2: Unmount bind mounts
   utils::get_logger()->info("Step 2: Unmounting bind mounts for {}", username);
-  if (verbose) {
-    std::cout << "Step 2: Unmounting bind mounts for " << username << std::endl;
-  }
   daemon::MountCleaner cleaner(ctx.config.user.prefix);
   int mounts_cleaned = cleaner.cleanup_for_user(username);
   utils::get_logger()->info("Unmounted {} mount(s) for {}", mounts_cleaned,
@@ -2779,11 +2770,7 @@ int cmd_rm(const std::string &project_path, bool verbose) {
 
   // Step 3: Remove Linux user (userdel)
   utils::get_logger()->info("Step 3: Removing Linux user {}", username);
-  if (verbose) {
-    std::cout << "Step 3: Removing user " << username << std::endl;
-  }
   if (!ctx.user_mgr->remove_ai_user(username, false)) {
-    utils::get_logger()->error("Failed to remove user: {}", username);
     std::cerr << "Failed to remove user: " << username << std::endl;
     return 1;
   }
@@ -2792,9 +2779,6 @@ int cmd_rm(const std::string &project_path, bool verbose) {
   // Step 4: Revoke write access on project directory (before deleting home)
   utils::get_logger()->info("Step 4: Revoking write access on project {}",
                             proj.string());
-  if (verbose) {
-    std::cout << "Step 4: Revoking write grants on project" << std::endl;
-  }
   if (!ctx.graft->revoke_write_access(proj, username)) {
     utils::get_logger()->warn(
         "Failed to revoke write access for user '{}' on project '{}'", username,
@@ -2807,9 +2791,6 @@ int cmd_rm(const std::string &project_path, bool verbose) {
   // Step 5: Clean up ai-user home directory and .am_status
   utils::get_logger()->info("Step 5: Cleaning up ai-user home: {}",
                             ai_home.string());
-  if (verbose) {
-    std::cout << "Step 5: Cleaning up ai-user home" << std::endl;
-  }
   {
     std::error_code ec;
     fs::remove_all(ai_home, ec);
@@ -2835,8 +2816,6 @@ int cmd_rm(const std::string &project_path, bool verbose) {
     }
   }
 
-  utils::get_logger()->info("Removed: {} (project: {})", username,
-                            proj.string());
   std::cout << "Removed: " << username << std::endl;
   return 0;
 }

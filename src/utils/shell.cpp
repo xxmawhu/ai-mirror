@@ -69,6 +69,8 @@ static std::string resolve_command(const std::string &cmd) {
       {"ssh", "/usr/bin/ssh"},
       {"ps", "/usr/bin/ps"},
       {"kill", "/usr/bin/kill"},
+      {"pkill", "/usr/bin/pkill"},
+      {"pgrep", "/usr/bin/pgrep"},
   };
 
   if (cmd.find('/') != std::string::npos) {

@@ -551,8 +551,8 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
       // Unmount the stale mount and prepare for remount
       auto umount_result = utils::exec_safe({"umount", "-l", target.string()});
       if (umount_result.exit_code == 0) {
-        utils::get_logger()->info("Lazy unmounted stale mount: {}",
-                                  target.string());
+        utils::get_logger()->debug("Lazy unmounted stale mount: {}",
+                                   target.string());
         is_mounted = false;
         // Remove the empty mount point file if it exists
         std::error_code rm_ec;

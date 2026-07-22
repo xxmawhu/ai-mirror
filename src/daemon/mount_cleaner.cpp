@@ -123,7 +123,7 @@ int MountCleaner::force_cleanup(const std::vector<fs::path> &mounts) {
     auto result = utils::exec_safe({"umount", "-l", ms});
     if (result.exit_code == 0) {
       cleaned++;
-      utils::get_logger()->info("Lazy unmounted: {}", ms);
+      utils::get_logger()->debug("Lazy unmounted: {}", ms);
     } else {
       utils::get_logger()->error("Failed to unmount {}: {}", ms,
                                  result.stderr_output);

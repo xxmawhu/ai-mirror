@@ -556,7 +556,7 @@ int Graft::cleanup_duplicate_mounts(const std::string &username) {
       auto result = utils::exec_safe({"umount", "-l", target});
       if (result.exit_code == 0) {
         cleaned++;
-        utils::get_logger()->info("Lazy unmounted duplicate: {}", target);
+        utils::get_logger()->debug("Lazy unmounted duplicate: {}", target);
       } else {
         utils::get_logger()->warn("Failed to umount duplicate {}: {}", target,
                                   result.stderr_output);

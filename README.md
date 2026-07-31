@@ -463,6 +463,28 @@ PIE、Full RELRO、Stack Protector、FORTIFY_SOURCE、NX
 ### Sudoers 安全模型
 无通配符，仅列出命令名，参数验证由 C++ 二进制层强制执行。
 
+### AI 用户 systemd 禁令（硬性规则）
+
+**AI 用户永远不能运行 `systemd --user`。这是沙盒原则的延伸，不是可选项。**
+
+给 AI Agent 一个 `systemd --user` 实例，等于给沙盒开了一扇后门：
+
+- **永久驻留**：`systemd --user` 让 AI 进程在会话结束后依然存活，突破"AI 进程生命周期随会话结束"的边界。一个失控的 Agent 可以启动永远不死的定时任务或守护进程，在机器上持续运行数周数月而无人察觉——而 AI 用户的本职是生成代码与产出，绝非操作系统服务的管理者。
+- **游离于资源审计之外**：宿主机的资源管控（systemd slice、cgroup、定时巡检）只覆盖系统级服务。AI 用户私有的 user service 藏在 `user-<UID>.slice` 深处，CPU、内存、磁盘、网络占用全部是"隐形开销"，主用户无法看到、无法追踪、无法回收。
+- **自我复制与影子系统**：`systemd --user` 的 unit 文件存放在 AI 用户自己的 home 目录，AI 完全可以自写 unit、自启任意持久进程，构建一个完全脱离主用户控制的"影子系统"。任何权限边界内做不到的事，都可以通过持久服务在边界外反复尝试。
+- **放大攻击面**：成百上千个 AI 用户各跑一个 systemd 用户实例，产生海量 dbus 会话、runtime 目录、socket 与日志——系统状态难以诊断，安全审计无从下手，攻击面成倍扩张。
+
+**原则：所有服务必须由宿主机统一管理。**
+
+AI 用户需要后台任务时，唯一合法的通道是主用户通过受控部署流程（systemd 系统服务、cron、CI/CD）启动，而不是 AI 自己拉起一个用户级服务管理器。**AI 的职责是生成代码与产出，不是管理操作系统服务生命周期。**
+
+ai-mirror 在 `am update`（`do_configure`）与 `am-mount-watch` 双重路径上强制执行此禁令：
+
+- 通过 per-instance drop-in 将 `user@<UID>.service` 的 `ExecStart` 覆盖为 `/bin/false`，使 systemd 用户实例**根本无法启动**
+- 通过 `pkill -9 -u <UID> -f 'systemd --user'` 即时终止任何已存在的实例（直接 `kill()` 系统调用，不受 polkit 交互认证限制）
+- 通过 `loginctl disable-linger` 禁止开机自启
+- **主用户的 `systemd --user` 永久保留，不受任何影响**——禁令只针对 AI 用户，且有名字级 + UID 级双重保护确保主用户绝不会被误伤
+
 ### 安全审查结果 (2026-04-17)
 
 | ID | Severity | 文件 | 问题 | 状态 |

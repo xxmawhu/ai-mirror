@@ -411,11 +411,16 @@ phase_install() {
 	local _src_chk _dst_chk _attempt
 	for _attempt in 1 2 3; do
 		_src_chk=$(md5sum "${BUILD_DIR}/bin/${WRAPPER_NAME}" 2>/dev/null | cut -d' ' -f1)
-		sudo rm -f "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null; sleep 1
+		sudo rm -f "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null
+		sleep 1
 		sudo cp "${BUILD_DIR}/bin/${WRAPPER_NAME}" "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null
-		sudo chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null; sync 2>/dev/null || true
+		sudo chmod 0755 "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null
+		sync 2>/dev/null || true
 		_dst_chk=$(md5sum "${PREFIX}/bin/${WRAPPER_NAME}" 2>/dev/null | cut -d' ' -f1)
-		if [[ "$_src_chk" == "$_dst_chk" ]]; then _install_verified=true; break; fi
+		if [[ "$_src_chk" == "$_dst_chk" ]]; then
+			_install_verified=true
+			break
+		fi
 		sleep 1
 	done
 	if ! $_install_verified; then
@@ -428,11 +433,16 @@ phase_install() {
 	_install_verified=false
 	for _attempt in 1 2 3; do
 		_src_chk=$(md5sum "${BUILD_DIR}/bin/${BIN_NAME}" 2>/dev/null | cut -d' ' -f1)
-		sudo rm -f "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null; sleep 1
+		sudo rm -f "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null
+		sleep 1
 		sudo cp "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null
-		sudo chmod 0755 "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null; sync 2>/dev/null || true
+		sudo chmod 0755 "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null
+		sync 2>/dev/null || true
 		_dst_chk=$(md5sum "${PREFIX}/bin/${VERSIONED_BIN}" 2>/dev/null | cut -d' ' -f1)
-		if [[ "$_src_chk" == "$_dst_chk" ]]; then _install_verified=true; break; fi
+		if [[ "$_src_chk" == "$_dst_chk" ]]; then
+			_install_verified=true
+			break
+		fi
 		sleep 1
 	done
 	if ! $_install_verified; then
@@ -599,9 +609,16 @@ UNIT_EOF
 	sudo install -d "${DATA_DIR}"
 	sudo chmod 0755 "${DATA_DIR}"
 	sudo install -d "${CONFIG_DIR}"
-	sudo install -d "${CONFIG_DIR}/sudoers.d"
 
-	local sudoers_file="${CONFIG_DIR}/sudoers.d/ai-mirror"
+	# ---- sudoers: 写入标准目录 /etc/sudoers.d/ ----
+	# (2026-08-09 fix) 此前写入 ${CONFIG_DIR}/sudoers.d/ai-mirror
+	# （/etc/ai-mirror/sudoers.d/），但 sudo 只自动加载 /etc/sudoers.d/，
+	# 导致 %ai-mirror NOPASSWD 规则从未生效，am cd 等命令触发
+	# "[sudo] password for ..." 提示（issue: lark-agent 服务器）。
+	local sudoers_dir="/etc/sudoers.d"
+	local sudoers_file="${sudoers_dir}/ai-mirror"
+	sudo install -d "${sudoers_dir}"
+
 	sudo tee "$sudoers_file" >/dev/null <<SUDOERS
 # ai-mirror sudo rules
 # Allows members of the ai-mirror group to run ai-mirror-bin commands as root
@@ -628,9 +645,37 @@ UNIT_EOF
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config ""
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status ""
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} frz ""
 SUDOERS
 	sudo chmod 0440 "$sudoers_file"
 	sudo chown root:root "$sudoers_file"
+
+	# 清理旧位置死规则（2026-08-09 前错误写入 /etc/ai-mirror/sudoers.d/，
+	# sudo 从不加载该位置；若存在则删除，避免遗留混淆）
+	if sudo test -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then
+		_log_file "removing legacy dead sudoers ${CONFIG_DIR}/sudoers.d/ai-mirror"
+		sudo rm -f "${CONFIG_DIR}/sudoers.d/ai-mirror"
+		sudo rmdir "${CONFIG_DIR}/sudoers.d" 2>/dev/null || true
+	fi
+
+	# 验证 sudoers 语法（visudo -cf），失败仅警告不阻断安装
+	if sudo -n visudo -cf "${sudoers_file}" >/dev/null 2>&1; then
+		_log_file "sudoers syntax OK: ${sudoers_file}"
+	else
+		# [log-review] warn:降级自error——visudo 语法校验失败可能是容器/精简环境无 visudo 或权限问题，不影响主程序安装
+		warn "sudoers 语法校验不可用或失败（${sudoers_file}），请人工检查"
+	fi
+
+	# 验证规则被 sudo 实际加载（针对 SUDO_USER 或当前用户）
+	# 仅在安装者具备 sudo 时输出有效结果，否则跳过（不阻断）
+	if [[ -n "${SUDO_USER:-}" ]] && command -v rg &>/dev/null; then
+		if sudo -n -l -U "${SUDO_USER}" 2>/dev/null | rg -q "${BIN_NAME}"; then
+			ok "sudoers 规则已生效（${SUDO_USER} 可免密执行 am）"
+		else
+			# [log-review] warn:降级自error——规则按组 %ai-mirror 加载，当前用户不在组内时 -l 不显示属预期
+			warn "sudoers 规则未对 ${SUDO_USER} 显示（需属于 ai-mirror 组）"
+		fi
+	fi
 
 	if ! sudo getent group ai-mirror &>/dev/null; then
 		sudo groupadd --system ai-mirror 2>/dev/null || true
@@ -679,8 +724,8 @@ phase_summary() {
 		_dst_chk=$(md5sum "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null | cut -d' ' -f1)
 		if [[ "$_src_chk" != "$_dst_chk" ]]; then
 			_log_file "phase_summary: ${_versioned_bin} checksum mismatch, reinstalling..."
-			sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null || \
-			sudo cp "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null
+			sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null ||
+				sudo cp "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null
 		fi
 	fi
 
@@ -805,13 +850,19 @@ phase_clean() {
 		log "  Removed /etc/bash_completion.d/am"
 	fi
 
-	if sudo test -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then
-		if ! sudo rm -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then
-			ERROR_MSG="Failed to remove sudoers rule"
-			return 1
+	# Remove sudoers rules from BOTH locations:
+	# - standard /etc/sudoers.d/ai-mirror (current, since 2026-08-09)
+	# - legacy ${CONFIG_DIR}/sudoers.d/ai-mirror (pre-2026-08-09 dead rule)
+	local sudoers_file
+	for sudoers_file in "/etc/sudoers.d/ai-mirror" "${CONFIG_DIR}/sudoers.d/ai-mirror"; do
+		if sudo test -f "$sudoers_file"; then
+			if ! sudo rm -f "$sudoers_file"; then
+				ERROR_MSG="Failed to remove sudoers rule: $sudoers_file"
+				return 1
+			fi
+			log "  Removed sudoers rule: $sudoers_file"
 		fi
-		log "  Removed sudoers rule"
-	fi
+	done
 
 	if sudo test -d "${CONFIG_DIR}"; then
 		if ! sudo rm -rf "${CONFIG_DIR}"; then

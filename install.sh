@@ -626,26 +626,28 @@ UNIT_EOF
 # Security: Defense in depth
 # - No wildcards in commands: exact binary path required
 # - Subcommands restricted: only listed subcommands are allowed
-# - "" suffix allows any arguments; validation enforced by binary
+# - No arg suffix on rules: bare command matches ANY args (do NOT append
+#   "" — "" matches zero-arg invocations only, breaking am cd/cp/mv/rm)
+# - Subcommand args validated by binary (path boundary checks)
 # - Binary validates all paths are under caller's home directory
 # - Binary uses O_NOFOLLOW, fs::canonical, and boundary checks
 # - Sudoers is the outer gate; binary is the inner validator
 #
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} touch ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cp ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mv ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} auto-fix-all ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update ""
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} frz ""
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} touch
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cp
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mv
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} auto-fix-all
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} frz
 SUDOERS
 	sudo chmod 0440 "$sudoers_file"
 	sudo chown root:root "$sudoers_file"

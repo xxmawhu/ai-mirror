@@ -610,13 +610,22 @@ UNIT_EOF
 	sudo chmod 0755 "${DATA_DIR}"
 	sudo install -d "${CONFIG_DIR}"
 
-	# ---- sudoers: 写入标准目录 /etc/sudoers.d/ ----
+	# ---- sudoers: 写入 /etc/sudoers.d/zzz-ai-mirror（字典序最后，保证"最后命中"）----
 	# (2026-08-09 fix) 此前写入 ${CONFIG_DIR}/sudoers.d/ai-mirror
 	# （/etc/ai-mirror/sudoers.d/），但 sudo 只自动加载 /etc/sudoers.d/，
 	# 导致 %ai-mirror NOPASSWD 规则从未生效，am cd 等命令触发
 	# "[sudo] password for ..." 提示（issue: lark-agent 服务器）。
+	#
+	# 文件名必须用 zzz- 前缀（字典序最后）：sudo 对同一命令的多条匹配取
+	# "最后一条"（man sudoers: "where there are multiple matches, the last
+	# match is used"），且 /etc/sudoers.d 按字典序解析（"parsed in sorted
+	# lexical order"）。若写为 ai-mirror（a 开头），任何组员机器上自带的
+	# `xxx ALL=(ALL) ALL`（如 /etc/sudoers.d/maxx、yang）字典序晚于本文件，
+	# 会覆盖本 NOPASSWD 规则导致非 TTY 下报 "sudo: a terminal is required
+	# to read the password"。zzz- 前缀保证本文件对任何组员规则都是最后匹配，
+	# 免密规则必然生效（issue 2026-08-27-ai-mirror-maxx-yts-yang-am）。
 	local sudoers_dir="/etc/sudoers.d"
-	local sudoers_file="${sudoers_dir}/ai-mirror"
+	local sudoers_file="${sudoers_dir}/zzz-ai-mirror"
 	sudo install -d "${sudoers_dir}"
 
 	sudo tee "$sudoers_file" >/dev/null <<SUDOERS
@@ -652,6 +661,14 @@ SUDOERS
 	sudo chmod 0440 "$sudoers_file"
 	sudo chown root:root "$sudoers_file"
 
+	# 清理遗留旧规则文件 /etc/sudoers.d/ai-mirror（旧文件名 a 开头，会被
+	# 组员 ALL=(ALL) ALL 遮蔽；且早前版本可能含 "" 后缀死语法）。新规则
+	# 已由 zzz-ai-mirror 承担，写入并校验成功后才删除，避免规则真空。
+	if sudo test -f "/etc/sudoers.d/ai-mirror"; then
+		_log_file "removing legacy /etc/sudoers.d/ai-mirror (superseded by zzz-ai-mirror)"
+		sudo rm -f "/etc/sudoers.d/ai-mirror"
+	fi
+
 	# 清理旧位置死规则（2026-08-09 前错误写入 /etc/ai-mirror/sudoers.d/，
 	# sudo 从不加载该位置；若存在则删除，避免遗留混淆）
 	if sudo test -f "${CONFIG_DIR}/sudoers.d/ai-mirror"; then
@@ -668,14 +685,30 @@ SUDOERS
 		warn "sudoers 语法校验不可用或失败（${sudoers_file}），请人工检查"
 	fi
 
-	# 验证规则被 sudo 实际加载（针对 SUDO_USER 或当前用户）
-	# 仅在安装者具备 sudo 时输出有效结果，否则跳过（不阻断）
-	if [[ -n "${SUDO_USER:-}" ]] && command -v rg &>/dev/null; then
-		if sudo -n -l -U "${SUDO_USER}" 2>/dev/null | rg -q "${BIN_NAME}"; then
-			ok "sudoers 规则已生效（${SUDO_USER} 可免密执行 am）"
+	# 验证规则被 sudo 实际加载为 NOPASSWD（针对 SUDO_USER 或当前用户）
+	# Background（issue 2026-08-27-ai-mirror-maxx-yts-yang-am）：sudo 对同一命令
+	# 的多条匹配取"最后一条"，且 /etc/sudoers.d 按字典序解析。若组员机器上存在
+	# `xxx ALL=(ALL) ALL`（如 /etc/sudoers.d/maxx、yang），且其文件字典序晚于
+	# 本规则文件，NOPASSWD 会被遮蔽 → 免密失效（非 TTY 下报 "a terminal is
+	# required to read the password"）。规则文件已用 zzz- 前缀规避此问题，
+	# 此处做安装末尾兜底校验：对当前组员必须出现 "NOPASSWD: ... ai-mirror-bin"，
+	# 否则部署失败（issue 要求"规则对当前组员不生效则部署失败"）。
+	local target_user="${SUDO_USER:-$(id -un)}"
+	local rule_out
+	if command -v rg &>/dev/null; then
+		if rule_out=$(sudo -n -l -U "${target_user}" 2>/dev/null); then
+			if echo "$rule_out" | rg -q "NOPASSWD:.*${PREFIX}/bin/${BIN_NAME}"; then
+				ok "sudoers NOPASSWD 规则已生效（${target_user} 可免密执行 am）"
+			elif id -nG "${target_user}" 2>/dev/null | rg -qw "ai-mirror"; then
+				error "sudoers NOPASSWD 规则未对组员 ${target_user} 生效（可能被字典序更晚的 ALL=(ALL) ALL 遮蔽，请检查 /etc/sudoers.d/ 文件命名）"
+				return 1
+			else
+				# [log-review] warn:降级自error——目标用户不在 ai-mirror 组时，-l 不显示组规则属预期
+				warn "sudoers 规则未对 ${target_user} 生效（${target_user} 不在 ai-mirror 组）"
+			fi
 		else
-			# [log-review] warn:降级自error——规则按组 %ai-mirror 加载，当前用户不在组内时 -l 不显示属预期
-			warn "sudoers 规则未对 ${SUDO_USER} 显示（需属于 ai-mirror 组）"
+			# [log-review] warn:降级自error——当前用户无 NOPASSWD sudo 权限时 -n -l 不可用，无法自动校验；部署后请人工确认
+			warn "无法免密校验 sudoers（${target_user} 无 NOPASSWD 权限），部署后请人工确认: sudo -n -l -U ${target_user} | rg ai-mirror-bin"
 		fi
 	fi
 
@@ -852,11 +885,12 @@ phase_clean() {
 		log "  Removed /etc/bash_completion.d/am"
 	fi
 
-	# Remove sudoers rules from BOTH locations:
-	# - standard /etc/sudoers.d/ai-mirror (current, since 2026-08-09)
+	# Remove sudoers rules from ALL locations:
+	# - /etc/sudoers.d/zzz-ai-mirror (current, since 2026-08-27 — 字典序最后防遮蔽)
+	# - /etc/sudoers.d/ai-mirror (2026-08-09 ~ 2026-08-27, 旧文件名易被 ALL 遮蔽)
 	# - legacy ${CONFIG_DIR}/sudoers.d/ai-mirror (pre-2026-08-09 dead rule)
 	local sudoers_file
-	for sudoers_file in "/etc/sudoers.d/ai-mirror" "${CONFIG_DIR}/sudoers.d/ai-mirror"; do
+	for sudoers_file in "/etc/sudoers.d/zzz-ai-mirror" "/etc/sudoers.d/ai-mirror" "${CONFIG_DIR}/sudoers.d/ai-mirror"; do
 		if sudo test -f "$sudoers_file"; then
 			if ! sudo rm -f "$sudoers_file"; then
 				ERROR_MSG="Failed to remove sudoers rule: $sudoers_file"

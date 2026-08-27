@@ -70,7 +70,7 @@ sudo ./install.sh --clean
 | 安装 | 部署 `am` 二进制到 `/usr/local/bin/` |
 | Shell 集成 | `eval "$(am init bash)"` 生成 shell 函数（zoxide 模式） |
 | Completion | 安装 bash 补齐到 `/etc/bash_completion.d/am`（登录自动加载） |
-| Sudoers | 创建 `/etc/sudoers.d/ai-mirror`，无通配符白名单规则（`ai-mirror` 组免密执行 am） |
+| Sudoers | 创建 `/etc/sudoers.d/zzz-ai-mirror`（zzz- 前缀=字典序最后防遮蔽），无通配符白名单规则（`ai-mirror` 组免密执行 am） |
 | 用户组 | 创建 `ai-mirror` 系统组 |
 
 **可自定义路径**（环境变量）：
@@ -129,14 +129,21 @@ cp completions/am-completion.bash ~/.local/share/bash-completion/completions/am
 
 ### sudoers 安全说明
 
-sudoers 规则（`/etc/sudoers.d/ai-mirror`）允许 `ai-mirror` 组无密码执行 `am`，但程序内部实现了多层验证：
+sudoers 规则（`/etc/sudoers.d/zzz-ai-mirror`）允许 `ai-mirror` 组无密码执行 `am`，但程序内部实现了多层验证：
 - 路径验证 (`is_path_allowed`) 拒绝非 `/home/` 路径
 - 用户名验证 (`validate_username`) 拒绝 shell 元字符注入
 - 配置文件所有权检查防止预置恶意配置
 
-> **注意**：sudoers 规则必须位于标准目录 `/etc/sudoers.d/ai-mirror`（sudo 自动加载）。
+> **注意**：sudoers 规则必须位于标准目录 `/etc/sudoers.d/zzz-ai-mirror`（sudo 自动加载）。
+> `zzz-` 前缀保证字典序最后：sudo 对同一命令的多条匹配取"最后一条"（man sudoers，
+> "where there are multiple matches, the last match is used"），且 `/etc/sudoers.d`
+> 按字典序解析。若写成 `ai-mirror`（a 开头），组员机器上自带的 `xxx ALL=(ALL) ALL`
+> （如 `/etc/sudoers.d/maxx`、`yang`）字典序晚于本文件，会遮蔽 NOPASSWD 导致非 TTY
+> 下报 "sudo: a terminal is required to read the password"。zzz- 前缀保证任何组员
+> 规则都无法覆盖本免密规则（issue 2026-08-27-ai-mirror-maxx-yts-yang-am）。
 > 历史版本曾错误写入 `/etc/ai-mirror/sudoers.d/ai-mirror`，该位置 sudo 不会加载，
-> 会导致 `am` 触发 sudo 密码提示。install.sh 自 2026-08-09 起写入标准位置，并自动迁移旧规则。
+> 会导致 `am` 触发 sudo 密码提示。install.sh 自 2026-08-09 起写入标准目录，自
+> 2026-08-27 起写入 `zzz-ai-mirror` 并自动迁移旧规则。
 
 建议定期审计 `ai-mirror` 组成员，确保仅授权用户可执行特权命令。
 

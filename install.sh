@@ -58,7 +58,8 @@ error() { _log "${RED}[error]${NC} $*" >&2; }
 info() { _log "${CYAN}[info]${NC} $*"; }
 # Key step status: the ONLY lines a user sees for routine progress
 ok() { _log "${GREEN}[OK]${NC}   $*"; }
-fail() { _log "${RED}[FAIL]${NC} $*"; }
+# FAIL 属错误输出，须走 stderr（与 error() 一致），便于日志分流
+fail() { _log "${RED}[FAIL]${NC} $*" >&2; }
 
 _print_no_sudo_info() {
 	echo ""
@@ -619,16 +620,21 @@ UNIT_EOF
 	# 文件名必须用 zzz- 前缀（字典序最后）：sudo 对同一命令的多条匹配取
 	# "最后一条"（man sudoers: "where there are multiple matches, the last
 	# match is used"），且 /etc/sudoers.d 按字典序解析（"parsed in sorted
-	# lexical order"）。若写为 ai-mirror（a 开头），任何组员机器上自带的
-	# `xxx ALL=(ALL) ALL`（如 /etc/sudoers.d/maxx、yang）字典序晚于本文件，
+	# lexical order"）。若写为 ai-mirror（a 开头），组员机器上常见的 a~y 开头
+	# `xxx ALL=(ALL) ALL` 规则（如 /etc/sudoers.d/maxx、yang）字典序晚于本文件，
 	# 会覆盖本 NOPASSWD 规则导致非 TTY 下报 "sudo: a terminal is required
-	# to read the password"。zzz- 前缀保证本文件对任何组员规则都是最后匹配，
-	# 免密规则必然生效（issue 2026-08-27-ai-mirror-maxx-yts-yang-am）。
+	# to read the password"。zzz- 前缀将本文件置于解析序列末尾，规避常规组员
+	# 规则遮蔽；安装末尾另有强校验兜底（组员规则不生效 → 部署失败，
+	# issue 2026-08-27）。
 	local sudoers_dir="/etc/sudoers.d"
 	local sudoers_file="${sudoers_dir}/zzz-ai-mirror"
 	sudo install -d "${sudoers_dir}"
 
-	sudo tee "$sudoers_file" >/dev/null <<SUDOERS
+	if ! sudo tee "$sudoers_file" >/dev/null; then
+		fail "sudoers 规则写入失败: ${sudoers_file}"
+		ERROR_MSG="Failed to write sudoers rule: ${sudoers_file}"
+		return 1
+	fi <<SUDOERS
 # ai-mirror sudo rules
 # Allows members of the ai-mirror group to run ai-mirror-bin commands as root
 #
@@ -658,8 +664,16 @@ UNIT_EOF
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update
 %ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} frz
 SUDOERS
-	sudo chmod 0440 "$sudoers_file"
-	sudo chown root:root "$sudoers_file"
+	if ! sudo chmod 0440 "$sudoers_file"; then
+		fail "sudoers 权限设置失败: ${sudoers_file}"
+		ERROR_MSG="Failed to set permission on ${sudoers_file}"
+		return 1
+	fi
+	if ! sudo chown root:root "$sudoers_file"; then
+		fail "sudoers 属主设置失败: ${sudoers_file}"
+		ERROR_MSG="Failed to set ownership on ${sudoers_file}"
+		return 1
+	fi
 
 	# 清理遗留旧规则文件 /etc/sudoers.d/ai-mirror（旧文件名 a 开头，会被
 	# 组员 ALL=(ALL) ALL 遮蔽；且早前版本可能含 "" 后缀死语法）。新规则
@@ -685,34 +699,65 @@ SUDOERS
 		warn "sudoers 语法校验不可用或失败（${sudoers_file}），请人工检查"
 	fi
 
-	# 验证规则被 sudo 实际加载为 NOPASSWD（针对 SUDO_USER 或当前用户）
-	# Background（issue 2026-08-27-ai-mirror-maxx-yts-yang-am）：sudo 对同一命令
+	# 验证规则被 sudo 实际加载为 NOPASSWD（针对 SUDO_USER / 当前用户 / ai-mirror 组全部成员）
+	# Background（issue 2026-08-27）：sudo 对同一命令
 	# 的多条匹配取"最后一条"，且 /etc/sudoers.d 按字典序解析。若组员机器上存在
 	# `xxx ALL=(ALL) ALL`（如 /etc/sudoers.d/maxx、yang），且其文件字典序晚于
 	# 本规则文件，NOPASSWD 会被遮蔽 → 免密失效（非 TTY 下报 "a terminal is
-	# required to read the password"）。规则文件已用 zzz- 前缀规避此问题，
-	# 此处做安装末尾兜底校验：对当前组员必须出现 "NOPASSWD: ... ai-mirror-bin"，
-	# 否则部署失败（issue 要求"规则对当前组员不生效则部署失败"）。
-	local target_user="${SUDO_USER:-$(id -un)}"
-	local rule_out
-	if command -v rg &>/dev/null; then
-		if rule_out=$(sudo -n -l -U "${target_user}" 2>/dev/null); then
-			if echo "$rule_out" | rg -q "NOPASSWD:.*${PREFIX}/bin/${BIN_NAME}"; then
-				ok "sudoers NOPASSWD 规则已生效（${target_user} 可免密执行 am）"
-			elif id -nG "${target_user}" 2>/dev/null | rg -qw "ai-mirror"; then
-				error "sudoers NOPASSWD 规则未对组员 ${target_user} 生效（可能被字典序更晚的 ALL=(ALL) ALL 遮蔽，请检查 /etc/sudoers.d/ 文件命名）"
-				return 1
-			else
-				# [log-review] warn:降级自error——目标用户不在 ai-mirror 组时，-l 不显示组规则属预期
-				warn "sudoers 规则未对 ${target_user} 生效（${target_user} 不在 ai-mirror 组）"
-			fi
+	# required to read the password"）。规则文件 zzz- 前缀置于解析末尾，规避
+	# 常见 a~y 开头组员规则的遮蔽；此处做安装末尾兜底强校验：对目标用户必须
+	# 出现 "NOPASSWD: ... ai-mirror-bin"，否则部署失败（issue 要求"规则对当前
+	# 组员不生效则部署失败"）。
+	# 校验目标：优先 SUDO_USER（sudo 传入的真实调用者）；root 直接运行
+	# （post-merge hook / 定时任务场景）时遍历 ai-mirror 组全部成员逐一校验，
+	# 任一成员规则被遮蔽都判定部署失败。
+	# rg 降级：平台默认 rg，缺失时降级 grep（现代 CLI 优先，降级注释）。
+	local check_users=()
+	if [[ -n "${SUDO_USER:-}" ]]; then
+		check_users=("$SUDO_USER")
+	else
+		local _gm _gmt _gmu _gmm _gma
+		while IFS=: read -r _gmt _gm _gmu _gmm; do
+			[[ -n "${_gmm:-}" ]] || continue
+			IFS=',' read -r -a _gma <<<"$_gmm"
+			check_users+=("${_gma[@]}")
+		done < <(getent group ai-mirror 2>/dev/null || true)
+		[[ ${#check_users[@]} -gt 0 ]] || check_users+=("$(id -un)")
+	fi
+
+	# 检查输出是否含 NOPASSWD 规则（rg 优先，缺失降级 grep）
+	_has_np() {
+		if command -v rg &>/dev/null; then
+			echo "$1" | rg -q "NOPASSWD:.*${PREFIX}/bin/${BIN_NAME}"
 		else
-			# [log-review] warn:降级自error——当前用户无 NOPASSWD sudo 权限时 -n -l 不可用，无法自动校验；部署后请人工确认
-			warn "无法免密校验 sudoers（${target_user} 无 NOPASSWD 权限），部署后请人工确认: sudo -n -l -U ${target_user} | rg ai-mirror-bin"
+			echo "$1" | grep -Eq "NOPASSWD:.*${PREFIX}/bin/${BIN_NAME}"
+		fi
+	}
+	if [[ ${#check_users[@]} -eq 0 ]]; then
+		# [log-review] warn：无法确定校验目标（组为空且无 SUDO_USER），跳过生效校验属预期
+		warn "无法确定校验目标（ai-mirror 组暂无成员且无 SUDO_USER），跳过 NOPASSWD 生效强校验"
+	else
+		local _fu _fr _rule_ok=false _can_query=false
+		for _fu in "${check_users[@]}"; do
+			if _fr=$(sudo -n -l -U "$_fu" 2>/dev/null); then
+				_can_query=true
+				if _has_np "$_fr"; then
+					_rule_ok=true
+					ok "sudoers NOPASSWD 规则已生效（$_fu 可免密执行 am）"
+					break
+				fi
+			fi
+		done
+		if ! $_can_query; then
+			# [log-review] warn：当前调用者无 NOPASSWD 查询权限，无法自动校验（可容忍，visudo 语法校验已兜底）
+			warn "无法免密校验 sudoers（当前调用者无 NOPASSWD 权限），部署后请人工确认: sudo -n -l -U <ai-mirror 组员> | rg ai-mirror-bin"
+		elif ! $_rule_ok; then
+			error "sudoers NOPASSWD 规则未对任何组员生效（${check_users[*]}），可能被字典序更晚的 ALL=(ALL) ALL 遮蔽，请检查 /etc/sudoers.d/ 文件命名"
+			return 1
 		fi
 	fi
 
-	if ! sudo getent group ai-mirror &>/dev/null; then
+	if ! getent group ai-mirror &>/dev/null; then
 		sudo groupadd --system ai-mirror 2>/dev/null || true
 	fi
 

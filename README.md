@@ -135,15 +135,14 @@ sudoers 规则（`/etc/sudoers.d/zzz-ai-mirror`）允许 `ai-mirror` 组无密�
 - 配置文件所有权检查防止预置恶意配置
 
 > **注意**：sudoers 规则必须位于标准目录 `/etc/sudoers.d/zzz-ai-mirror`（sudo 自动加载）。
-> `zzz-` 前缀保证字典序最后：sudo 对同一命令的多条匹配取"最后一条"（man sudoers，
-> "where there are multiple matches, the last match is used"），且 `/etc/sudoers.d`
-> 按字典序解析。若写成 `ai-mirror`（a 开头），组员机器上自带的 `xxx ALL=(ALL) ALL`
-> （如 `/etc/sudoers.d/maxx`、`yang`）字典序晚于本文件，会遮蔽 NOPASSWD 导致非 TTY
-> 下报 "sudo: a terminal is required to read the password"。zzz- 前缀保证任何组员
-> 规则都无法覆盖本免密规则（issue 2026-08-27-ai-mirror-maxx-yts-yang-am）。
-> 历史版本曾错误写入 `/etc/ai-mirror/sudoers.d/ai-mirror`，该位置 sudo 不会加载，
-> 会导致 `am` 触发 sudo 密码提示。install.sh 自 2026-08-09 起写入标准目录，自
-> 2026-08-27 起写入 `zzz-ai-mirror` 并自动迁移旧规则。
+> `zzz-` 前缀使本规则在 `/etc/sudoers.d` 的字典序解析中位于末尾，规避常见的
+> `a`~`y` 开头组员规则（如 `/etc/sudoers.d/maxx`、`yang`）对 NOPASSWD 的遮蔽
+> （sudoers 对同一命令的多条匹配取"最后一条"，man sudoers "where there are
+> multiple matches, the last match is used"）。install.sh 在安装末尾还会自动校验
+> 规则对组员实际生效，不生效即部署失败（issue 2026-08-27）。
+> 历史版本曾错误写入 `/etc/ai-mirror/sudoers.d/ai-mirror`（sudo 不会加载），
+> 以及 2026-08-27 前的 `/etc/sudoers.d/ai-mirror`（易被遮蔽），install.sh 自
+> 2026-08-09 起写入标准目录、自 2026-08-27 起写入 `zzz-` 前缀并自动迁移旧规则。
 
 建议定期审计 `ai-mirror` 组成员，确保仅授权用户可执行特权命令。
 

@@ -102,8 +102,7 @@ int main(int argc, char **argv) {
     if (!is_ai_mirror_group_member()) {
       struct passwd *pw = getpwuid(getuid());
       std::cerr << "error: '" << (pw ? pw->pw_name : "unknown")
-                << "' is not a member of the 'ai-mirror' group."
-                << std::endl;
+                << "' is not a member of the 'ai-mirror' group." << std::endl;
       std::cerr << "  The 'am' CLI is for the main user only." << std::endl;
       std::cerr << "  Fix: sudo usermod -aG ai-mirror $USER" << std::endl;
       return 1;

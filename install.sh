@@ -611,22 +611,98 @@ UNIT_EOF
 	sudo chmod 0755 "${DATA_DIR}"
 	sudo install -d "${CONFIG_DIR}"
 
-	# ---- sudoers: 写入 /etc/sudoers.d/zzz-ai-mirror（字典序最后，保证"最后命中"）----
-	# (2026-08-09 fix) 此前写入 ${CONFIG_DIR}/sudoers.d/ai-mirror
-	# （/etc/ai-mirror/sudoers.d/），但 sudo 只自动加载 /etc/sudoers.d/，
-	# 导致 %ai-mirror NOPASSWD 规则从未生效，am cd 等命令触发
-	# "[sudo] password for ..." 提示（issue: lark-agent 服务器）。
+	# ---- sudoers 根治（方案 A，issue 2026-08-27）：用户级规则追加到组员自己的文件 ----
+	# 问题根源：man sudoers —— "When multiple entries match for a user, they are
+	# applied in order. Where there are multiple matches, the last match is used"。
+	# 组规则 %ai-mirror（写在 /etc/sudoers.d/zzz-ai-mirror）与组员自己的
+	# `xxx ALL=(ALL) ALL`（写在其 sudoers.d/maxx 等文件）同时匹配 am 命令时，
+	# 取解析顺序（/etc/sudoers.d 按字典序）最后一条 → ALL（需密码）遮蔽 NOPASSWD。
 	#
-	# 文件名必须用 zzz- 前缀（字典序最后）：sudo 对同一命令的多条匹配取
-	# "最后一条"（man sudoers: "where there are multiple matches, the last
-	# match is used"），且 /etc/sudoers.d 按字典序解析（"parsed in sorted
-	# lexical order"）。若写为 ai-mirror（a 开头），组员机器上常见的 a~y 开头
-	# `xxx ALL=(ALL) ALL` 规则（如 /etc/sudoers.d/maxx、yang）字典序晚于本文件，
-	# 会覆盖本 NOPASSWD 规则导致非 TTY 下报 "sudo: a terminal is required
-	# to read the password"。zzz- 前缀将本文件置于解析序列末尾，规避常规组员
-	# 规则遮蔽；安装末尾另有强校验兜底（组员规则不生效 → 部署失败，
-	# issue 2026-08-27）。
+	# 方案 A 根治原理：把用户级 NOPASSWD 规则追加到**组员自己的** sudoers 文件
+	# （/etc/sudoers.d/<user>）物理末尾。同一文件内靠后的规则必然最后命中，
+	# 与文件名字典序完全解耦 —— 无论组员文件名是 maxx 还是 zzz-maxx，其文件内
+	# 最后一条匹配 ai-mirror-bin 的规则就是我们的 NOPASSWD，免密必然生效。
+	# 这是数学必然（文件内顺序），不是概率（字典序）。
+	#
+	# 组规则 zzz-ai-mirror 仍保留作兜底（覆盖主 /etc/sudoers 中 @includedir 之前的
+	# ALL 规则场景），但真正的根治靠用户级追加。
 	local sudoers_dir="/etc/sudoers.d"
+
+	# 生成用户级 NOPASSWD 规则：对每个拥有自家 sudoers 文件（/etc/sudoers.d/<user>）
+	# 的组员，幂等追加用户级规则到该文件末尾。追加块带 BEGIN/END 标记便于卸载精确删除。
+	# 幂等：文件已含本用户 ai-mirror-bin 的 NOPASSWD 块（MARKER 标记）则跳过；
+	# 追加前 chmod 0644（0440 只读），追加后恢复 0440 root:root，并对整个文件 visudo 校验。
+	sudoers_user_rules() {
+		local _su _suf _uu _ux _uid _umem _uarr _marker="ai-mirror user-level NOPASSWD"
+		# 枚举 ai-mirror 组全部成员（root 直跑场景）；本函数由安装以 sudo/root 上下文执行
+		local _all_users=()
+		while IFS=: read -r _uu _ux _uid _umem; do
+			[[ -n "${_umem:-}" ]] || continue
+			IFS=',' read -r -a _uarr <<<"$_umem"
+			_all_users+=("${_uarr[@]}")
+		done < <(getent group ai-mirror 2>/dev/null || true)
+		if [[ ${#_all_users[@]} -eq 0 ]]; then
+			# [log-review] warn：ai-mirror 组暂无成员（首次安装/未加组），跳过用户级规则追加属预期
+			warn "ai-mirror 组暂无成员，跳过用户级 sudoers 规则追加（组规则 zzz-ai-mirror 仍生效）"
+			return 0
+		fi
+		for _su in "${_all_users[@]}"; do
+			_suf="${sudoers_dir}/${_su}"
+			if ! sudo test -f "$_suf"; then
+				_log_file "user sudoers file not found, skip: ${_suf}"
+				continue
+			fi
+			if sudo grep -q "MARKER_${_marker}" "$_suf" 2>/dev/null; then
+				_log_file "user sudoers already has ai-mirror NOPASSWD block: ${_suf}"
+				continue
+			fi
+			_log_file "appending user-level NOPASSWD block to ${_suf} for ${_su}"
+			sudo chmod 0644 "$_suf"
+			if ! sudo tee -a "$_suf" >/dev/null; then
+				sudo chmod 0440 "$_suf"
+				fail "user sudoers 追加失败: ${_suf}"
+				ERROR_MSG="Failed to append user sudoers rule: ${_suf}"
+				return 1
+			fi <<SUDOERS_USER
+# ==== MARKER_${_marker} (BEGIN) ====
+# ai-mirror user-level NOPASSWD (install.sh, issue 2026-08-27, 方案 A 根治:
+# 同文件内后行=最后命中, 与字典序无关)
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} touch
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cp
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mv
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} auto-fix-all
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update
+${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} frz
+# ==== MARKER_${_marker} (END) ====
+SUDOERS_USER
+			if ! sudo chmod 0440 "$_suf"; then
+				fail "user sudoers chmod 失败: ${_suf}"
+				ERROR_MSG="Failed to chmod user sudoers: ${_suf}"
+				return 1
+			fi
+			if ! sudo chown root:root "$_suf"; then
+				fail "user sudoers chown 失败: ${_suf}"
+				ERROR_MSG="Failed to chown user sudoers: ${_suf}"
+				return 1
+			fi
+			if ! sudo -n visudo -cf "$_suf" >/dev/null 2>&1; then
+				fail "user sudoers 语法校验失败: ${_suf}"
+				ERROR_MSG="visudo check failed after append: ${_suf}"
+				return 1
+			fi
+			ok "用户级 NOPASSWD 规则已追加（${_su} → ${_suf}，同文件后行=最后命中）"
+		done
+	}
+
 	local sudoers_file="${sudoers_dir}/zzz-ai-mirror"
 	sudo install -d "${sudoers_dir}"
 
@@ -635,7 +711,9 @@ UNIT_EOF
 		ERROR_MSG="Failed to write sudoers rule: ${sudoers_file}"
 		return 1
 	fi <<SUDOERS
-# ai-mirror sudo rules
+# ai-mirror sudo rules (group-level, fallback)
+# 根治在用户级规则（追加到各组员自己的 sudoers 文件），此组规则覆盖
+# 主 /etc/sudoers @includedir 之前的 ALL 场景作兜底。
 # Allows members of the ai-mirror group to run ai-mirror-bin commands as root
 #
 # Security: Defense in depth
@@ -699,15 +777,21 @@ SUDOERS
 		warn "sudoers 语法校验不可用或失败（${sudoers_file}），请人工检查"
 	fi
 
+	# ---- 方案 A 根治：用户级规则追加到各组员自己的 sudoers 文件 ----
+	# 与 zzz- 组规则互补：组规则兜底主文件 ALL 场景，用户级规则在组员自己的
+	# 文件内最后命中（同文件后行=最后匹配，man sudoers "last match is used"），
+	# 彻底消除文件名字典序对 NOPASSWD 的遮蔽。
+	sudoers_user_rules || return 1
+
 	# 验证规则被 sudo 实际加载为 NOPASSWD（针对 SUDO_USER / 当前用户 / ai-mirror 组全部成员）
 	# Background（issue 2026-08-27）：sudo 对同一命令
 	# 的多条匹配取"最后一条"，且 /etc/sudoers.d 按字典序解析。若组员机器上存在
 	# `xxx ALL=(ALL) ALL`（如 /etc/sudoers.d/maxx、yang），且其文件字典序晚于
 	# 本规则文件，NOPASSWD 会被遮蔽 → 免密失效（非 TTY 下报 "a terminal is
-	# required to read the password"）。规则文件 zzz- 前缀置于解析末尾，规避
-	# 常见 a~y 开头组员规则的遮蔽；此处做安装末尾兜底强校验：对目标用户必须
-	# 出现 "NOPASSWD: ... ai-mirror-bin"，否则部署失败（issue 要求"规则对当前
-	# 组员不生效则部署失败"）。
+	# required to read the password"）。已通过方案 A（用户级规则追加到组员自己
+	# 文件末尾，同文件内后行=最后命中）根治 + zzz- 组规则兜底；此处做安装末尾
+	# 兜底强校验：对目标用户必须出现 "NOPASSWD: ... ai-mirror-bin"，否则部署失败
+	# （issue 要求"规则对当前组员不生效则部署失败"）。
 	# 校验目标：优先 SUDO_USER（sudo 传入的真实调用者）；root 直接运行
 	# （post-merge hook / 定时任务场景）时遍历 ai-mirror 组全部成员逐一校验，
 	# 任一成员规则被遮蔽都判定部署失败。
@@ -752,7 +836,7 @@ SUDOERS
 			# [log-review] warn：当前调用者无 NOPASSWD 查询权限，无法自动校验（可容忍，visudo 语法校验已兜底）
 			warn "无法免密校验 sudoers（当前调用者无 NOPASSWD 权限），部署后请人工确认: sudo -n -l -U <ai-mirror 组员> | rg ai-mirror-bin"
 		elif ! $_rule_ok; then
-			error "sudoers NOPASSWD 规则未对任何组员生效（${check_users[*]}），可能被字典序更晚的 ALL=(ALL) ALL 遮蔽，请检查 /etc/sudoers.d/ 文件命名"
+			error "sudoers NOPASSWD 规则未对任何组员生效（${check_users[*]}），请检查方案 A 用户级规则是否成功追加到组员自己的 sudoers 文件"
 			return 1
 		fi
 	fi
@@ -931,9 +1015,10 @@ phase_clean() {
 	fi
 
 	# Remove sudoers rules from ALL locations:
-	# - /etc/sudoers.d/zzz-ai-mirror (current, since 2026-08-27 — 字典序最后防遮蔽)
+	# - /etc/sudoers.d/zzz-ai-mirror (current, since 2026-08-27 — 组规则兜底)
 	# - /etc/sudoers.d/ai-mirror (2026-08-09 ~ 2026-08-27, 旧文件名易被 ALL 遮蔽)
 	# - legacy ${CONFIG_DIR}/sudoers.d/ai-mirror (pre-2026-08-09 dead rule)
+	# - 用户级规则（方案 A 2026-08-27 追加到各组员自己文件的 MARKER 块，精确删除）
 	local sudoers_file
 	for sudoers_file in "/etc/sudoers.d/zzz-ai-mirror" "/etc/sudoers.d/ai-mirror" "${CONFIG_DIR}/sudoers.d/ai-mirror"; do
 		if sudo test -f "$sudoers_file"; then
@@ -944,6 +1029,28 @@ phase_clean() {
 			log "  Removed sudoers rule: $sudoers_file"
 		fi
 	done
+
+	# 用户级规则（方案 A）：删除每组员自己文件中的 MARKER 块（BEGIN~END 之间的
+	# 注释与全部 NOPASSWD 行），保留文件原有内容（组员的 ALL 等规则不受影响）
+	local _cu _cx _cid _cmem _carr _csuf
+	while IFS=: read -r _cu _cx _cid _cmem; do
+		[[ -n "${_cmem:-}" ]] || continue
+		IFS=',' read -r -a _carr <<<"$_cmem"
+		for _cu in "${_carr[@]}"; do
+			_csuf="/etc/sudoers.d/${_cu}"
+			if sudo test -f "$_csuf" 2>/dev/null && sudo grep -q "MARKER_ai-mirror user-level NOPASSWD" "$_csuf" 2>/dev/null; then
+				sudo chmod 0644 "$_csuf" 2>/dev/null
+				if sudo sed -i '/MARKER_ai-mirror user-level NOPASSWD (BEGIN)/,/MARKER_ai-mirror user-level NOPASSWD (END)/d' "$_csuf" 2>/dev/null; then
+					sudo chmod 0440 "$_csuf"
+					sudo chown root:root "$_csuf"
+					log "  Removed user-level ai-mirror NOPASSWD block from: $_csuf"
+				else
+					ERROR_MSG="Failed to remove user-level sudoers block: $_csuf"
+					return 1
+				fi
+			fi
+		done
+	done < <(getent group ai-mirror 2>/dev/null || true)
 
 	if sudo test -d "${CONFIG_DIR}"; then
 		if ! sudo rm -rf "${CONFIG_DIR}"; then

@@ -129,20 +129,30 @@ cp completions/am-completion.bash ~/.local/share/bash-completion/completions/am
 
 ### sudoers 安全说明
 
-sudoers 规则（`/etc/sudoers.d/zzz-ai-mirror`）允许 `ai-mirror` 组无密码执行 `am`，但程序内部实现了多层验证：
+sudoers 规则（`/etc/sudoers.d/zzz-ai-mirror` 组级 + 各组员自己文件内的**用户级**规则）允许 `ai-mirror` 组无密码执行 `am`，但程序内部实现了多层验证：
 - 路径验证 (`is_path_allowed`) 拒绝非 `/home/` 路径
 - 用户名验证 (`validate_username`) 拒绝 shell 元字符注入
 - 配置文件所有权检查防止预置恶意配置
 
-> **注意**：sudoers 规则必须位于标准目录 `/etc/sudoers.d/zzz-ai-mirror`（sudo 自动加载）。
-> `zzz-` 前缀使本规则在 `/etc/sudoers.d` 的字典序解析中位于末尾，规避常见的
-> `a`~`y` 开头组员规则（如 `/etc/sudoers.d/maxx`、`yang`）对 NOPASSWD 的遮蔽
-> （sudoers 对同一命令的多条匹配取"最后一条"，man sudoers "where there are
-> multiple matches, the last match is used"）。install.sh 在安装末尾还会自动校验
-> 规则对组员实际生效，不生效即部署失败（issue 2026-08-27）。
-> 历史版本曾错误写入 `/etc/ai-mirror/sudoers.d/ai-mirror`（sudo 不会加载），
-> 以及 2026-08-27 前的 `/etc/sudoers.d/ai-mirror`（易被遮蔽），install.sh 自
-> 2026-08-09 起写入标准目录、自 2026-08-27 起写入 `zzz-` 前缀并自动迁移旧规则。
+> **根治方案（2026-08-27，issue 2026-08-27）**：sudoers 遮蔽问题（组员机器
+> 上 `xxx ALL=(ALL) ALL` 规则在字典序中晚于组规则文件时，会覆盖 NOPASSWD 导致
+> 非 TTY 下报 "a terminal is required to read the password"）通过**两层机制根治**：
+>
+> 1. **用户级规则（数学必然）**：install.sh 将用户级 NOPASSWD 规则追加到每个
+>    组员自己的 `/etc/sudoers.d/<user>` 文件**物理末尾**（带 MARKER 标记）。
+>    man sudoers "When multiple entries match for a user, they are applied in
+>    order. Where there are multiple matches, the last match is used" —— 同一
+>    文件内靠后的规则必然最后命中，**与文件名字典序完全解耦**。无论组员文件叫
+>    `maxx` 还是 `zzz-maxx`，其文件内最后一条匹配 ai-mirror-bin 的规则就是
+>    NOPASSWD，免密必然生效。
+> 2. **组规则兜底**：`/etc/sudoers.d/zzz-ai-mirror` 的 `%ai-mirror` 组规则覆盖
+>    主 `/etc/sudoers` 中 `@includedir` 之前 ALL 规则的场景。
+>
+> install.sh 在安装末尾自动校验规则对组员实际生效（`sudo -n -l` 查 NOPASSWD），
+> 不生效即部署失败。历史版本曾错误写入 `/etc/ai-mirror/sudoers.d/ai-mirror`
+> （sudo 不会加载），以及 2026-08-27 前的 `/etc/sudoers.d/ai-mirror`（易被
+> 遮蔽），install.sh 自 2026-08-09 起写入标准目录、自 2026-08-27 起采用
+> 方案 A 用户级追加 + zzz- 组规则，并自动迁移旧规则。
 
 建议定期审计 `ai-mirror` 组成员，确保仅授权用户可执行特权命令。
 

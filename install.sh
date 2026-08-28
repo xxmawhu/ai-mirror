@@ -629,78 +629,27 @@ UNIT_EOF
 	local sudoers_dir="/etc/sudoers.d"
 
 	# 生成用户级 NOPASSWD 规则：对每个拥有自家 sudoers 文件（/etc/sudoers.d/<user>）
-	# 的组员，幂等追加用户级规则到该文件末尾。追加块带 BEGIN/END 标记便于卸载精确删除。
-	# 幂等：文件已含本用户 ai-mirror-bin 的 NOPASSWD 块（MARKER 标记）则跳过；
-	# 追加前 chmod 0644（0440 只读），追加后恢复 0440 root:root，并对整个文件 visudo 校验。
+	# 的组员，安全幂等追加用户级规则到该文件末尾。
+	# 【安全加固】(2026-08-27 二轮) 由独立脚本 scripts/ensure-user-sudoers.sh 实现：
+	# 原子写入（临时文件→visudo 全量校验→mv 覆盖，原文件校验前不修改=失败天然回滚）、
+	# symlink 拒写、用户名 POSIX 校验、幂等 MARKER、0440 root:root 恢复。
 	sudoers_user_rules() {
-		local _su _suf _uu _ux _uid _umem _uarr _marker="ai-mirror user-level NOPASSWD"
-		# 枚举 ai-mirror 组全部成员（root 直跑场景）；本函数由安装以 sudo/root 上下文执行
-		local _all_users=()
-		while IFS=: read -r _uu _ux _uid _umem; do
-			[[ -n "${_umem:-}" ]] || continue
-			IFS=',' read -r -a _uarr <<<"$_umem"
-			_all_users+=("${_uarr[@]}")
-		done < <(getent group ai-mirror 2>/dev/null || true)
-		if [[ ${#_all_users[@]} -eq 0 ]]; then
-			# [log-review] warn：ai-mirror 组暂无成员（首次安装/未加组），跳过用户级规则追加属预期
-			warn "ai-mirror 组暂无成员，跳过用户级 sudoers 规则追加（组规则 zzz-ai-mirror 仍生效）"
-			return 0
+		local _ensure_script="${SCRIPT_DIR}/scripts/ensure-user-sudoers.sh"
+		if [[ ! -f "$_ensure_script" ]]; then
+			error "缺少 sudoers 用户级规则脚本: ${_ensure_script}"
+			ERROR_MSG="Missing ensure-user-sudoers.sh"
+			return 1
 		fi
-		for _su in "${_all_users[@]}"; do
-			_suf="${sudoers_dir}/${_su}"
-			if ! sudo test -f "$_suf"; then
-				_log_file "user sudoers file not found, skip: ${_suf}"
-				continue
-			fi
-			if sudo grep -q "MARKER_${_marker}" "$_suf" 2>/dev/null; then
-				_log_file "user sudoers already has ai-mirror NOPASSWD block: ${_suf}"
-				continue
-			fi
-			_log_file "appending user-level NOPASSWD block to ${_suf} for ${_su}"
-			sudo chmod 0644 "$_suf"
-			if ! sudo tee -a "$_suf" >/dev/null; then
-				sudo chmod 0440 "$_suf"
-				fail "user sudoers 追加失败: ${_suf}"
-				ERROR_MSG="Failed to append user sudoers rule: ${_suf}"
-				return 1
-			fi <<SUDOERS_USER
-# ==== MARKER_${_marker} (BEGIN) ====
-# ai-mirror user-level NOPASSWD (install.sh, issue 2026-08-27, 方案 A 根治:
-# 同文件内后行=最后命中, 与字典序无关)
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} touch
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cp
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mv
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} auto-fix-all
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update
-${_su} ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} frz
-# ==== MARKER_${_marker} (END) ====
-SUDOERS_USER
-			if ! sudo chmod 0440 "$_suf"; then
-				fail "user sudoers chmod 失败: ${_suf}"
-				ERROR_MSG="Failed to chmod user sudoers: ${_suf}"
-				return 1
-			fi
-			if ! sudo chown root:root "$_suf"; then
-				fail "user sudoers chown 失败: ${_suf}"
-				ERROR_MSG="Failed to chown user sudoers: ${_suf}"
-				return 1
-			fi
-			if ! sudo -n visudo -cf "$_suf" >/dev/null 2>&1; then
-				fail "user sudoers 语法校验失败: ${_suf}"
-				ERROR_MSG="visudo check failed after append: ${_suf}"
-				return 1
-			fi
-			ok "用户级 NOPASSWD 规则已追加（${_su} → ${_suf}，同文件后行=最后命中）"
-		done
+		# shellcheck disable=SC1090
+		source "$_ensure_script"
+		# 与 install.sh 共用日志（SUDO_CMD/SUDOERS_DIR/PREFIX/BIN_NAME 默认已在脚本内，
+		# 保持默认 /etc/sudoers.d /usr/local ai-mirror-bin ai-mirror 组）
+		if ! ensure_all_users; then
+			error "用户级 NOPASSWD 规则追加失败（见上方 ensure-user-sudoers 报错）"
+			ERROR_MSG="Failed to ensure user-level sudoers rules"
+			return 1
+		fi
+		return 0
 	}
 
 	local sudoers_file="${sudoers_dir}/zzz-ai-mirror"
@@ -1032,15 +981,22 @@ phase_clean() {
 
 	# 用户级规则（方案 A）：删除每组员自己文件中的 MARKER 块（BEGIN~END 之间的
 	# 注释与全部 NOPASSWD 行），保留文件原有内容（组员的 ALL 等规则不受影响）
+	# MARKER 从 ensure-user-sudoers.sh 读取（单一事实来源，防字符串漂移）
+	local _ul_marker="ai-mirror user-level NOPASSWD"
+	local _ensure_script="${SCRIPT_DIR}/scripts/ensure-user-sudoers.sh"
+	if [[ -f "$_ensure_script" ]]; then
+		# shellcheck disable=SC1090
+		_ul_marker=$(source "$_ensure_script" 2>/dev/null && echo "$MARKER") || _ul_marker="ai-mirror user-level NOPASSWD"
+	fi
 	local _cu _cx _cid _cmem _carr _csuf
 	while IFS=: read -r _cu _cx _cid _cmem; do
 		[[ -n "${_cmem:-}" ]] || continue
 		IFS=',' read -r -a _carr <<<"$_cmem"
 		for _cu in "${_carr[@]}"; do
 			_csuf="/etc/sudoers.d/${_cu}"
-			if sudo test -f "$_csuf" 2>/dev/null && sudo grep -q "MARKER_ai-mirror user-level NOPASSWD" "$_csuf" 2>/dev/null; then
+			if sudo test -f "$_csuf" 2>/dev/null && sudo grep -q "MARKER_${_ul_marker}" "$_csuf" 2>/dev/null; then
 				sudo chmod 0644 "$_csuf" 2>/dev/null
-				if sudo sed -i '/MARKER_ai-mirror user-level NOPASSWD (BEGIN)/,/MARKER_ai-mirror user-level NOPASSWD (END)/d' "$_csuf" 2>/dev/null; then
+				if sudo sed -i "/MARKER_${_ul_marker} (BEGIN)/,/MARKER_${_ul_marker} (END)/d" "$_csuf" 2>/dev/null; then
 					sudo chmod 0440 "$_csuf"
 					sudo chown root:root "$_csuf"
 					log "  Removed user-level ai-mirror NOPASSWD block from: $_csuf"

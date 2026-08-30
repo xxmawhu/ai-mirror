@@ -41,6 +41,11 @@ GROUP="${GROUP:-ai-mirror}"
 # 幂等标记（与卸载删除逻辑共用，勿改此默认值）
 MARKER="${MARKER:-ai-mirror user-level NOPASSWD}"
 
+# ---- 子命令白名单（单一事实来源）----
+# install.sh 强校验 / diag-sudoers.sh / zzz-ai-mirror 组规则均与此数组保持一致，
+# 新增 am 子命令必须同步（否则授权集与校验集漂移 → 免密另半边失效）。
+AI_MIRROR_SUBCMDS=(create mkdir touch cp mv cd rm force-destroy health auto-fix-all list config status update frz)
+
 # ---- 日志（stderr，避免污染 stdout 供测试断言）----
 _ul_log() { echo "[ensure-user-sudoers] $*" >&2; }
 _ul_warn() { echo "[ensure-user-sudoers][warn] $*" >&2; }
@@ -50,7 +55,7 @@ _ul_err() { echo "[ensure-user-sudoers][error] $*" >&2; }
 gen_user_rules() {
 	local user="$1"
 	local sub
-	for sub in create mkdir touch cp mv cd rm force-destroy health auto-fix-all list config status update frz; do
+	for sub in "${AI_MIRROR_SUBCMDS[@]}"; do
 		printf '%s ALL=(root) NOPASSWD: %s/bin/%s %s\n' "$user" "$PREFIX" "$BIN_NAME" "$sub"
 	done
 }
@@ -72,20 +77,28 @@ ensure_one_user() {
 		return 0
 	fi
 
-	# 目标文件必须存在
-	if ! $SUDO_CMD test -f "$suf"; then
-		_ul_log "无自家 sudoers 文件，跳过: ${suf}"
-		return 0
-	fi
-
 	# 拒写符号链接（防写穿/改写他人文件）
-	if $SUDO_CMD test -L "$suf"; then
+	if $SUDO_CMD test -L "$suf" 2>/dev/null; then
 		_ul_warn "跳过符号链接（防写穿）: ${suf}"
 		return 0
 	fi
 
-	# 幂等：已含 MARKER 则跳过
-	if $SUDO_CMD grep -q "MARKER_${MARKER}" "$suf" 2>/dev/null; then
+	# 【盲区修复 2026-08-30】文件不存在 → 创建（仅含 NOPASSWD 块），不再跳过。
+	# 背景：组员（如 maxx）完全可以没有任何 /etc/sudoers.d/<user> 文件（本机
+	# compute-server-98-7 即无 maxx 文件，本次 issue 同源）。若其密码规则
+	# （ALL=(ALL) ALL）写在字典序晚于 zzz-ai-mirror 的位置，组规则兜底会被
+	# 遮蔽且无用户级规则 → 免密失效（neotrino `am rm` 提示 [sudo] password）。
+	# 给每个组员都创建/维护用户级文件后，文件内最后一行命中 = NOPASSWD（数学必然）。
+	local have_existing=false
+	if $SUDO_CMD test -f "$suf" 2>/dev/null; then
+		have_existing=true
+	fi
+	if ! $have_existing; then
+		_ul_log "组员无自家 sudoers 文件，创建新文件（仅含 NOPASSWD 块）: ${suf}"
+	fi
+
+	# 幂等：已含 MARKER 则跳过（仅针对已有文件；新创建文件必然不含）
+	if $have_existing && $SUDO_CMD grep -q "MARKER_${MARKER}" "$suf" 2>/dev/null; then
 		_ul_log "已含 ai-mirror NOPASSWD 块，幂等跳过: ${suf}"
 		return 0
 	fi
@@ -96,11 +109,13 @@ ensure_one_user() {
 		_ul_err "创建临时文件失败: ${SUDOERS_DIR}/.tmp-ai-mirror-XXXXXX"
 		return 1
 	}
-	# 临时文件复制原内容
-	if ! $SUDO_CMD cp "$suf" "$tmpfile"; then
-		$SUDO_CMD rm -f "$tmpfile"
-		_ul_err "复制原文件到临时文件失败: ${suf}"
-		return 1
+	# 临时文件准备：有原文件则复制原内容（保留组员原有规则），无则从空开始
+	if $have_existing; then
+		if ! $SUDO_CMD cp "$suf" "$tmpfile"; then
+			$SUDO_CMD rm -f "$tmpfile"
+			_ul_err "复制原文件到临时文件失败: ${suf}"
+			return 1
+		fi
 	fi
 
 	# 追加标记块（带 BEGIN/END 标记，供卸载精确删除）
@@ -155,6 +170,11 @@ ensure_all_users() {
 		[[ -n "${_umem:-}" ]] || continue
 		IFS=',' read -r -a _uarr <<<"$_umem"
 		for user in "${_uarr[@]}"; do
+			# 组内残留/同步 ghost 用户（passwd 不存在）不创建 sudoers 文件（防僵尸文件）
+			if ! getent passwd "$user" >/dev/null 2>&1; then
+				_ul_warn "跳过不存在的用户 '${user}'（组内残留，不创建 sudoers 文件）"
+				continue
+			fi
 			if ! ensure_one_user "$user"; then
 				any_fail=1
 			fi

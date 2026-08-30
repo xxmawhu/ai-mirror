@@ -8,6 +8,12 @@
 #   bash install.sh --build    # build only, no sudo needed
 #   bash install.sh --clean    # remove installed files (sudo needed)
 #
+# 权限策略（2026-08-30）：不再预检查 sudo 可用性（旧 require_sudo 在无权限时
+# exit 0 静默"成功"，导致生产机以为装好了实为未部署 —— neotrino 免密失效同源）。
+# 改为直接执行 sudo 命令：成功即成功，失败（无 sudo/需密码且非交互）由
+# set -euo pipefail + trap 生成失败报告并以非零退出 —— 遇到问题明确报错。
+# 完整 sudo 权限清单见 docs/install-sudo-permissions.md。
+#
 set -euo pipefail
 
 # ---- Configuration ----
@@ -27,7 +33,6 @@ MOUNT_WATCH_NAME="am-mount-watch"
 CURRENT_PHASE="init"
 ERROR_MSG=""
 
-# ---- Helpers: sudo check ----
 # ---- Colors ----
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -60,48 +65,6 @@ info() { _log "${CYAN}[info]${NC} $*"; }
 ok() { _log "${GREEN}[OK]${NC}   $*"; }
 # FAIL 属错误输出，须走 stderr（与 error() 一致），便于日志分流
 fail() { _log "${RED}[FAIL]${NC} $*" >&2; }
-
-_print_no_sudo_info() {
-	echo ""
-	echo "=============================================="
-	echo "  sudo 不可用 — 无法安装到系统目录"
-	echo "=============================================="
-	echo ""
-	echo "  install.sh 需要 sudo 权限将二进制部署到 ${PREFIX}/bin/"
-	echo "  以及其他系统目录（${CONFIG_DIR}/, ${DATA_DIR}/）。"
-	echo ""
-	echo "  当前用户 ($(whoami)) 没有 sudo 权限。请使用以下方式之一："
-	echo ""
-	echo "  1) 主用户运行: maxx 用户在 ~/release/ai-mirror/ 执行 git pull"
-	echo "     (post-merge hook 自动触发 install.sh)"
-	echo ""
-	echo "  2) 仅构建: bash install.sh --build"
-	echo "     (无需 sudo，构建产物在 ${BUILD_DIR}/bin/)"
-	echo ""
-	echo "=============================================="
-	echo ""
-}
-
-require_sudo() {
-	if ! command -v sudo &>/dev/null; then
-		_print_no_sudo_info
-		exit 0
-	fi
-
-	# Test if user can actually run sudo (passwordless or with password)
-	if ! sudo -n true 2>/dev/null; then
-		# sudo exists but passwordless access failed
-		# Check if they can run ANY sudo command (will prompt for password)
-		if ! sudo -v 2>/dev/null; then
-			# User is not in sudoers at all — can't run any sudo command
-			_print_no_sudo_info
-			exit 0
-		fi
-		# User has sudo but needs password — that's fine, subsequent commands
-		# will prompt interactively
-		log "This step requires sudo privileges. You may be prompted for password."
-	fi
-}
 
 # ---- Error Report ----
 generate_fail_report() {
@@ -236,7 +199,7 @@ phase_system_deps() {
 	done
 
 	if [[ ${#missing[@]} -gt 0 ]]; then
-		require_sudo
+		# [2026-08-30] 移除 sudo 预检查：直接执行，失败即报错（见 main 注释）
 		info "Installing missing packages: ${missing[*]}"
 		if ! sudo apt-get update -qq 2>&1 | sudo tee -a "$INSTALL_LOG" >/dev/null; then
 			ERROR_MSG="apt-get update failed"
@@ -397,7 +360,6 @@ cleanup_old_versions() {
 # ---- Phase: Install ----
 phase_install() {
 	CURRENT_PHASE="install"
-	require_sudo
 
 	local VERSION
 	VERSION=$(get_version)
@@ -758,35 +720,92 @@ SUDOERS
 		[[ ${#check_users[@]} -gt 0 ]] || check_users+=("$(id -un)")
 	fi
 
-	# 检查输出是否含 NOPASSWD 规则（rg 优先，缺失降级 grep）
-	_has_np() {
+	# ---- 方案 A 强校验（2026-08-30 终极裁决版，issue 2026-08-30-maxx-neotrino-dev）----
+	# 语义：`sudo -l`（无论是否带命令参数）都只是"列出候选规则"，不模拟
+	# man sudoers last-match 裁决 —— `xxx ALL=(ALL) ALL` 遮蔽时输出仍含
+	# NOPASSWD 行（neotrino `am rm user-test-a` 提示 [sudo] password 即此链路：
+	# 旧粗校验通过 ≠ 实际执行免密）。故校验分两层：
+	#   1) 存在性：逐子命令 `sudo -n -l -U <user> <bin> <sub>` 均含 NOPASSWD tag
+	#   2) 终极裁决：实际执行 `sudo -n -u root <bin> health`（health 只读无副作用、
+	#      白名单内），sudo -n 强制非交互 —— 免密生效 exit 0；被遮蔽/无规则报
+	#      password 类错误 exit 非 0。这是 sudo 真实按 last-match 裁决的第一手验证。
+	# 子命令白名单：优先复用 ensure-user-sudoers.sh 的 AI_MIRROR_SUBCMDS（单一事实来源）
+	local subs=()
+	if declare -p AI_MIRROR_SUBCMDS &>/dev/null 2>&1; then
+		subs=("${AI_MIRROR_SUBCMDS[@]}")
+	else
+		subs=(create mkdir touch cp mv cd rm force-destroy health auto-fix-all list config status update frz)
+	fi
+	# 输出文本含 NOPASSWD 目标片段（rg 优先，缺失降级 grep）
+	_has_np_txt() {
 		if command -v rg &>/dev/null; then
-			echo "$1" | rg -q "NOPASSWD:.*${PREFIX}/bin/${BIN_NAME}"
+			echo "$1" | rg -q "NOPASSWD:.*${2}"
 		else
-			echo "$1" | grep -Eq "NOPASSWD:.*${PREFIX}/bin/${BIN_NAME}"
+			echo "$1" | grep -Eq "NOPASSWD:.*${2}"
 		fi
+	}
+	# 输出含密码类拒绝提示（rg 优先，缺失降级 grep）
+	_has_pass_err() {
+		if command -v rg &>/dev/null; then
+			echo "$1" | rg -qi "password|terminal is required"
+		else
+			echo "$1" | grep -qi "password|terminal is required"
+		fi
+	}
+	# 该用户免密链路验证（存在性 + 终极裁决）
+	_verify_user_subs() {
+		local _vu="$1" _vs _vfr
+		# 1) 存在性：逐子命令均含 NOPASSWD tag
+		for _vs in "${subs[@]}"; do
+			if ! _vfr=$(sudo -n -l -U "$_vu" "${PREFIX}/bin/${BIN_NAME}" "$_vs" 2>/dev/null); then
+				_log_file "sudoers verify(存在性) fail: user=$_vu sub=$_vs (query denied)"
+				return 1
+			fi
+			if ! _has_np_txt "$_vfr" "${BIN_NAME} ${_vs}"; then
+				_log_file "sudoers verify(存在性) fail: user=$_vu sub=$_vs (no NOPASSWD tag)"
+				return 1
+			fi
+		done
+		# 2) 终极裁决：实际执行只读 health（sudo -n 非交互，last-match 真实裁决）
+		local _po _pr
+		if [[ $EUID -eq 0 ]] && command -v runuser &>/dev/null && [[ "$(id -un)" != "$_vu" ]]; then
+			# root 部署上下文（post-merge/timer）→ runuser 切到目标用户探测
+			_po=$(runuser -u "$_vu" -- sudo -n -u root "${PREFIX}/bin/${BIN_NAME}" health 2>&1)
+			_pr=$?
+		else
+			# 交互安装场景（SUDO_USER 即目标用户）→ 以当前调用者身份探测
+			_po=$(sudo -n -u root "${PREFIX}/bin/${BIN_NAME}" health 2>&1)
+			_pr=$?
+		fi
+		if [[ $_pr -ne 0 ]]; then
+			if _has_pass_err "$_po"; then
+				_log_file "sudoers verify(裁决) fail: user=$_vu (password required → NOPASSWD 未生效): $_po"
+				return 1
+			fi
+			# 非密码类失败：免密裁决已通过但 health 自身报错（环境问题）→ 降级告警不阻断
+			warn "sudoers 裁决通过但 health 探测返回非零（$_vu）：$_po"
+		fi
+		return 0
 	}
 	if [[ ${#check_users[@]} -eq 0 ]]; then
 		# [log-review] warn：无法确定校验目标（组为空且无 SUDO_USER），跳过生效校验属预期
 		warn "无法确定校验目标（ai-mirror 组暂无成员且无 SUDO_USER），跳过 NOPASSWD 生效强校验"
 	else
-		local _fu _fr _rule_ok=false _can_query=false
+		local _fu _fail_users=() _can_query=false
 		for _fu in "${check_users[@]}"; do
-			if _fr=$(sudo -n -l -U "$_fu" 2>/dev/null); then
+			if sudo -n -l -U "$_fu" >/dev/null 2>&1; then
 				_can_query=true
-				if _has_np "$_fr"; then
-					_rule_ok=true
-					ok "sudoers NOPASSWD 规则已生效（$_fu 可免密执行 am）"
-					break
-				fi
+				_verify_user_subs "$_fu" || _fail_users+=("$_fu")
 			fi
 		done
 		if ! $_can_query; then
 			# [log-review] warn：当前调用者无 NOPASSWD 查询权限，无法自动校验（可容忍，visudo 语法校验已兜底）
-			warn "无法免密校验 sudoers（当前调用者无 NOPASSWD 权限），部署后请人工确认: sudo -n -l -U <ai-mirror 组员> | rg ai-mirror-bin"
-		elif ! $_rule_ok; then
-			error "sudoers NOPASSWD 规则未对任何组员生效（${check_users[*]}），请检查方案 A 用户级规则是否成功追加到组员自己的 sudoers 文件"
+			warn "无法免密校验 sudoers（当前调用者无查询权限），部署后请人工用 scripts/diag-sudoers.sh 验证"
+		elif [[ ${#_fail_users[@]} -gt 0 ]]; then
+			error "sudoers NOPASSWD 未对以下组员实际免密生效（${_fail_users[*]}），可用 scripts/diag-sudoers.sh 定位、scripts/ensure-user-sudoers.sh 修复"
 			return 1
+		else
+			ok "sudoers NOPASSWD 规则已双层验证（存在性 + 实际裁决）生效（${check_users[*]} 可免密执行 am）"
 		fi
 	fi
 
@@ -915,7 +934,6 @@ phase_restart_systemd() {
 # ---- Phase: Clean ----
 phase_clean() {
 	CURRENT_PHASE="clean"
-	require_sudo
 	log "Removing installed files..."
 
 	# Remove wrapper

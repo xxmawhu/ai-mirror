@@ -633,29 +633,20 @@ UNIT_EOF
 #
 # Security: Defense in depth
 # - No wildcards in commands: exact binary path required
-# - Subcommands restricted: only listed subcommands are allowed
-# - No arg suffix on rules: bare command matches ANY args (do NOT append
-#   "" — "" matches zero-arg invocations only, breaking am cd/cp/mv/rm)
-# - Subcommand args validated by binary (path boundary checks)
-# - Binary validates all paths are under caller's home directory
-# - Binary uses O_NOFOLLOW, fs::canonical, and boundary checks
-# - Sudoers is the outer gate; binary is the inner validator
+# - No subcommand in the rule: a bare command matches ANY args (man sudoers:
+#   "If no command line arguments are specified, the user may run the command
+#   with any arguments they choose"). Appending a subcommand (e.g. $(cp)) makes
+#   sudoers match ONLY the exact args $(cp) (fnmatch on the whole arg string) —
+#   $(sudo ai-mirror-bin cp /a /b) then fails and falls back to password.
+#   Verified 2026-08-30 (issue: ai-mirror-ALL-root-NOPASSWD-usr-local-bi):
+#   $(sudo -n ai-mirror-bin list) ✓ vs $(sudo -n ai-mirror-bin cp /a /b) ✗.
+# - Inner gate: ai-mirror-bin validates subcommand whitelist + path boundaries
+#   (O_NOFOLLOW, fs::canonical, caller-home checks). Sudoers is the outer gate;
+#   the binary is the inner validator.
+# - 裸命令在 sudoers 层仅限定"该二进制"，任意参数均放行 —— 子命令/路径
+#   白名单由二进制内部校验（见 src/cli/parser.cpp / security/path_validator.cpp）
 #
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} create
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mkdir
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} touch
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cp
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} mv
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} cd
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} rm
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} force-destroy
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} health
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} auto-fix-all
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} list
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} config
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} status
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} update
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME} frz
+%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME}
 SUDOERS
 	if ! sudo chmod 0440 "$sudoers_file"; then
 		fail "sudoers 权限设置失败: ${sudoers_file}"
@@ -770,17 +761,12 @@ SUDOERS
 	# man sudoers last-match 裁决 —— `xxx ALL=(ALL) ALL` 遮蔽时输出仍含
 	# NOPASSWD 行（neotrino `am rm user-test-a` 提示 [sudo] password 即此链路：
 	# 旧粗校验通过 ≠ 实际执行免密）。故校验分两层：
-	#   1) 存在性：逐子命令 `sudo -n -l -U <user> <bin> <sub>` 均含 NOPASSWD tag
+	#   1) 存在性：读规则文件核对 **裸命令** 行（2026-08-30 起规则为
+	#      `... NOPASSWD: <bin>` 无子命令后缀 —— 带后缀只匹配"恰好该参数串"，
+	#      带实参调用回退密码，见 issue ai-mirror-ALL-root-NOPASSWD-usr-local-bi）
 	#   2) 终极裁决：实际执行 `sudo -n -u root <bin> health`（health 只读无副作用、
 	#      白名单内），sudo -n 强制非交互 —— 免密生效 exit 0；被遮蔽/无规则报
 	#      password 类错误 exit 非 0。这是 sudo 真实按 last-match 裁决的第一手验证。
-	# 子命令白名单：优先复用 ensure-user-sudoers.sh 的 AI_MIRROR_SUBCMDS（单一事实来源）
-	local subs=()
-	if declare -p AI_MIRROR_SUBCMDS &>/dev/null 2>&1; then
-		subs=("${AI_MIRROR_SUBCMDS[@]}")
-	else
-		subs=(create mkdir touch cp mv cd rm force-destroy health auto-fix-all list config status update frz)
-	fi
 	# 输出文本含 NOPASSWD 目标片段（rg 优先，缺失降级 grep）
 	_has_np_txt() {
 		if command -v rg &>/dev/null; then
@@ -799,8 +785,8 @@ SUDOERS
 	}
 	# 该用户免密链路验证（存在性 + 终极裁决）
 	_verify_user_subs() {
-		local _vu="$1" _vs
-		# 1) 存在性：合并组规则 + 该用户级规则文件，逐一核对 15 子命令行齐全。
+		local _vu="$1"
+		# 1) 存在性：合并组规则 + 该用户级规则文件，核对裸命令行存在。
 		#    直接读规则文件（sudo cat）—— 不用 `sudo -l -U <user> <bin> <sub>`
 		#    输出做字符串匹配：sudo -l 对 symlink 命令会 realpath 展开（输出
 		#    ai-mirror-bin.0.1 而非 ai-mirror-bin），导致误判 "no NOPASSWD tag"
@@ -815,12 +801,10 @@ SUDOERS
 			_log_file "sudoers verify(存在性) fail: user=$_vu (规则文件不可读/不存在)"
 			return 1
 		fi
-		for _vs in "${subs[@]}"; do
-			if ! _has_np_txt "$_rules" "${BIN_NAME} ${_vs}"; then
-				_log_file "sudoers verify(存在性) fail: user=$_vu sub=$_vs (rules 缺 NOPASSWD 行)"
-				return 1
-			fi
-		done
+		if ! _has_np_txt "$_rules" "${PREFIX}/bin/${BIN_NAME}$"; then
+			_log_file "sudoers verify(存在性) fail: user=$_vu (rules 缺裸命令行 NOPASSWD)"
+			return 1
+		fi
 		# 2) 终极裁决：实际执行只读 health（sudo -n 非交互，last-match 真实裁决）
 		local _po _pr
 		if [[ $EUID -eq 0 ]] && command -v runuser &>/dev/null && [[ "$(id -un)" != "$_vu" ]]; then

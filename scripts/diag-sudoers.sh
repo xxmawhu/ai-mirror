@@ -22,14 +22,10 @@ PREFIX="${AI_MIRROR_PREFIX:-/usr/local}"
 BIN_NAME="${BIN_NAME:-ai-mirror-bin}"
 GROUP="${GROUP:-ai-mirror}"
 SUDOERS_DIR="/etc/sudoers.d"
-# 子命令白名单：优先复用 ensure-user-sudoers.sh 的 AI_MIRROR_SUBCMDS（单一事实来源）
-SUB_COMMANDS=()
-if declare -p AI_MIRROR_SUBCMDS &>/dev/null 2>&1; then
-	SUB_COMMANDS=("${AI_MIRROR_SUBCMDS[@]}")
-else
-	SUB_COMMANDS=(create mkdir touch cp mv cd rm force-destroy health auto-fix-all list config status update frz)
-fi
-# 只读裁决探针子命令（白名单内、无副作用 —— 用于 sudo -n 实际执行级裁决验证）
+# 只读裁决探针子命令（无副作用 —— 用于 sudo -n 实际执行级裁决验证）。
+# 2026-08-30 起 am 位密规则为【裸命令】（无子命令后缀，man sudoers 无参=任意
+# 参数；带后缀只匹配"恰好该参数串"，带实参调用回退密码 —— 见
+# issue ai-mirror-ALL-root-NOPASSWD-usr-local-bi），故无需子命令列表。
 PROBE_SUB="health"
 
 IS_ROOT=false
@@ -181,17 +177,12 @@ for _t in "${TARGETS[@]}"; do
 		fi
 	fi
 	if [[ -n "$_rules" ]]; then
-		local_bad=()
-		for _s in "${SUB_COMMANDS[@]}"; do
-			if ! echo_matches "$_rules" "NOPASSWD:.*${BIN_NAME} ${_s}"; then
-				local_bad+=("${_s}(缺行)")
-			fi
-		done
-		if [[ ${#local_bad[@]} -gt 0 ]]; then
-			fail "$_t 规则存在性未通过: ${local_bad[*]}"
-			info "  白名单子命令集合不一致（install.sh / ensure-user-sudoers.sh / diag 需同源）"
+		if echo_matches "$_rules" "NOPASSWD:.*${PREFIX}/bin/${BIN_NAME}$"; then
+			pass "$_t 规则文件含裸命令行（NOPASSWD: ${PREFIX}/bin/${BIN_NAME}，匹配任意参数）"
 		else
-			pass "$_t 规则文件存在性完整（${#SUB_COMMANDS[@]} 子命令齐全）"
+			fail "$_t 规则存在性未通过：缺裸命令行 NOPASSWD: ${PREFIX}/bin/${BIN_NAME}"
+			info "  旧版带子命令后缀规则（cp/mv/rm/touch…）只会匹配'恰好该参数串'，带实参回退密码"
+			info "  （issue ai-mirror-ALL-root-NOPASSWD-usr-local-bi）—— 需重跑最新 install.sh 更新为裸命令"
 		fi
 	else
 		skip "无法读取规则文件（非 root 且无 sudo list 权限）—— 存在性检查跳过"

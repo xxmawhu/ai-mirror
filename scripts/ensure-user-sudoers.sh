@@ -41,23 +41,23 @@ GROUP="${GROUP:-ai-mirror}"
 # 幂等标记（与卸载删除逻辑共用，勿改此默认值）
 MARKER="${MARKER:-ai-mirror user-level NOPASSWD}"
 
-# ---- 子命令白名单（单一事实来源）----
-# install.sh 强校验 / diag-sudoers.sh / zzz-ai-mirror 组规则均与此数组保持一致，
-# 新增 am 子命令必须同步（否则授权集与校验集漂移 → 免密另半边失效）。
-AI_MIRROR_SUBCMDS=(create mkdir touch cp mv cd rm force-destroy health auto-fix-all list config status update frz)
-
 # ---- 日志（stderr，避免污染 stdout 供测试断言）----
 _ul_log() { echo "[ensure-user-sudoers] $*" >&2; }
 _ul_warn() { echo "[ensure-user-sudoers][warn] $*" >&2; }
 _ul_err() { echo "[ensure-user-sudoers][error] $*" >&2; }
 
 # ---- 生成用户级白名单规则文本（纯函数，供测试独立断言）----
+# 【裸命令铁律 2026-08-30】：规则必须不带任何子命令/参数后缀 —— man sudoers
+# "If no command line arguments are specified, the user may run the command with
+# any arguments they choose"。带后缀（如 `... ai-mirror-bin cp`）时 sudoers 只
+# 匹配"恰好该参数串"的调用（fnmatch 全参串比较），`sudo ai-mirror-bin cp /a /b`
+# 不匹配 → 回退密码 → am cp/mv/rm 等带参操作全部失效（issue
+# 2026-08-30-ai-mirror-ALL-root-NOPASSWD-usr-local-bi 实测复现）。
+# 子命令/路径白名单改由二进制内部校验（src/cli/parser.cpp + path_validator.cpp），
+# sudoers 层仅限定"该二进制"。
 gen_user_rules() {
 	local user="$1"
-	local sub
-	for sub in "${AI_MIRROR_SUBCMDS[@]}"; do
-		printf '%s ALL=(root) NOPASSWD: %s/bin/%s %s\n' "$user" "$PREFIX" "$BIN_NAME" "$sub"
-	done
+	printf '%s ALL=(root) NOPASSWD: %s/bin/%s\n' "$user" "$PREFIX" "$BIN_NAME"
 }
 
 # ---- 用户名合法性：POSIX 登录名（开头字母或 _，后续字母数字 _ -）----

@@ -148,11 +148,20 @@ sudoers 规则（`/etc/sudoers.d/zzz-ai-mirror` 组级 + 各组员自己文件�
 > 2. **组规则兜底**：`/etc/sudoers.d/zzz-ai-mirror` 的 `%ai-mirror` 组规则覆盖
 >    主 `/etc/sudoers` 中 `@includedir` 之前 ALL 规则的场景。
 >
-> install.sh 在安装末尾自动校验规则对组员实际生效（`sudo -n -l` 查 NOPASSWD），
-> 不生效即部署失败。历史版本曾错误写入 `/etc/ai-mirror/sudoers.d/ai-mirror`
-> （sudo 不会加载），以及 2026-08-27 前的 `/etc/sudoers.d/ai-mirror`（易被
-> 遮蔽），install.sh 自 2026-08-09 起写入标准目录、自 2026-08-27 起采用
-> 方案 A 用户级追加 + zzz- 组规则，并自动迁移旧规则。
+> **裸命令铁律（2026-08-30，issue ai-mirror-ALL-root-NOPASSWD-usr-local-bi）**：
+> 规则必须为**裸命令** `NOPASSWD: /usr/local/bin/ai-mirror-bin`（无子命令/参数
+> 后缀）—— man sudoers "If no command line arguments are specified, the user
+> may run the command with any arguments they choose"。带子命令后缀（如
+> `... ai-mirror-bin cp`）时只匹配"恰好该参数串"（fnmatch 全参串比较），
+> `sudo ai-mirror-bin cp /a /b` 带实参调用不匹配 → 回退密码（am cp/mv/rm 全
+> 链路失效）。子命令/路径白名单改由二进制内部校验（outer gate = sudoers 仅
+> 限定该二进制；inner validator = ai-mirror-bin 的 parser + path_validator）。
+>
+> install.sh 在安装末尾自动校验规则对组员实际生效（存在性读规则文件确认裸
+> 命令行 + `sudo -n` 实际执行 health 裁决），不生效即部署失败。历史版本曾错误
+> 写入 `/etc/ai-mirror/sudoers.d/ai-mirror`（sudo 不会加载），以及 2026-08-27
+> 前的 `/etc/sudoers.d/ai-mirror`（易被遮蔽），install.sh 自 2026-08-09 起写入
+> 标准目录、自 2026-08-27 起采用方案 A 用户级追加 + zzz- 组规则，并自动迁移旧规则。
 
 建议定期审计 `ai-mirror` 组成员，确保仅授权用户可执行特权命令。
 

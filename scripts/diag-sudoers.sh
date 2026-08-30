@@ -97,7 +97,7 @@ else
 fi
 for _t in "${TARGETS[@]}"; do
 	if getent passwd "$_t" >/dev/null 2>&1; then
-		if echo "$(getent group "$GROUP" | cut -d: -f4)" | tr ',' '\n' | grep -qx "$_t"; then
+		if getent group "$GROUP" | cut -d: -f4 | tr ',' '\n' | grep -qx "$_t"; then
 			pass "$_t 属于 $GROUP 组（wrapper 组检查可通过）"
 		else
 			fail "$_t 不属于 $GROUP 组 —— wrapper 会直接拒绝（错误信息不是 sudo 密码提示）"
@@ -112,6 +112,7 @@ echo "===== 层 2: sudoers 规则文件 ====="
 if [[ -d "$SUDOERS_DIR" ]]; then
 	if [[ -r "$SUDOERS_DIR" ]]; then
 		info "$SUDOERS_DIR 文件列表:"
+		# shellcheck disable=SC2012 # 目录列表需直观展示权限/属主，ls 语义优于 find
 		ls -la "$SUDOERS_DIR" | sed 's/^/    /'
 	else
 		skip "无权限读取 $SUDOERS_DIR（目录 0640 root 常见）—— 请以 root 运行获得完整文件检查"
@@ -162,27 +163,38 @@ done
 echo "===== 层 3: 实际裁决（sudo -n 实际执行 $PROBE_SUB） ====="
 for _t in "${TARGETS[@]}"; do
 	echo "  --- 用户 $_t ---"
-	# 查询权限探测：无权限则 skip（调用者权限不足，非断点本身）
-	if ! sudo -n -l -U "$_t" >/dev/null 2>&1; then
-		skip "无权限查询 $_t 的 sudo 规则（调用者非 root/无 list 权限）—— 请以 root 运行获得裁决验证"
-		continue
-	fi
-	# 1) 存在性：逐子命令 -l 均含 NOPASSWD tag（列表语义，仅作存在性核对）
-	local_bad=()
-	for _s in "${SUB_COMMANDS[@]}"; do
-		if _out=$(sudo -n -l -U "$_t" "${PREFIX}/bin/${BIN_NAME}" "$_s" 2>/dev/null); then
-			if echo_matches "$_out" "NOPASSWD:.*${BIN_NAME} ${_s}"; then
-				:
-			else
-				local_bad+=("${_s}(无NOPASSWD)")
-			fi
-		else
-			local_bad+=("${_s}(无规则)")
+	# 1) 存在性：直接读规则文件（组规则 + 用户级文件）逐子命令核对。
+	#    不用 `sudo -l -U <user> <bin> <sub>` 输出字符串匹配 —— sudo -l 对
+	#    symlink 命令会 realpath 展开（输出 ai-mirror-bin.0.1 而非 ai-mirror-bin）
+	#    → 误判无规则（2026-08-30 gpu-server-98-4 部署失败即此根因）。读文件内容
+	#    无 realpath 噪声，且与 install.sh 强校验同一实现。
+	_rules=""
+	if $IS_ROOT; then
+		_rules=$(cat "${SUDOERS_DIR}/zzz-ai-mirror" 2>/dev/null || true)
+		if [[ -f "${SUDOERS_DIR}/${_t}" ]]; then
+			_rules+=$'\n'"$(cat "${SUDOERS_DIR}/${_t}" 2>/dev/null || true)"
 		fi
-	done
-	if [[ ${#local_bad[@]} -gt 0 ]]; then
-		fail "$_t 存在性未通过: ${local_bad[*]}"
-		info "  白名单子命令集合不一致（install.sh / ensure-user-sudoers.sh / diag 需同源）"
+	elif command -v sudo &>/dev/null && sudo -n -l -U "$_t" >/dev/null 2>&1; then
+		_rules=$(sudo cat "${SUDOERS_DIR}/zzz-ai-mirror" 2>/dev/null || true)
+		if sudo test -f "${SUDOERS_DIR}/${_t}" 2>/dev/null; then
+			_rules+=$'\n'"$(sudo cat "${SUDOERS_DIR}/${_t}" 2>/dev/null || true)"
+		fi
+	fi
+	if [[ -n "$_rules" ]]; then
+		local_bad=()
+		for _s in "${SUB_COMMANDS[@]}"; do
+			if ! echo_matches "$_rules" "NOPASSWD:.*${BIN_NAME} ${_s}"; then
+				local_bad+=("${_s}(缺行)")
+			fi
+		done
+		if [[ ${#local_bad[@]} -gt 0 ]]; then
+			fail "$_t 规则存在性未通过: ${local_bad[*]}"
+			info "  白名单子命令集合不一致（install.sh / ensure-user-sudoers.sh / diag 需同源）"
+		else
+			pass "$_t 规则文件存在性完整（${#SUB_COMMANDS[@]} 子命令齐全）"
+		fi
+	else
+		skip "无法读取规则文件（非 root 且无 sudo list 权限）—— 存在性检查跳过"
 	fi
 	# 2) 终极裁决：实际执行（root 上下文 runuser 切用户；否则以调用者身份）
 	_po=""
@@ -190,12 +202,16 @@ for _t in "${TARGETS[@]}"; do
 	if $IS_ROOT && command -v runuser &>/dev/null && [[ "$(id -un)" != "$_t" ]]; then
 		_po=$(runuser -u "$_t" -- sudo -n -u root "${PREFIX}/bin/${BIN_NAME}" "$PROBE_SUB" 2>&1)
 		_pr=$?
-	else
+	elif command -v sudo &>/dev/null; then
 		_po=$(sudo -n -u root "${PREFIX}/bin/${BIN_NAME}" "$PROBE_SUB" 2>&1)
 		_pr=$?
+	else
+		_pr=-1
 	fi
 	if [[ $_pr -eq 0 ]]; then
 		pass "$_t 实际裁决通过（免密执行 $PROBE_SUB 成功）"
+	elif [[ $_pr -eq -1 ]]; then
+		skip "系统无 sudo 命令 —— 裁决验证需 root 或 sudo"
 	elif echo_matches "$_po" "password|terminal is required"; then
 		fail "$_t 实际裁决失败（NOPASSWD 未生效 → sudo 要求密码）"
 		info "  根因通常是: 规则被 ALL=(ALL) ALL 遮蔽 或 层 2 规则缺失（看上方 [FAIL]/[skip] 行）"

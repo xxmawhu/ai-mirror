@@ -754,15 +754,25 @@ SUDOERS
 	}
 	# 该用户免密链路验证（存在性 + 终极裁决）
 	_verify_user_subs() {
-		local _vu="$1" _vs _vfr
-		# 1) 存在性：逐子命令均含 NOPASSWD tag
+		local _vu="$1" _vs
+		# 1) 存在性：合并组规则 + 该用户级规则文件，逐一核对 15 子命令行齐全。
+		#    直接读规则文件（sudo cat）—— 不用 `sudo -l -U <user> <bin> <sub>`
+		#    输出做字符串匹配：sudo -l 对 symlink 命令会 realpath 展开（输出
+		#    ai-mirror-bin.0.1 而非 ai-mirror-bin），导致误判 "no NOPASSWD tag"
+		#    （2026-08-30 实测 gpu-server-98-4 部署失败即此根因）。
+		local _rules _ufile
+		_rules=$(sudo cat "${sudoers_dir}/zzz-ai-mirror" 2>/dev/null || true)
+		_ufile="${sudoers_dir}/${_vu}"
+		if sudo test -f "$_ufile" 2>/dev/null; then
+			_rules+=$'\n'"$(sudo cat "$_ufile" 2>/dev/null || true)"
+		fi
+		if [[ -z "$_rules" ]]; then
+			_log_file "sudoers verify(存在性) fail: user=$_vu (规则文件不可读/不存在)"
+			return 1
+		fi
 		for _vs in "${subs[@]}"; do
-			if ! _vfr=$(sudo -n -l -U "$_vu" "${PREFIX}/bin/${BIN_NAME}" "$_vs" 2>/dev/null); then
-				_log_file "sudoers verify(存在性) fail: user=$_vu sub=$_vs (query denied)"
-				return 1
-			fi
-			if ! _has_np_txt "$_vfr" "${BIN_NAME} ${_vs}"; then
-				_log_file "sudoers verify(存在性) fail: user=$_vu sub=$_vs (no NOPASSWD tag)"
+			if ! _has_np_txt "$_rules" "${BIN_NAME} ${_vs}"; then
+				_log_file "sudoers verify(存在性) fail: user=$_vu sub=$_vs (rules 缺 NOPASSWD 行)"
 				return 1
 			fi
 		done

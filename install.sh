@@ -698,6 +698,47 @@ SUDOERS
 	# 彻底消除文件名字典序对 NOPASSWD 的遮蔽。
 	sudoers_user_rules || return 1
 
+	# ---- install 免密自举（2026-08-30，用户需求：仅 install 所需命令免密）----
+	# 动机：post-merge 非交互自动部署 / 手工安装均需 root；若主用户无 sudo 全免密，
+	# 每次 install 提示密码，非交互场景直接失败（neotrino 现状）。此处为**当前安装者**
+	# （SUDO_USER，主用户，本机一般已有 ALL=(ALL) ALL 密码全权 —— 白名单仅免密、
+	# 不扩张其能力）写 install/ensure 实际调用的 sudo 命令白名单（绝对路径 + 参数通配）。
+	# 命令全集见 docs/install-sudo-permissions.md（A~H 类）。
+	# **禁止改成 %ai-mirror 组级**：组内含 AI 用户（无 sudo 全权），授权会扩张其
+	# 能力（可 root 执行 rm/tee/chmod 任意参数）——安全隔离铁律。
+	if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+		local _inst_file="${sudoers_dir}/zzz-ai-mirror-install"
+		# shellcheck disable=SC2154 # SUDO_USER 为 sudo 传入环境变量
+		local _inst_rules
+		_inst_rules=$(
+			cat <<SUDOERS
+# ai-mirror installer 免密（仅 ${SUDO_USER} —— 安装者本人；勿改 %ai-mirror 组级，防 AI 用户能力扩张）
+# 命令 = install.sh + ensure-user-sudoers.sh 全部 sudo 调用；清单维护见 docs/install-sudo-permissions.md
+${SUDO_USER} ALL=(root) NOPASSWD: /usr/bin/install *, /usr/bin/rm *, /bin/rm *, /usr/bin/cp *, /bin/cp *, /usr/bin/chmod *, /bin/chmod *, /usr/bin/chown *, /bin/chown *, /usr/bin/ln *, /bin/ln *, /usr/bin/tee *, /usr/bin/mkdir *, /bin/mkdir *, /usr/bin/mv *, /bin/mv *, /usr/bin/rmdir *, /bin/rmdir *, /usr/bin/grep *, /bin/grep *, /usr/bin/sed *, /bin/sed *, /usr/bin/ls *, /bin/ls *, /usr/bin/test *, /bin/test *, /usr/bin/mktemp *, /usr/sbin/visudo *, /usr/bin/systemctl *, /usr/bin/apt-get *, /usr/sbin/groupadd *
+SUDOERS
+		)
+		if sudo tee "$_inst_file" >/dev/null <<<"$_inst_rules"; then
+			sudo chmod 0440 "$_inst_file" 2>/dev/null
+			sudo chown root:root "$_inst_file" 2>/dev/null
+			if sudo -n visudo -cf "$_inst_file" >/dev/null 2>&1; then
+				# 免密生效自检：/usr/bin/test 为白名单内命令，sudo -n 免密且文件存在 = 规则已被加载
+				if sudo -n /usr/bin/test -f "$_inst_file" 2>/dev/null; then
+					ok "install 免密白名单已生效（${SUDO_USER} 后续运行 install.sh 免密）"
+				else
+					# [log-review] warn：规则写入但 sudo -n 自检失败——可能被字典序更晚规则遮蔽，不影响 am 主功能
+					warn "install 免密白名单写入但自检失败（${_inst_file}），后续安装可能仍提示密码（用 scripts/diag-sudoers.sh 复核）"
+				fi
+			else
+				# [log-review] warn：语法校验失败即回滚删除（防半态文件），不影响 am 主功能
+				warn "install 免密白名单语法校验失败，已回滚删除"
+				sudo rm -f "$_inst_file"
+			fi
+		else
+			# [log-review] warn：写入失败不作废主安装（am 规则已在前落盘）
+			warn "install 免密白名单写入失败: ${_inst_file}"
+		fi
+	fi
+
 	# 验证规则被 sudo 实际加载为 NOPASSWD（针对 SUDO_USER / 当前用户 / ai-mirror 组全部成员）
 	# Background（issue 2026-08-27）：sudo 对同一命令
 	# 的多条匹配取"最后一条"，且 /etc/sudoers.d 按字典序解析。若组员机器上存在
@@ -1004,7 +1045,7 @@ phase_clean() {
 	# - legacy ${CONFIG_DIR}/sudoers.d/ai-mirror (pre-2026-08-09 dead rule)
 	# - 用户级规则（方案 A 2026-08-27 追加到各组员自己文件的 MARKER 块，精确删除）
 	local sudoers_file
-	for sudoers_file in "/etc/sudoers.d/zzz-ai-mirror" "/etc/sudoers.d/ai-mirror" "${CONFIG_DIR}/sudoers.d/ai-mirror"; do
+	for sudoers_file in "/etc/sudoers.d/zzz-ai-mirror" "/etc/sudoers.d/zzz-ai-mirror-install" "/etc/sudoers.d/ai-mirror" "${CONFIG_DIR}/sudoers.d/ai-mirror"; do
 		if sudo test -f "$sudoers_file"; then
 			if ! sudo rm -f "$sudoers_file"; then
 				ERROR_MSG="Failed to remove sudoers rule: $sudoers_file"

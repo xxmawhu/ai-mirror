@@ -364,6 +364,10 @@ phase_install() {
 	local VERSION
 	VERSION=$(get_version)
 
+	# [2026-08-30] 提示语义：部署到系统目录（/usr/local/bin、/etc/sudoers.d 等）
+	# 需要 root。若本机 userId 未配置免密 sudo，sudo 会提示输入一次密码 ——
+	# 这是 install 的正常交互，不是失败；输入密码后继续完成部署。
+	info "开始部署系统文件（需要 root 权限，未配置免密时 sudo 会提示输入密码）..."
 	if ! sudo install -d "${PREFIX}/bin"; then
 		ERROR_MSG="Failed to create directory: ${PREFIX}/bin"
 		fail "安装失败 (创建 ${PREFIX}/bin)"
@@ -809,8 +813,11 @@ SUDOERS
 			fi
 		done
 		if ! $_can_query; then
-			# [log-review] warn：当前调用者无 NOPASSWD 查询权限，无法自动校验（可容忍，visudo 语法校验已兜底）
-			warn "无法免密校验 sudoers（当前调用者无查询权限），部署后请人工用 scripts/diag-sudoers.sh 验证"
+			# [log-review] warn：当前调用者无免密 sudo（需密码）或无查询权限，
+			# 无法自动校验（可容忍——规则已写入，密码模式下 sudo -n 天然失败）：
+			# 安装正常继续，部署完成后用 am 实际命令确认免密（验收点）
+			warn "当前调用者 sudo 需密码或无查询权限，已跳过 am 免密自动校验（属预期降级）"
+			warn "部署完成后请验证: am health 应免密执行；完整复核: sudo bash scripts/diag-sudoers.sh maxx"
 		elif [[ ${#_fail_users[@]} -gt 0 ]]; then
 			error "sudoers NOPASSWD 未对以下组员实际免密生效（${_fail_users[*]}），可用 scripts/diag-sudoers.sh 定位、scripts/ensure-user-sudoers.sh 修复"
 			return 1

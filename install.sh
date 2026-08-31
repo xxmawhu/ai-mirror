@@ -621,11 +621,15 @@ UNIT_EOF
 	local sudoers_file="${sudoers_dir}/zzz-ai-mirror"
 	sudo install -d "${sudoers_dir}"
 
-	if ! sudo tee "$sudoers_file" >/dev/null; then
-		fail "sudoers 规则写入失败: ${sudoers_file}"
-		ERROR_MSG="Failed to write sudoers rule: ${sudoers_file}"
-		return 1
-	fi <<SUDOERS
+	# 【2026-08-31 事故修复】写 sudoers 的 heredoc 一律用【引用】heredoc
+	# （<<'SUDOERS' 零展开）+ 规则行单独变量拼接 —— 根除"未引用 heredoc 中
+	# \$(cmd)/反引号被 shell 执行并注入 sudoers"的污染（上版注释含
+	# "$(sudo -n ai-mirror-bin list)"，安装时把 AI 用户列表写进文件 → 语法
+	# 错误 → sudo 整文件跳过 → am 免密失效）。需展开的仅规则路径，由 _rule 携带。
+	local _rule="%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME}"
+	local _content
+	_content=$(
+		cat <<'SUDOERS'
 # ai-mirror sudo rules (group-level, fallback)
 # 根治在用户级规则（追加到各组员自己的 sudoers 文件），此组规则覆盖
 # 主 /etc/sudoers @includedir 之前的 ALL 场景作兜底。
@@ -633,21 +637,25 @@ UNIT_EOF
 #
 # Security: Defense in depth
 # - No wildcards in commands: exact binary path required
-# - No subcommand in the rule: a bare command matches ANY args (man sudoers:
-#   "If no command line arguments are specified, the user may run the command
-#   with any arguments they choose"). Appending a subcommand (e.g. $(cp)) makes
-#   sudoers match ONLY the exact args $(cp) (fnmatch on the whole arg string) —
-#   $(sudo ai-mirror-bin cp /a /b) then fails and falls back to password.
-#   Verified 2026-08-30 (issue: ai-mirror-ALL-root-NOPASSWD-usr-local-bi):
-#   $(sudo -n ai-mirror-bin list) ✓ vs $(sudo -n ai-mirror-bin cp /a /b) ✗.
+# - 裸命令铁律（issue ai-mirror-ALL-root-NOPASSWD-usr-local-bi）：
+#   man sudoers "If no command line arguments are specified, the user may run
+#   the command with any arguments they choose"。带子命令后缀只匹配"恰好该
+#   参数串"（fnmatch 全参串），"sudo ai-mirror-bin cp SRC DST" 带实参不匹配
+#   → 回退密码。故规则不带任何子命令/参数后缀。
+# - 本注释区为引用 heredoc：可自由书写 $、反引号、$(cmd) 等字符，绝不被执行。
 # - Inner gate: ai-mirror-bin validates subcommand whitelist + path boundaries
 #   (O_NOFOLLOW, fs::canonical, caller-home checks). Sudoers is the outer gate;
 #   the binary is the inner validator.
-# - 裸命令在 sudoers 层仅限定"该二进制"，任意参数均放行 —— 子命令/路径
-#   白名单由二进制内部校验（见 src/cli/parser.cpp / security/path_validator.cpp）
-#
-%ai-mirror ALL=(root) NOPASSWD: ${PREFIX}/bin/${BIN_NAME}
 SUDOERS
+	)
+	# 命令替换总是剥离尾部换行：用变量累加显式补 \n（$() 内 printf 无效——
+	# 外层 $( ) 会再次剥离尾部换行，2026-08-31 实测规则行粘连进注释行）
+	_content+=$'\n'"$_rule"$'\n'
+	if ! printf '%s' "$_content" | sudo tee "$sudoers_file" >/dev/null; then
+		fail "sudoers 规则写入失败: ${sudoers_file}"
+		ERROR_MSG="Failed to write sudoers rule: ${sudoers_file}"
+		return 1
+	fi
 	if ! sudo chmod 0440 "$sudoers_file"; then
 		fail "sudoers 权限设置失败: ${sudoers_file}"
 		ERROR_MSG="Failed to set permission on ${sudoers_file}"
@@ -675,12 +683,23 @@ SUDOERS
 		sudo rmdir "${CONFIG_DIR}/sudoers.d" 2>/dev/null || true
 	fi
 
-	# 验证 sudoers 语法（visudo -cf），失败仅警告不阻断安装
-	if sudo -n visudo -cf "${sudoers_file}" >/dev/null 2>&1; then
+	# 验证 sudoers 语法（visudo -cf）—— 语法错误会被 sudo【整文件跳过】→ am
+	# 免密失效（2026-08-31 事故教训：污染文件此前被 warn 放过，用户机 am 持续
+	# 要密码）。用非 -n 形式（利用本次安装已缓存的 sudo 凭据），区分两种情况：
+	#   a) 输出含 "syntax error" → 文件损坏 → 安装中止（防带病部署）
+	#   b) visudo 本身不可用（无 sudo/凭据过期）→ 降级 warn，由后续强校验兜底
+	local _vout
+	if _vout=$(sudo visudo -cf "${sudoers_file}" 2>&1); then
 		_log_file "sudoers syntax OK: ${sudoers_file}"
 	else
-		# [log-review] warn:降级自error——visudo 语法校验失败可能是容器/精简环境无 visudo 或权限问题，不影响主程序安装
-		warn "sudoers 语法校验不可用或失败（${sudoers_file}），请人工检查"
+		if [[ "$_vout" == *"syntax error"* ]]; then
+			error "sudoers 语法校验失败（${sudoers_file}），安装中止："
+			error "$(printf '%s\n' "$_vout" | head -6)"
+			ERROR_MSG="sudoers syntax error: ${sudoers_file}"
+			return 1
+		fi
+		# [log-review] warn：visudo 不可用/无凭据，无法校验（不阻断，强校验兜底）
+		warn "sudoers 语法校验跳过（visudo 不可用: $(printf '%s\n' "$_vout" | head -1)）"
 	fi
 
 	# ---- 方案 A 根治：用户级规则追加到各组员自己的 sudoers 文件 ----
@@ -700,18 +719,24 @@ SUDOERS
 	if [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
 		local _inst_file="${sudoers_dir}/zzz-ai-mirror-install"
 		# shellcheck disable=SC2154 # SUDO_USER 为 sudo 传入环境变量
+		# 引用 heredoc + 规则行变量拼接（2026-08-31 事故修复，同 zzz-ai-mirror）
+		local _inst_rule
+		_inst_rule="${SUDO_USER} ALL=(root) NOPASSWD: /usr/bin/install *, /usr/bin/rm *, /bin/rm *, /usr/bin/cp *, /bin/cp *, /usr/bin/chmod *, /bin/chmod *, /usr/bin/chown *, /bin/chown *, /usr/bin/ln *, /bin/ln *, /usr/bin/tee *, /usr/bin/mkdir *, /bin/mkdir *, /usr/bin/mv *, /bin/mv *, /usr/bin/rmdir *, /bin/rmdir *, /usr/bin/grep *, /bin/grep *, /usr/bin/sed *, /bin/sed *, /usr/bin/ls *, /bin/ls *, /usr/bin/test *, /bin/test *, /usr/bin/mktemp *, /usr/sbin/visudo *, /usr/bin/systemctl *, /usr/bin/apt-get *, /usr/sbin/groupadd *"
 		local _inst_rules
 		_inst_rules=$(
-			cat <<SUDOERS
-# ai-mirror installer 免密（仅 ${SUDO_USER} —— 安装者本人；勿改 %ai-mirror 组级，防 AI 用户能力扩张）
+			cat <<'SUDOERS'
+# ai-mirror installer 免密（单用户：安装者本人；勿改 %ai-mirror 组级，防 AI 用户能力扩张）
 # 命令 = install.sh + ensure-user-sudoers.sh 全部 sudo 调用；清单维护见 docs/install-sudo-permissions.md
-${SUDO_USER} ALL=(root) NOPASSWD: /usr/bin/install *, /usr/bin/rm *, /bin/rm *, /usr/bin/cp *, /bin/cp *, /usr/bin/chmod *, /bin/chmod *, /usr/bin/chown *, /bin/chown *, /usr/bin/ln *, /bin/ln *, /usr/bin/tee *, /usr/bin/mkdir *, /bin/mkdir *, /usr/bin/mv *, /bin/mv *, /usr/bin/rmdir *, /bin/rmdir *, /usr/bin/grep *, /bin/grep *, /usr/bin/sed *, /bin/sed *, /usr/bin/ls *, /bin/ls *, /usr/bin/test *, /bin/test *, /usr/bin/mktemp *, /usr/sbin/visudo *, /usr/bin/systemctl *, /usr/bin/apt-get *, /usr/sbin/groupadd *
 SUDOERS
 		)
-		if sudo tee "$_inst_file" >/dev/null <<<"$_inst_rules"; then
+		# 命令替换剥离尾部换行 → 变量累加显式补 \n（防规则行粘连进注释）
+		_inst_rules+=$'\n'"$_inst_rule"$'\n'
+		if printf '%s' "$_inst_rules" | sudo tee "$_inst_file" >/dev/null; then
 			sudo chmod 0440 "$_inst_file" 2>/dev/null
 			sudo chown root:root "$_inst_file" 2>/dev/null
-			if sudo -n visudo -cf "$_inst_file" >/dev/null 2>&1; then
+			# 用非 -n visudo（利用本次安装已缓存凭据），语法错误才回滚删除
+			local _vinst
+			if _vinst=$(sudo visudo -cf "$_inst_file" 2>&1); then
 				# 免密生效自检：/usr/bin/test 为白名单内命令，sudo -n 免密且文件存在 = 规则已被加载
 				if sudo -n /usr/bin/test -f "$_inst_file" 2>/dev/null; then
 					ok "install 免密白名单已生效（${SUDO_USER} 后续运行 install.sh 免密）"
@@ -720,9 +745,14 @@ SUDOERS
 					warn "install 免密白名单写入但自检失败（${_inst_file}），后续安装可能仍提示密码（用 scripts/diag-sudoers.sh 复核）"
 				fi
 			else
-				# [log-review] warn：语法校验失败即回滚删除（防半态文件），不影响 am 主功能
-				warn "install 免密白名单语法校验失败，已回滚删除"
-				sudo rm -f "$_inst_file"
+				if [[ "$_vinst" == *"syntax error"* ]]; then
+					# [log-review] warn：语法校验失败即回滚删除（防半态文件），不影响 am 主功能
+					warn "install 免密白名单语法校验失败，已回滚删除: $_inst_file"
+					sudo rm -f "$_inst_file"
+				else
+					# [log-review] warn：visudo 不可用/无凭据（密码 sudo 场景），文件保留，免密由手动配置或后续确认
+					warn "install 免密白名单写入但 visudo 校验暂不可用（${_vinst}），文件保留"
+				fi
 			fi
 		else
 			# [log-review] warn：写入失败不作废主安装（am 规则已在前落盘）

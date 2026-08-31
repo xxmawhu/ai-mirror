@@ -3105,18 +3105,29 @@ int cmd_status([[maybe_unused]] bool verbose) {
 
     // 【2026-08-31 issue 修复】fs::exists 无 error_code 重载在权限不足目录
     // 抛 fs::filesystem_error（"status: Permission denied"）→ am status 未捕获
-    // 异常崩溃。改用 error_code 重载 + 区分"不存在/不可读"。
+    // 异常崩溃。改用 error_code 重载 + 区分存在性/缺失/权限隔离。
+    // 【2026-08-31 回归修复】ai-user 的 .ssh/authorized_keys 为 0600 属主
+    // 私有（权限隔离设计），maxx 非属主 stat 必然 EACCES —— 这是【正常隔离】
+    // 而非故障，此前误判 unreadable + unhealthy 导致 11/11 全误报。修复：
+    // EACCES/EPERM（permission_denied）时判为 private（权限设计正常）不计入
+    // unhealthy；仅"真实存在判定下缺失"或"其它错误"才 unhealthy。
     fs::path auth_keys = fs::path(u.home_dir) / ".ssh" / "authorized_keys";
     std::error_code auth_ec;
     bool auth_ok = fs::exists(auth_keys, auth_ec);
-    if (auth_ec) {
+    if (auth_ec == std::errc::permission_denied ||
+        auth_ec == std::errc::operation_not_permitted) {
+      // maxx 无法 stat（权限隔离设计）：无法验证 ≠ 故障，跳过健康判定
+      std::cout << "  Auth:  private (owned by " << u.username
+                << ", maxx can't read by isolation design)" << std::endl;
+    } else if (auth_ec) {
       std::cout << "  Auth:  unreadable (" << auth_ec.message() << ")"
                 << std::endl;
+      all_healthy = false;
     } else {
       std::cout << "  Auth:  " << (auth_ok ? "ok" : "missing") << std::endl;
+      if (!auth_ok)
+        all_healthy = false;
     }
-    if (!auth_ok || auth_ec)
-      all_healthy = false;
 
     if (mounts.empty())
       all_healthy = false;

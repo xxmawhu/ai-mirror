@@ -2,6 +2,7 @@
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
 #include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <grp.h>
@@ -17,6 +18,18 @@
 #include <vector>
 
 namespace ai_mirror::utils {
+
+// Thread-safe strerror wrapper using GNU strerror_r.
+// Returns a string describing the error code.
+static std::string safe_strerror(int errnum) {
+  char buf[128];
+  // GNU strerror_r returns char* (may or may not use buf)
+  char *ret = strerror_r(errnum, buf, sizeof(buf));
+  if (ret != nullptr) {
+    return std::string(ret);
+  }
+  return "Unknown error (errno=" + std::to_string(errnum) + ")";
+}
 
 static constexpr size_t PIPE_BUF_SIZE = 4096;
 // Maximum bytes to read from a subprocess pipe (10MB).  Prevents memory
@@ -71,6 +84,9 @@ static std::string resolve_command(const std::string &cmd) {
       {"kill", "/usr/bin/kill"},
       {"pkill", "/usr/bin/pkill"},
       {"pgrep", "/usr/bin/pgrep"},
+      {"setfacl", "/usr/bin/setfacl"},
+      {"systemctl", "/usr/bin/systemctl"},
+      {"loginctl", "/usr/bin/loginctl"},
   };
 
   if (cmd.find('/') != std::string::npos) {
@@ -213,11 +229,11 @@ ShellResult exec_safe(const std::string &file,
   }
 
   static const std::set<std::string> ALLOWED_COMMANDS = {
-      "mount",   "umount",  "chmod",      "chown",    "chgrp",
-      "useradd", "userdel", "groupadd",   "groupdel", "usermod",
-      "passwd",  "gpasswd", "ssh-keygen", "mkdir",    "cp",
-      "mv",      "getent",  "findmnt",    "which",    "ssh",
-      "pkill",   "ps",      "su",         "crontab",  "kill"};
+      "mount",      "umount",   "chmod",     "chown",   "chgrp",  "useradd",
+      "userdel",    "groupadd", "groupdel",  "usermod", "passwd", "gpasswd",
+      "ssh-keygen", "mkdir",    "cp",        "mv",      "getent", "findmnt",
+      "which",      "ssh",      "pkill",     "ps",      "su",     "crontab",
+      "kill",       "setfacl",  "systemctl", "loginctl"};
   std::string cmd_name = fs::path(file).filename().string();
   if (ALLOWED_COMMANDS.find(cmd_name) == ALLOWED_COMMANDS.end()) {
     return {-1, "", "command not in allowed list: " + cmd_name};
@@ -310,6 +326,19 @@ std::string get_effective_username() {
 }
 
 std::string get_effective_home() {
+  // 【2026-08-31 issue 修复】sudo 提升场景（am wrapper →
+  // sudo --preserve-env=HOME → ai-mirror-bin）：sudoers 默认 env_reset 会把
+  // HOME 重置为目标用户（root）的 home，--preserve-env=HOME 未配 env_keep
+  // 时不放行 → $HOME=/root → 配置/路径解析全部落到 /root（实测报
+  // "Config file not owned by expected user (uid 0 != 1000),
+  // rejecting: /root/.ai-mirror.toml"）。故**优先用 SUDO_UID 解析的真实
+  // 调用者 home**（环境无关，不依赖 sudoers env 策略），再回退 $HOME。
+  uid_t login_uid = get_login_uid();
+  if (login_uid != 0) {
+    auto *pw = getpwuid(login_uid);
+    if (pw && pw->pw_dir && pw->pw_dir[0] == '/' && pw->pw_dir[1] != '\0')
+      return pw->pw_dir;
+  }
   if (const char *env_home = std::getenv("HOME")) {
     if (env_home[0] == '/' && env_home[1] != '\0')
       return env_home;
@@ -466,16 +495,23 @@ static bool is_under_allowed_bases(const fs::path &p,
   return false;
 }
 
-bool is_path_allowed(const fs::path &p,
-                     [[maybe_unused]] const std::string &main_user,
-                     const std::vector<fs::path> &allowed_bases) {
-  if (p.empty())
+bool is_path_allowed(const fs::path &p, const std::string &main_user,
+                     const std::vector<fs::path> &allowed_bases,
+                     std::string *deny_reason) {
+  if (p.empty()) {
+    if (deny_reason)
+      *deny_reason = "path is empty";
     return false;
+  }
 
   // Reject ".." traversal (security: prevent directory escape)
   for (const auto &part : p) {
-    if (part == "..")
+    if (part == "..") {
+      if (deny_reason)
+        *deny_reason = "path contains '..' which is not allowed (directory "
+                       "escape attempt)";
       return false;
+    }
   }
 
   // Get the real invoking user's UID (via SUDO_UID or loginuid)
@@ -498,8 +534,12 @@ bool is_path_allowed(const fs::path &p,
   if (!ec) {
     // Path exists: check if owned by login_uid OR user has write access
     struct stat st;
-    if (stat(canon.c_str(), &st) != 0)
+    if (stat(canon.c_str(), &st) != 0) {
+      if (deny_reason)
+        *deny_reason = "cannot stat path '" + canon.string() +
+                       "': " + safe_strerror(errno);
       return false;
+    }
 
     // 1. Owner check: path owned by login_uid -> allow
     if (st.st_uid == login_uid) {
@@ -555,21 +595,46 @@ bool is_path_allowed(const fs::path &p,
     }
 
     // Path not owned by user and no access via permissions
+    if (deny_reason) {
+      if (!security::validate_path_allowed(canon)) {
+        auto dir = security::matched_system_dir(canon);
+        *deny_reason = "path resolves under protected system directory '" +
+                       (dir ? *dir : canon.string()) + "'";
+      } else {
+        struct passwd *pw = getpwuid(st.st_uid);
+        std::string owner = pw ? pw->pw_name : std::to_string(st.st_uid);
+        *deny_reason =
+            "'" + canon.string() + "' is owned by '" + owner + "' and user '" +
+            main_user +
+            "' has no write access (and is not under an allowed base)";
+      }
+    }
     return false;
   }
 
   // Path doesn't exist: check parent permissions
   fs::path parent = p.parent_path();
-  if (parent.empty())
+  if (parent.empty()) {
+    if (deny_reason)
+      *deny_reason = "path has no parent directory";
     return false;
+  }
 
   fs::path canon_parent = fs::canonical(parent, ec);
-  if (ec)
+  if (ec) {
+    if (deny_reason)
+      *deny_reason = "parent directory '" + parent.string() +
+                     "' cannot be resolved (does it exist?)";
     return false; // Parent doesn't exist or can't resolve
+  }
 
   struct stat st;
-  if (stat(canon_parent.c_str(), &st) != 0)
+  if (stat(canon_parent.c_str(), &st) != 0) {
+    if (deny_reason)
+      *deny_reason = "cannot stat parent directory '" + canon_parent.string() +
+                     "': " + safe_strerror(errno);
     return false;
+  }
 
   // 1. Parent owned by login_uid -> allow creating new path
   if (st.st_uid == login_uid) {
@@ -603,6 +668,19 @@ bool is_path_allowed(const fs::path &p,
   }
 
   // Parent not owned by user and no write access
+  if (deny_reason) {
+    if (!security::validate_path_allowed(canon_parent)) {
+      auto dir = security::matched_system_dir(canon_parent);
+      *deny_reason = "path resolves under protected system directory '" +
+                     (dir ? *dir : canon_parent.string()) + "'";
+    } else {
+      struct passwd *pw = getpwuid(st.st_uid);
+      std::string owner = pw ? pw->pw_name : std::to_string(st.st_uid);
+      *deny_reason = "'" + canon_parent.string() + "' is owned by '" + owner +
+                     "' and not writable by user '" + main_user +
+                     "' (cannot create new project there)";
+    }
+  }
   return false;
 }
 

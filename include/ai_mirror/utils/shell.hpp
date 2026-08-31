@@ -65,8 +65,12 @@ bool validate_path_no_shell_metachars(const std::string &path);
 // validates parent directory exists and is canonical under home/allowed_bases.
 // Rejects paths with ".." components.
 // allowed_bases: extra base paths beyond $HOME (e.g. BeeGFS mount points)
+// deny_reason: optional out-param; if non-null, set to a human-readable reason
+// when the function returns false (one of the validation rejections). Existing
+// callers may omit it (defaults to nullptr).
 bool is_path_allowed(const fs::path &p, const std::string &main_user,
-                     const std::vector<fs::path> &allowed_bases = {});
+                     const std::vector<fs::path> &allowed_bases = {},
+                     std::string *deny_reason = nullptr);
 bool is_path_allowed_parent(const fs::path &p, const std::string &main_user,
                             const std::vector<fs::path> &allowed_bases = {});
 

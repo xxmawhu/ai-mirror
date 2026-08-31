@@ -47,6 +47,18 @@ namespace fs = std::filesystem;
 
 namespace ai_mirror::cli {
 
+// Thread-safe strerror wrapper using GNU strerror_r.
+// Returns a string describing the error code.
+static std::string safe_strerror(int errnum) {
+  char buf[128];
+  // GNU strerror_r returns char* (may or may not use buf)
+  char *ret = strerror_r(errnum, buf, sizeof(buf));
+  if (ret != nullptr) {
+    return std::string(ret);
+  }
+  return "Unknown error (errno=" + std::to_string(errnum) + ")";
+}
+
 // Validates that ai_user belongs to main_user. The "_" separator after
 // main_user prevents prefix collision (e.g. "alice" vs "alice_bob").
 // The size > check ensures at least one project-name char follows the prefix.
@@ -394,6 +406,132 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
       }
     }
 
+    // ── /tmp/ ACL lockdown ───────────────────────────────────────────
+    // AI users must NOT have write permission on /tmp/ to prevent them
+    // from using it as a working directory and filling up the tmpfs/disk.
+    // This enforces the project's "禁止 /tmp/ 目录操作" hard rule.
+    // setfacl -m u:{ai_user}:r-x /tmp/  blocks write while allowing
+    // read and execute (traverse).
+    {
+      auto acl_result =
+          utils::exec_safe({"setfacl", "-m", "u:" + username + ":r-x", "/tmp"});
+      if (acl_result.exit_code == 0) {
+        utils::get_logger()->info(
+            "/tmp/ ACL set to r-x for '{}' (write blocked)", username);
+        fixes++;
+      } else {
+        utils::get_logger()->warn("/tmp/ ACL set failed for '{}': {}", username,
+                                  acl_result.stderr_output);
+      }
+    }
+
+    // ── Disable systemd --user for AI users ────────────────────────────
+    // AI users must NOT use `systemd --user` to start persistent background
+    // services or daemons. This enforces the principle that all system-level
+    // services must be managed by the host system.
+    //
+    // Implementation: per-instance drop-in overriding ExecStart=/bin/false
+    // for user@<UID>.service. Combined with disable-linger and SIGKILL of
+    // any running instance, this provides a multi-layer block.
+    //
+    // Note: TimeoutStopSec=120s in the default user@.service means
+    // systemctl stop could block for 2 minutes. We use SIGKILL instead.
+    {
+      // ── MAIN USER PROTECTION (hard rule) ────────────────────────────
+      // The main user's systemd --user must NEVER be touched. Only AI
+      // users (naming convention {prefix}{main_user}_{hash}) are subject
+      // to the systemd lockdown. This is a belt-and-suspenders guard:
+      // do_configure() is normally invoked with an AI username, but we
+      // explicitly refuse to lock down the main user regardless.
+      if (username == main_user) {
+        utils::get_logger()->debug(
+            "Skipping systemd lockdown for '{}': is main user", username);
+      } else if (state.uid == 0) {
+        utils::get_logger()->warn(
+            "Skipping systemd lockdown for '{}': unexpected UID 0", username);
+      } else {
+        auto uid_str = std::to_string(state.uid);
+        fs::path dropin_dir = fs::path("/etc/systemd/system") /
+                              ("user@" + uid_str + ".service.d");
+        fs::path conf = dropin_dir / "00-ai-mirror-lockdown.conf";
+
+        // Check if drop-in is already up-to-date to avoid unnecessary writes
+        bool need_deploy = false;
+        std::error_code stat_ec;
+        if (!fs::exists(conf, stat_ec)) {
+          need_deploy = true;
+        } else {
+          std::ifstream existing(conf);
+          std::string content((std::istreambuf_iterator<char>(existing)),
+                              std::istreambuf_iterator<char>());
+          if (content.find("ExecStart=/bin/false") == std::string::npos) {
+            need_deploy = true;
+          }
+        }
+
+        if (need_deploy) {
+          std::error_code ec;
+          fs::create_directories(dropin_dir, ec);
+          if (!ec) {
+            std::ofstream ofs(conf);
+            if (ofs) {
+              ofs << "# Managed by ai-mirror: disable systemd --user\n";
+              ofs << "# for " << username << " (UID " << uid_str << ")\n";
+              ofs << "[Unit]\n";
+              ofs << "Description=ai-mirror lockdown - systemd --user "
+                     "disabled\n";
+              ofs << "[Service]\n";
+              ofs << "ExecStart=\n";
+              ofs << "ExecStart=/bin/false\n";
+              ofs << "Restart=no\n";
+              ofs << "RestartSec=0\n";
+              ofs.close();
+              fixes++;
+              utils::get_logger()->info(
+                  "systemd --user disabled for '{}' (UID {}, drop-in written)",
+                  username, uid_str);
+            }
+          }
+
+          // Reload systemd to pick up the new drop-in
+          utils::exec_safe("systemctl", {"daemon-reload"}, 30);
+        }
+
+        // Kill any running systemd --user process via pkill.
+        // We use pkill instead of "systemctl kill" because systemctl's
+        // KillUnit() DBus method requires polkit authentication which may
+        // fail in non-interactive contexts.
+        // pkill sends signal directly via kill() syscall — no polkit needed.
+        auto pkill_result = utils::exec_safe(
+            {"pkill", "-9", "-u", uid_str, "-f", "systemd --user"});
+        if (pkill_result.exit_code == 0) {
+          utils::get_logger()->info("Killed systemd --user for '{}' (UID {})",
+                                    username, uid_str);
+          fixes++;
+        } else if (pkill_result.stderr_output.find("no process found") ==
+                       std::string::npos &&
+                   pkill_result.stderr_output.find("not found") ==
+                       std::string::npos &&
+                   pkill_result.stderr_output.find("No matching") ==
+                       std::string::npos) {
+          // "no process found" means no systemd --user was running — OK
+          utils::get_logger()->debug("pkill for '{}' (UID {}): {}", username,
+                                     uid_str, pkill_result.stderr_output);
+        }
+
+        // Disable linger so systemd user instance doesn't auto-start at boot
+        auto linger =
+            utils::exec_safe({"loginctl", "disable-linger", username});
+        if (linger.exit_code == 0) {
+          utils::get_logger()->info("Disabled systemd linger for '{}'",
+                                    username);
+          fixes++;
+        } else {
+          utils::get_logger()->debug("disable-linger for '{}': {}", username,
+                                     linger.stderr_output);
+        }
+      }
+    }
     ctx.ssh_mgr->set_key_path(ctx.config.ssh.key_path);
     ctx.ssh_mgr->set_key_type(ctx.config.ssh.key_type);
 
@@ -1089,13 +1227,65 @@ int cmd_create(const std::string &project_path, bool verbose) {
   auto proj_opt = core::PathResolver::resolve(project_path);
   if (!proj_opt) {
     std::cerr << "Invalid project path: " << project_path << std::endl;
+    std::cerr << "  Could not resolve to a safe absolute path; common causes: "
+                 "'..' traversal, or an unresolvable symlink in the path."
+              << std::endl;
     return 1;
   }
   fs::path proj = *proj_opt;
 
   std::string main_user = utils::get_effective_username();
-  if (!utils::is_path_allowed(proj, main_user, ctx.config.user.allowed_bases)) {
+
+  // [UX] Auto-create the project directory if it does not exist, so users
+  // don't have to `mkdir` first. Must be owned by main_user afterward or the
+  // subsequent is_path_allowed check (and create_ai_user's own check) would
+  // still reject it (root-created dir has no owner-write for main_user).
+  {
+    std::error_code ec;
+    bool exists = fs::exists(proj, ec);
+    if (ec && ec.value() != ENOENT) {
+      std::cerr << "Cannot access project path '" << proj.string()
+                << "': " << ec.message() << std::endl;
+      return 1;
+    }
+    if (!exists) {
+      utils::get_logger()->info(
+          "Project directory does not exist, auto-creating: {}", proj.string());
+      if (!security::safe_create_directories(proj)) {
+        std::cerr << "Failed to create project directory: " << proj.string()
+                  << std::endl;
+        std::cerr << "  The parent directory must be writable by user '"
+                  << main_user << "'." << std::endl;
+        return 1;
+      }
+      struct passwd *pw = getpwnam(main_user.c_str());
+      if (pw) {
+        if (chown(proj.c_str(), pw->pw_uid, pw->pw_gid) != 0) {
+          utils::get_logger()->warn("auto-create: chown {} to {} failed: {}",
+                                    proj.string(), main_user,
+                                    safe_strerror(errno));
+        }
+      }
+    }
+  }
+
+  std::string deny_reason;
+  if (!utils::is_path_allowed(proj, main_user, ctx.config.user.allowed_bases,
+                              &deny_reason)) {
     std::cerr << "Path not allowed: " << proj.string() << std::endl;
+    std::cerr << "  Resolved to : " << proj.string() << std::endl;
+    std::cerr << "  Reason      : "
+              << (deny_reason.empty() ? "(no detail available)" : deny_reason)
+              << std::endl;
+    std::cerr << "  Allowed bases: ";
+    if (ctx.config.user.allowed_bases.empty())
+      std::cerr << "(none configured)";
+    else {
+      for (size_t i = 0; i < ctx.config.user.allowed_bases.size(); ++i)
+        std::cerr << (i ? ", " : "")
+                  << ctx.config.user.allowed_bases[i].string();
+    }
+    std::cerr << std::endl;
     return 1;
   }
 
@@ -2867,6 +3057,7 @@ int cmd_status([[maybe_unused]] bool verbose) {
 
   std::string main_user = utils::get_effective_username();
   std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+  int unhealthy_count = 0;
 
   for (const auto &u : users) {
     if (u.username.substr(0, expected_prefix.length()) != expected_prefix)
@@ -2904,27 +3095,43 @@ int cmd_status([[maybe_unused]] bool verbose) {
       key_path =
           fs::path(utils::get_effective_home()) / key_path.string().substr(2);
     }
-    bool ssh_ok = fs::exists(key_path) &&
-                  fs::exists(fs::path(key_path.string() + ".pub"));
+    std::error_code key_ec, pub_ec;
+    bool ssh_ok = fs::exists(key_path, key_ec) &&
+                  fs::exists(fs::path(key_path.string() + ".pub"), pub_ec);
+    ssh_ok = ssh_ok && !key_ec && !pub_ec;
     std::cout << "  SSH:   " << (ssh_ok ? "ok" : "missing") << std::endl;
     if (!ssh_ok)
       all_healthy = false;
 
+    // 【2026-08-31 issue 修复】fs::exists 无 error_code 重载在权限不足目录
+    // 抛 fs::filesystem_error（"status: Permission denied"）→ am status 未捕获
+    // 异常崩溃。改用 error_code 重载 + 区分"不存在/不可读"。
     fs::path auth_keys = fs::path(u.home_dir) / ".ssh" / "authorized_keys";
-    std::cout << "  Auth:  " << (fs::exists(auth_keys) ? "ok" : "missing")
-              << std::endl;
-    if (!fs::exists(auth_keys))
+    std::error_code auth_ec;
+    bool auth_ok = fs::exists(auth_keys, auth_ec);
+    if (auth_ec) {
+      std::cout << "  Auth:  unreadable (" << auth_ec.message() << ")"
+                << std::endl;
+    } else {
+      std::cout << "  Auth:  " << (auth_ok ? "ok" : "missing") << std::endl;
+    }
+    if (!auth_ok || auth_ec)
       all_healthy = false;
 
     if (mounts.empty())
       all_healthy = false;
+
+    if (!all_healthy)
+      unhealthy_count++;
 
     std::cout << "  Status: " << (all_healthy ? "healthy" : "unhealthy")
               << std::endl;
     std::cout << std::endl;
   }
 
-  return 0;
+  // healthy 判定：退出码与输出一致（2026-08-31，避免"报 unhealthy 却 EXIT=0"
+  // 的伪成功，供自动化巡检/脚本正确判定）
+  return unhealthy_count > 0 ? 1 : 0;
 }
 
 int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
@@ -2959,14 +3166,18 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
     // if .am_status exists but is corrupted, regenerate it from authoritative
     // sources: /etc/passwd (username/uid/gid), project path (path_hash),
     // /proc/mounts (mount list).
-    auto st = fs::status(proj / ".am_status");
-    if (fs::exists(st)) {
+    std::error_code st_ec;
+    auto st = fs::status(proj / ".am_status", st_ec);
+    if (!st_ec && fs::exists(st)) {
       // Step 1: Find home_dir (parent with .am_status, may be proj itself)
       fs::path home_dir;
       {
         fs::path p2 = proj;
         while (p2.has_parent_path() && p2 != p2.parent_path()) {
-          if (fs::exists(p2 / ".am_status")) {
+          // error_code 重载：父目录链中任一目录无权限时不抛异常（2026-08-31，
+          // 与 cmd_status/auth_keys 同类未捕获 filesystem_error 防护）
+          std::error_code ec2;
+          if (fs::exists(p2 / ".am_status", ec2) && !ec2) {
             home_dir = p2;
             break;
           }
@@ -3115,16 +3326,21 @@ int cmd_auto_fix_all(bool verbose) {
               << " ===" << std::endl;
     auto state = core::UserManager::read_state(proj);
     if (!state) {
-      auto status = fs::status(proj / ".am_status");
-      if (!fs::exists(status)) {
-        std::cerr << "  Skipped (no .am_status): " << proj.string()
-                  << std::endl;
-      } else if (fs::file_size(proj / ".am_status") == 0) {
-        std::cerr << "  Skipped (empty .am_status): " << proj.string()
+      std::error_code st_ec;
+      auto status = fs::status(proj / ".am_status", st_ec);
+      if (st_ec || !fs::exists(status)) {
+        std::cerr << "  Skipped (no/inaccessible .am_status): " << proj.string()
                   << std::endl;
       } else {
-        std::cerr << "  Skipped (corrupted .am_status, see log): "
-                  << proj.string() << std::endl;
+        std::error_code sz_ec;
+        auto sz = fs::file_size(proj / ".am_status", sz_ec);
+        if (sz == 0) {
+          std::cerr << "  Skipped (empty .am_status): " << proj.string()
+                    << std::endl;
+        } else {
+          std::cerr << "  Skipped (corrupted .am_status, see log): "
+                    << proj.string() << std::endl;
+        }
       }
       failures++;
       continue;

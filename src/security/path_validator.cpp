@@ -8,15 +8,54 @@
 #include <unistd.h>
 
 namespace ai_mirror::security {
+namespace {
 
 // FHS system directories - all paths under these are forbidden.
 // Covers privileged (/etc, /root, /boot) and shared (/tmp, /opt, /srv, /media).
 // /mnt is intentionally excluded: BeeGFS and other shared filesystems mount
 // there. /lost+found is filesystem-specific recovery directory (ext4 etc.).
-static const std::vector<std::string> SYSTEM_DIRS = {
-    "/etc",  "/root", "/var", "/proc",  "/sys",       "/dev",
-    "/boot", "/lib",  "/usr", "/sbin",  "/bin",       "/run",
-    "/opt",  "/tmp",  "/srv", "/media", "/lost+found"};
+//
+// Returned as a static accessor (not a file-scope var) so that both
+// validate_path_allowed() and matched_system_dir() share the SAME list without
+// duplication.
+const std::vector<std::string> &system_dirs() {
+  static const std::vector<std::string> dirs = {
+      "/etc",  "/root", "/var", "/proc",  "/sys",       "/dev",
+      "/boot", "/lib",  "/usr", "/sbin",  "/bin",       "/run",
+      "/opt",  "/tmp",  "/srv", "/media", "/lost+found"};
+  return dirs;
+}
+
+// Returns the matching SYSTEM_DIR prefix for string `s`, or "" if none.
+// `s` must already be canonical/weakly_canonical resolved (absolute).
+std::string match_system_dir_string(const std::string &s) {
+  for (const auto &d : system_dirs()) {
+    if (s == d)
+      return d;
+    if (s.length() > d.length() && s[d.length()] == '/' &&
+        s.substr(0, d.length()) == d) {
+      return d;
+    }
+  }
+  return "";
+}
+
+// Resolve `p` to a string suitable for SYSTEM_DIRS comparison, honoring the
+// same precedence as validate_path_allowed(): canonical if it exists, else
+// weakly_canonical of the parent chain. Returns nullopt if resolution fails.
+std::optional<std::string> resolve_for_system_dirs(const fs::path &p) {
+  auto resolved = safe_canonical(p);
+  if (!resolved.empty()) {
+    return resolved.string();
+  }
+  std::error_code ec;
+  fs::path weak_resolved = fs::weakly_canonical(p, ec);
+  if (ec)
+    return std::nullopt;
+  return weak_resolved.string();
+}
+
+} // namespace
 
 // Resolve path to canonical form using fs::canonical().  Returns empty path
 // if the path does not exist or cannot be resolved — callers must treat this
@@ -34,40 +73,21 @@ fs::path safe_canonical(const fs::path &p) {
 bool validate_path_allowed(const fs::path &p) {
   if (p.empty())
     return false;
+  return !matched_system_dir(p).has_value();
+}
 
-  // Try canonical first for existing paths
-  auto resolved = safe_canonical(p);
-  if (!resolved.empty()) {
-    std::string s = resolved.string();
-    for (const auto &d : SYSTEM_DIRS) {
-      if (s == d)
-        return false;
-      if (s.length() > d.length() && s[d.length()] == '/' &&
-          s.substr(0, d.length()) == d) {
-        return false;
-      }
-    }
-    return true;
-  }
+std::optional<std::string> matched_system_dir(const fs::path &p) {
+  if (p.empty())
+    return std::nullopt;
 
-  // Path doesn't exist: check parent chain against SYSTEM_DIRS
-  // Use weakly_canonical for non-existent paths to resolve symlinks in parent
-  // chain
-  std::error_code ec;
-  fs::path weak_resolved = fs::weakly_canonical(p, ec);
-  if (ec)
-    return false;
+  auto resolved = resolve_for_system_dirs(p);
+  if (!resolved.has_value())
+    return std::nullopt;
 
-  std::string s = weak_resolved.string();
-  for (const auto &d : SYSTEM_DIRS) {
-    if (s == d)
-      return false;
-    if (s.length() > d.length() && s[d.length()] == '/' &&
-        s.substr(0, d.length()) == d) {
-      return false;
-    }
-  }
-  return true;
+  std::string d = match_system_dir_string(*resolved);
+  if (d.empty())
+    return std::nullopt;
+  return d;
 }
 
 // Same as validate_path_allowed but skips SYSTEM_DIRS blacklist check.

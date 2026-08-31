@@ -426,6 +426,146 @@ int main(int argc, char *argv[]) {
                     username);
     }
 
+    // ── /tmp/ ACL lockdown ───────────────────────────────────────────────
+    // AI users must NOT have write permission on /tmp/ to prevent them from
+    // using it as a working directory and filling up the tmpfs/disk.
+    // This also enforces the project's "禁止 /tmp/ 目录操作" hard rule
+    // (root.md Section 11).
+    //
+    // The ACL is set as: u:{ai_user}:r-x (read + execute, no write)
+    // This replaces the default rwx for the user with read-only.
+    // setfacl -m modifies the ACL; -x removes entries.
+    {
+      auto acl_result =
+          utils::exec_safe({"setfacl", "-m", "u:" + username + ":r-x", "/tmp"});
+      if (acl_result.exit_code == 0) {
+        logger->info("  user {}: /tmp/ ACL set to r-x (write blocked)",
+                     username);
+      } else {
+        logger->warn("  user {}: /tmp/ ACL set failed: {}", username,
+                     acl_result.stderr_output);
+      }
+    }
+
+    // ── systemd --user lockdown (continuous enforcement) ──────────────
+    // Maintain the systemd --user restriction for AI users on every
+    // mount-watch cycle. This is the watchdog counterpart of the same
+    // logic in do_configure() (commands.cpp).
+    //
+    // The drop-in overrides ExecStart of user@<UID>.service to /bin/false,
+    // preventing the systemd user instance from starting. Combined with
+    // disable-linger and SIGKILL of any running instance, this provides
+    // multi-layer protection.
+    //
+    // Using SIGKILL instead of systemctl stop avoids TimeoutStopSec=120s.
+    {
+      // Resolve UID: prefer from .am_status, fall back to /etc/passwd
+      uid_t uid = 0;
+      if (user_info) {
+        uid = user_info->uid;
+      } else {
+        struct passwd *pw = getpwnam(username.c_str());
+        if (pw)
+          uid = pw->pw_uid;
+      }
+
+      // ── MAIN USER PROTECTION (hard rule) ──────────────────────────────
+      // The main user's systemd --user must NEVER be touched. Only AI
+      // users (naming convention {prefix}{main_user}_{hash}, e.g.
+      // "imaxx_a1b2c3") are subject to the systemd lockdown.
+      // Guards:
+      //   1. username == main_user (name-level)
+      //   2. uid == main_user's uid (UID-level, catches renamed users)
+      //   3. main_user empty → cannot confirm it's an AI user → skip
+      bool is_main_user = false;
+      uid_t main_uid = 0;
+      if (!main_user.empty()) {
+        struct passwd *mpw = getpwnam(main_user.c_str());
+        if (mpw)
+          main_uid = mpw->pw_uid;
+        is_main_user = (username == main_user) ||
+                       (main_uid != 0 && uid != 0 && uid == main_uid);
+      }
+      bool is_ai_user_by_name = !main_user.empty() &&
+                                username.size() > prefix.size() &&
+                                username.rfind(prefix, 0) == 0 && !is_main_user;
+
+      if (uid == 0) {
+        logger->warn("  user {}: cannot resolve UID, skipping systemd lockdown",
+                     username);
+      } else if (is_main_user) {
+        logger->debug(
+            "  user {}: is main user (UID {}), preserving systemd --user",
+            username, uid);
+      } else if (!is_ai_user_by_name) {
+        logger->debug(
+            "  user {}: not an AI user (main_user='{}'), skipping systemd "
+            "lockdown",
+            username, main_user);
+      } else {
+        auto uid_str = std::to_string(uid);
+        fs::path dropin_dir = fs::path("/etc/systemd/system") /
+                              ("user@" + uid_str + ".service.d");
+        fs::path conf = dropin_dir / "00-ai-mirror-lockdown.conf";
+
+        // Check if drop-in is already up-to-date
+        bool need_deploy = false;
+        std::error_code stat_ec;
+        if (!fs::exists(conf, stat_ec)) {
+          need_deploy = true;
+        } else {
+          std::ifstream existing(conf);
+          std::string content((std::istreambuf_iterator<char>(existing)),
+                              std::istreambuf_iterator<char>());
+          if (content.find("ExecStart=/bin/false") == std::string::npos) {
+            need_deploy = true;
+          }
+        }
+
+        if (need_deploy) {
+          std::error_code ec;
+          fs::create_directories(dropin_dir, ec);
+          if (!ec) {
+            std::ofstream ofs(conf);
+            if (ofs) {
+              ofs << "# Managed by ai-mirror (mount_watch): disable systemd "
+                     "--user\n";
+              ofs << "# for " << username << " (UID " << uid_str << ")\n";
+              ofs << "[Unit]\n";
+              ofs << "Description=ai-mirror lockdown - systemd --user "
+                     "disabled\n";
+              ofs << "[Service]\n";
+              ofs << "ExecStart=\n";
+              ofs << "ExecStart=/bin/false\n";
+              ofs << "Restart=no\n";
+              ofs << "RestartSec=0\n";
+              ofs.close();
+              logger->info("  user {}: systemd --user disabled (UID {}, "
+                           "drop-in written)",
+                           username, uid_str);
+            }
+          }
+
+          // Reload systemd to pick up the new drop-in
+          utils::exec_safe("systemctl", {"daemon-reload"}, 30);
+        }
+
+        // Kill any running systemd --user via pkill (bypasses polkit).
+        // systemctl kill uses DBus KillUnit() which requires polkit
+        // authentication; it fails in non-interactive contexts even for
+        // root. pkill sends signal via kill() syscall directly.
+        auto pkill_result = utils::exec_safe(
+            {"pkill", "-9", "-u", uid_str, "-f", "systemd --user"});
+        if (pkill_result.exit_code == 0) {
+          logger->info("  user {}: killed systemd --user (UID {})", username,
+                       uid_str);
+        }
+
+        // Ensure linger is disabled every cycle
+        utils::exec_safe({"loginctl", "disable-linger", username});
+      }
+    }
+
     // [补充机制] Legacy AI user: .am_status exists but no mounts field yet.
     // Read actual mounts from /proc/mounts, stat sources, and write back.
     if (expected_mounts.empty()) {

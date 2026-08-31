@@ -51,6 +51,13 @@ fs::path safe_canonical(const fs::path &p);
 // Does NOT validate home directory prefix - use is_path_allowed() for that.
 bool validate_path_allowed(const fs::path &p);
 
+// Returns the protected system directory that `p` falls under, or nullopt if
+// none. Mirrors validate_path_allowed()'s resolution logic (canonical if the
+// path exists, else weakly_canonical of the parent chain) so that the reported
+// directory matches exactly what would cause a rejection. Used by callers such
+// as is_path_allowed() to produce a detailed, human-readable deny reason.
+std::optional<std::string> matched_system_dir(const fs::path &p);
+
 // Same as validate_path_allowed but skips SYSTEM_DIRS check.
 // Used for allowed_bases paths which are explicitly configured by the user
 // and may be under /mnt, /scratch etc.

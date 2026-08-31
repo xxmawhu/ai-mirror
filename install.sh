@@ -643,6 +643,13 @@ UNIT_EOF
 #   参数串"（fnmatch 全参串），"sudo ai-mirror-bin cp SRC DST" 带实参不匹配
 #   → 回退密码。故规则不带任何子命令/参数后缀。
 # - 本注释区为引用 heredoc：可自由书写 $、反引号、$(cmd) 等字符，绝不被执行。
+# - env_keep HOME（2026-08-31 issue am/am-mount-watch 缺陷 P1-1）：
+#   am wrapper 以 sudo --preserve-env=HOME 自我提升；sudoers 默认 env_reset
+#   且无 env_keep HOME 时，sudo 直接拒绝（"sorry, you are not allowed to set
+#   the following environment variables: HOME"）→ am 写操作全挂。此处按
+#   Defaults! 命令级语法仅对 ai-mirror-bin 放行 HOME（env_reset 全局不变，
+#   最小授权）；ai-mirror-bin 侧 get_effective_home 已改用 SUDO_UID 解析
+#   （双保险，见 src/utils/shell.cpp）。
 # - Inner gate: ai-mirror-bin validates subcommand whitelist + path boundaries
 #   (O_NOFOLLOW, fs::canonical, caller-home checks). Sudoers is the outer gate;
 #   the binary is the inner validator.
@@ -650,6 +657,7 @@ SUDOERS
 	)
 	# 命令替换总是剥离尾部换行：用变量累加显式补 \n（$() 内 printf 无效——
 	# 外层 $( ) 会再次剥离尾部换行，2026-08-31 实测规则行粘连进注释行）
+	_content+=$'\n'"Defaults!${PREFIX}/bin/${BIN_NAME} env_keep += \"HOME\""$'\n'
 	_content+=$'\n'"$_rule"$'\n'
 	if ! printf '%s' "$_content" | sudo tee "$sudoers_file" >/dev/null; then
 		fail "sudoers 规则写入失败: ${sudoers_file}"

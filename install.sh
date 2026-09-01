@@ -534,7 +534,15 @@ UNIT_EOF
 
 			# 3) 重载 daemon + 启用 timer + 启动 timer + 立即运行一次
 			if [[ $svc_rc -eq 0 && $tmr_rc -eq 0 ]]; then
-				sudo systemctl daemon-reload 2>/dev/null || true
+				# [P004-1] 显式检查 daemon-reload 失败，不再用 || true 掩蔽
+				if sudo systemctl daemon-reload 2>/dev/null; then
+					_log_file "systemd: daemon-reload OK"
+				else
+					# [防御] daemon-reload 可能因非交互 sudo 失败（post-merge hook 场景）
+					# systemd 使用旧配置但 service 文件已更新，需重跑 install.sh 或手动
+					# --restart-systemd 触发 daemon-reload 生效
+					_log_file "systemd: daemon-reload failed (retry via install.sh or --restart-systemd)"
+				fi
 				sudo systemctl enable am-mount-watch.timer 2>/dev/null || true
 				sudo systemctl start am-mount-watch.timer 2>/dev/null || true
 				_log_file "systemd: timer enabled and started"
@@ -566,7 +574,10 @@ UNIT_EOF
 	local completion_src="${SCRIPT_DIR}/completions/am-completion.bash"
 	if [[ -f "$completion_src" ]]; then
 		sudo install -d /etc/bash_completion.d
-		sudo install -m 0644 "$completion_src" /etc/bash_completion.d/am
+		# [P004-2] BeeGFS 上 sudo install 可能静默失败 → 显式 rm+cp+chmod
+		sudo rm -f /etc/bash_completion.d/am 2>/dev/null
+		sudo cp "$completion_src" /etc/bash_completion.d/am 2>/dev/null
+		sudo chmod 0644 /etc/bash_completion.d/am 2>/dev/null
 		_log_file "bash completion -> /etc/bash_completion.d/am"
 	else
 		# [log-review] warn:降级自error——补全文件缺失不影响核心功能
@@ -915,10 +926,11 @@ phase_summary() {
 			_dst_chk=$(md5sum "${PREFIX}/bin/${_b}" 2>/dev/null | cut -d' ' -f1)
 			if [[ "$_src_chk" != "$_dst_chk" ]]; then
 				_log_file "phase_summary: ${_b} checksum mismatch (src=${_src_chk} dst=${_dst_chk}), reinstalling..."
-				if ! sudo install -m 0755 "${BUILD_DIR}/bin/${_b}" "${PREFIX}/bin/${_b}" 2>/dev/null; then
-					sudo cp "${BUILD_DIR}/bin/${_b}" "${PREFIX}/bin/${_b}" 2>/dev/null
-					sudo chmod 0755 "${PREFIX}/bin/${_b}"
-				fi
+				# [P004-2] BeeGFS 上 sudo install 可能静默失败 → 显式 rm+cp+chmod+sync
+				sudo rm -f "${PREFIX}/bin/${_b}" 2>/dev/null
+				sudo cp "${BUILD_DIR}/bin/${_b}" "${PREFIX}/bin/${_b}" 2>/dev/null
+				sudo chmod 0755 "${PREFIX}/bin/${_b}" 2>/dev/null
+				sync 2>/dev/null || true
 				_dst_chk=$(md5sum "${PREFIX}/bin/${_b}" 2>/dev/null | cut -d' ' -f1)
 				if [[ "$_src_chk" == "$_dst_chk" ]]; then
 					_log_file "phase_summary: ${_b} reinstall OK (checksum match)"
@@ -936,12 +948,34 @@ phase_summary() {
 		_dst_chk=$(md5sum "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null | cut -d' ' -f1)
 		if [[ "$_src_chk" != "$_dst_chk" ]]; then
 			_log_file "phase_summary: ${_versioned_bin} checksum mismatch, reinstalling..."
-			sudo install -m 0755 "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null ||
-				sudo cp "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null
+			# [P004-2] BeeGFS 上 sudo install 可能静默失败 → 显式 rm+cp+chmod+sync
+			sudo rm -f "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null
+			sudo cp "${BUILD_DIR}/bin/${BIN_NAME}" "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null
+			sudo chmod 0755 "${PREFIX}/bin/${_versioned_bin}" 2>/dev/null
+			sync 2>/dev/null || true
 		fi
 	fi
 
 	ok "安装完成 v${VERSION}: ${PREFIX}/bin/${WRAPPER_NAME}  (source ~/.bashrc 生效)"
+
+	# [P004-3] 部署后 smoke test：验证版本号与基本命令可用
+	# 直接调用真实 binary（绕开 wrapper 的 sudo 提升），用 --version 返回码验证部署产物。
+	if [[ -x "${PREFIX}/bin/${BIN_NAME}" ]]; then
+		local _smoke_out
+		_smoke_out=$("${PREFIX}/bin/${BIN_NAME}" --version 2>&1 | head -1) || true
+		if [[ -n "$_smoke_out" && "$_smoke_out" == *"$VERSION"* ]]; then
+			ok "smoke test: ${BIN_NAME} 版本匹配 (${_smoke_out})"
+			_log_file "smoke test PASS: ${_smoke_out}"
+		else
+			# [log-review] warn:降级自error——版本输出异常属部署产物异常，但可不阻塞安装流程，供人工复核
+			warn "smoke test: ${BIN_NAME} --version 未能匹配期望 ${VERSION} (got: '${_smoke_out:-无输出}')"
+			_log_file "smoke test FAIL: expected *${VERSION}*, got '${_smoke_out:-empty}'"
+		fi
+	else
+		# [log-review] warn:降级自error——二进制缺失属安装异常但可重装恢复，不影响已安装其他组件
+		warn "smoke test: ${PREFIX}/bin/${BIN_NAME} 不存在"
+		_log_file "smoke test FAIL: ${BIN_NAME} not found"
+	fi
 
 	# Show systemd service/timer status if am-mount-watch was installed
 	# NOTE: am-mount-watch.service is Type=oneshot — it runs and exits.
@@ -984,8 +1018,14 @@ phase_restart_systemd() {
 	fi
 
 	log "重启 am-mount-watch systemd 服务..."
-	sudo systemctl daemon-reload 2>/dev/null || true
-	_log_file "systemd: daemon-reload done"
+	# [P004-1] 显式检查 daemon-reload 失败，不再用 || true 掩蔽
+	if sudo systemctl daemon-reload 2>/dev/null; then
+		_log_file "systemd: daemon-reload OK"
+	else
+		# [log-review] warn:降级自error——daemon-reload 失败不阻断重启流程（service 文件已存在），主程序功能不受影响
+		warn "systemd: daemon-reload 失败（将尝试继续，service 文件可能未生效）"
+		_log_file "systemd: daemon-reload FAILED"
+	fi
 
 	sudo systemctl restart am-mount-watch.timer 2>/dev/null || true
 	_log_file "systemd: timer restarted"
@@ -1134,7 +1174,12 @@ phase_clean() {
 		sudo systemctl disable am-mount-watch.service 2>/dev/null || true
 		sudo rm -f /etc/systemd/system/am-mount-watch.service
 		sudo rm -f /etc/systemd/system/am-mount-watch.timer
-		sudo systemctl daemon-reload 2>/dev/null || true
+		# [P004-1] 显式检查 daemon-reload 失败，不再用 || true 掩蔽
+		if sudo systemctl daemon-reload 2>/dev/null; then
+			_log_file "systemd: daemon-reload OK (after cleanup)"
+		else
+			_log_file "systemd: daemon-reload FAILED (after cleanup)"
+		fi
 		_log_file "systemd: service and timer stopped, disabled, removed"
 		sudo rm -f "${PREFIX}/bin/${MOUNT_WATCH_NAME}"
 		log "  Removed am-mount-watch binary + systemd 服务"

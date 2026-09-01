@@ -1,1 +1,0 @@
-/mnt/beegfs_data/usr/maxx/.config/opencode/AGENTS.md

@@ -1,4 +1,6 @@
 #include "ai_mirror/cli/commands.hpp"
+#include "ai_mirror/core/ai_user_hash.hpp"
+#include "ai_mirror/core/ai_user_home.hpp"
 #include "ai_mirror/core/config.hpp"
 #include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/core/path_resolver.hpp"
@@ -59,17 +61,59 @@ static std::string safe_strerror(int errnum) {
   return "Unknown error (errno=" + std::to_string(errnum) + ")";
 }
 
-// Validates that ai_user belongs to main_user. The "_" separator after
-// main_user prevents prefix collision (e.g. "alice" vs "alice_bob").
-// The size > check ensures at least one project-name char follows the prefix.
+// Validates that ai_user belongs to main_user under either layout:
+//   - legacy: {prefix}{main_user}_{hash6} (owner encoded in the name)
+//   - current: ai_<hash> (owner read from its .am_status)
 static bool validate_ai_user_ownership(const std::string &ai_user,
                                        const std::string &main_user,
                                        const std::string &prefix) {
-  if (ai_user.empty() || main_user.empty())
-    return false;
-  std::string expected_prefix = prefix + main_user + "_";
-  return ai_user.size() > expected_prefix.size() &&
-         ai_user.substr(0, expected_prefix.size()) == expected_prefix;
+  return core::UserManager::is_ai_user_of(ai_user, main_user, prefix);
+}
+
+// Current-layout user name for a canonical project path: ai_<hash>.
+static std::string new_ai_username_for_project(const fs::path &project) {
+  return std::string(core::kAiUserHomePrefix) +
+         core::make_ai_user_hash(project.string());
+}
+
+// True if the listed user belongs to main_user (used by list/status/health).
+static bool is_ai_user_of(const core::UserInfo &info,
+                          const std::string &main_user,
+                          const std::string &prefix) {
+  if (!info.main_user.empty()) {
+    return info.main_user == main_user;
+  }
+  return validate_ai_user_ownership(info.username, main_user, prefix);
+}
+
+// Path the AI user must cd into for `target`.
+//
+// Legacy layout: home == project, so access goes through the mirrored path
+// inside the AI home (config files are bind-mounted there).
+// Current layout: home is separate and the project stays at its original
+// location (only config files are bind-mounted into the home), so a target
+// inside the project is used as-is.
+static fs::path ai_user_access_path(const fs::path &target,
+                                    const core::UserInfo &state,
+                                    const std::string &ai_user,
+                                    const std::string &main_user) {
+  if (!state.project_path.empty()) {
+    fs::path project = fs::path(state.project_path).lexically_normal();
+    fs::path normalized = target.lexically_normal();
+    const std::string project_str = project.string();
+    const std::string target_str = normalized.string();
+    const bool under_project =
+        target_str == project_str ||
+        (target_str.size() > project_str.size() &&
+         target_str.compare(0, project_str.size(), project_str) == 0 &&
+         target_str[project_str.size()] == '/');
+    if (under_project &&
+        fs::path(state.home_dir).lexically_normal() != project) {
+      return normalized;
+    }
+  }
+  return core::PathResolver::to_ai_user_path(target, ai_user, main_user,
+                                             state.home_dir);
 }
 
 struct CommandContext {
@@ -1076,6 +1120,22 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                                   chown_fixes, home_dir);
       }
       fixes += chown_fixes;
+
+      // Current layout: the AI user home (/home/ai_<hash>) is separate from
+      // the project directory, so the home pass above does not cover the
+      // project.  Hand the project tree to the AI user; the main user keeps
+      // write access through the shared group and the setgid directories set
+      // by grant_write_access().
+      if (fs::path(home_dir).lexically_normal() != proj.lexically_normal()) {
+        if (safe_chown_path(proj, username)) {
+          fixes++;
+          utils::get_logger()->info("Chowned project tree to {}: {}", username,
+                                    proj.string());
+        } else {
+          utils::get_logger()->warn("Failed to chown project tree to {}: {}",
+                                    username, proj.string());
+        }
+      }
     }
   } // end if (!mount_only) — skip third pass recursive chown
 
@@ -1092,8 +1152,10 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   // [P1-performance] Skip SSH StrictModes in mount_only mode.
   if (!mount_only) {
     // Fix SSH StrictModes compatibility: sshd requires the user's home
-    // directory and ~/.ssh to NOT be group-writable. Since home_dir == proj and
-    // we just set it to 775 (g+rwx) via grant_write_access, we must:
+    // directory and ~/.ssh to NOT be group-writable.  Legacy layout uses
+    // home_dir == proj, which grant_write_access() just set to 775 (g+rwx);
+    // the current layout has a separate home and (for release builds) no
+    // g+w of its own.  Either way we must:
     //   1. Remove g+w from home_dir to satisfy sshd StrictModes
     //   2. Ensure .ssh directory is 700
     //   3. Ensure .ssh/authorized_keys is 600
@@ -2461,12 +2523,10 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
       return 1;
     }
 
-    // Validate AI user format
-    std::string expected_prefix = prefix + main_user + "_";
-    if (ai_user.size() <= expected_prefix.size() ||
-        ai_user.substr(0, expected_prefix.size()) != expected_prefix) {
-      std::cerr << "error: invalid AI user: '" << ai_user << "' (expected "
-                << "format: " << prefix << main_user << "_<hash>)" << std::endl;
+    // Validate AI user ownership (legacy prefix or ai_<hash> via .am_status)
+    if (!validate_ai_user_ownership(ai_user, main_user, prefix)) {
+      std::cerr << "error: invalid AI user: '" << ai_user
+                << "' (not managed by '" << main_user << "')" << std::endl;
       return 1;
     }
 
@@ -2526,10 +2586,9 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
         (fs::path(utils::get_effective_home()) / ".ssh" / "known_hosts")
             .string();
 
-    // Convert main user's target path to ai-user's path
-    // ai-user accesses files via bind mounts in their home directory
-    fs::path ai_user_target = core::PathResolver::to_ai_user_path(
-        target, ai_user, main_user, state->home_dir);
+    // Convert main user's target path to the path the AI user can access.
+    fs::path ai_user_target =
+        ai_user_access_path(target, *state, ai_user, main_user);
     std::string ai_user_target_str = ai_user_target.string();
 
     // Build remote command for SSH interactive session
@@ -2637,11 +2696,11 @@ int cmd_list(bool verbose) {
   }
 
   std::string main_user = utils::get_effective_username();
-  std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+  std::string prefix = ctx.config.user.prefix;
 
   std::cout << "ai-mirror managed users:" << std::endl;
   for (const auto &u : users) {
-    if (u.username.substr(0, expected_prefix.length()) != expected_prefix)
+    if (!is_ai_user_of(u, main_user, prefix))
       continue;
     auto mounts = ctx.graft->list_mounts(u.username);
     std::cout << "  " << u.username << " (uid=" << u.uid
@@ -2661,14 +2720,13 @@ int cmd_health([[maybe_unused]] bool verbose) {
   // their mounts against it. Mounts not in any user's config are stale.
   auto users = ctx.user_mgr->list_ai_users();
   std::string main_user = utils::get_effective_username();
-  std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+  std::string prefix = ctx.config.user.prefix;
 
   // Build a map: ai-user home -> username (only for current main_user's
   // ai-users)
   std::vector<std::pair<std::string, std::string>> user_home_to_name;
   for (const auto &u : users) {
-    if (u.username.size() <= expected_prefix.size() ||
-        u.username.substr(0, expected_prefix.size()) != expected_prefix)
+    if (!is_ai_user_of(u, main_user, prefix))
       continue;
     if (!u.home_dir.empty()) {
       user_home_to_name.emplace_back(u.home_dir, u.username);
@@ -2763,15 +2821,23 @@ int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
   }
 
   std::string username = project_or_user;
+  std::optional<core::UserInfo> state;
+  fs::path resolved_project;
   if (!utils::validate_username(username)) {
     // Try reading from .am_status first (backward compatibility)
     auto proj_opt = core::PathResolver::resolve(project_or_user);
     if (proj_opt) {
-      auto state = core::UserManager::read_state(*proj_opt);
+      resolved_project = *proj_opt;
+      state = core::UserManager::read_state(*proj_opt);
       if (state && !state->username.empty()) {
         username = state->username;
         utils::get_logger()->info(
             "cmd_force_destroy: using username '{}' from .am_status", username);
+      } else if (!utils::validate_username(username)) {
+        std::string candidate = new_ai_username_for_project(*proj_opt);
+        if (ctx.user_mgr->user_exists(candidate)) {
+          username = candidate;
+        }
       }
     }
     // If still not valid, derive from path hash
@@ -2798,6 +2864,20 @@ int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
     return 1;
   }
 
+  // Locate the project even when only a username was supplied, so ownership
+  // can be returned before the AI user disappears.
+  if (!state) {
+    auto info = ctx.user_mgr->get_user_info(username);
+    if (info) {
+      state = core::UserManager::read_state_from_home(info->home_dir);
+    }
+  }
+  if (resolved_project.empty() && state) {
+    resolved_project = state->project_path;
+  }
+  std::string project_owner =
+      (state && !state->main_user.empty()) ? state->main_user : main_user;
+
   utils::get_logger()->warn("Force destroying user: {}", username);
 
   // Terminate user processes (force-destroy must be aggressive)
@@ -2809,6 +2889,20 @@ int cmd_force_destroy(const std::string &project_or_user, bool verbose) {
 
   daemon::MountCleaner cleaner(ctx.config.user.prefix);
   cleaner.cleanup_for_user(username);
+
+  // Return the project tree to its owner.  The AI user may own files created
+  // during its lifetime; without this they become orphaned after userdel.
+  if (!resolved_project.empty()) {
+    std::error_code ec;
+    if (fs::exists(resolved_project, ec)) {
+      utils::get_logger()->info("Restoring project ownership to {}: {}",
+                                project_owner, resolved_project.string());
+      if (!safe_chown_path(resolved_project, project_owner)) {
+        utils::get_logger()->warn("Failed to restore project ownership: {}",
+                                  resolved_project.string());
+      }
+    }
+  }
 
   if (!ctx.user_mgr->remove_ai_user(username, true)) {
     std::cerr << "Failed to remove user: " << username << std::endl;
@@ -2891,17 +2985,22 @@ int cmd_rm(const std::string &project_path, bool verbose) {
     utils::get_logger()->info("cmd_rm: using username '{}' from .am_status",
                               username);
   } else {
-    // No .am_status, derive username using hash-based naming
-    auto derived = ctx.user_mgr->derive_username(proj.string());
-    if (!derived) {
-      utils::get_logger()->error(
-          "Username collision: cannot derive unique username for: {}",
-          proj.string());
-      std::cerr << "Username collision: cannot derive unique username for: "
-                << proj.string() << std::endl;
-      return 1;
+    // No .am_status.  Prefer the current-layout name; fall back to the legacy
+    // name for projects created before the layout change.
+    std::string current_name = new_ai_username_for_project(proj);
+    if (ctx.user_mgr->user_exists(current_name)) {
+      username = current_name;
+    } else {
+      auto derived = ctx.user_mgr->derive_username(proj.string());
+      if (!derived) {
+        utils::get_logger()->error("Cannot derive AI username for project: {}",
+                                   proj.string());
+        std::cerr << "Cannot derive AI username for project: " << proj.string()
+                  << std::endl;
+        return 1;
+      }
+      username = std::move(*derived);
     }
-    username = std::move(*derived);
     utils::get_logger()->info("cmd_rm: derived username '{}' from path hash",
                               username);
   }
@@ -2978,10 +3077,27 @@ int cmd_rm(const std::string &project_path, bool verbose) {
                               proj.string());
   }
 
-  // Step 5: Clean up ai-user home directory and .am_status
+  // Step 4b: Return the project tree to the main user.  Files created or
+  // chowned to the AI user during its lifetime must not stay orphaned.
+  utils::get_logger()->info("Step 4b: Restoring project ownership to {}",
+                            main_user);
+  if (!safe_chown_path(proj, main_user)) {
+    utils::get_logger()->warn("Failed to restore project ownership: {}",
+                              proj.string());
+  } else {
+    utils::get_logger()->info("Project ownership restored to {}: {}", main_user,
+                              proj.string());
+  }
+
+  // Step 5: Clean up the AI user home directory.  Legacy layout used the
+  // project directory as the home; never delete it (it holds user output).
   utils::get_logger()->info("Step 5: Cleaning up ai-user home: {}",
                             ai_home.string());
-  {
+  if (ai_home.lexically_normal() == proj.lexically_normal()) {
+    utils::get_logger()->info(
+        "Legacy layout (home == project), keeping project directory {}",
+        proj.string());
+  } else {
     std::error_code ec;
     fs::remove_all(ai_home, ec);
     if (ec) {
@@ -3056,11 +3172,11 @@ int cmd_status([[maybe_unused]] bool verbose) {
   }
 
   std::string main_user = utils::get_effective_username();
-  std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
+  std::string prefix = ctx.config.user.prefix;
   int unhealthy_count = 0;
 
   for (const auto &u : users) {
-    if (u.username.substr(0, expected_prefix.length()) != expected_prefix)
+    if (!is_ai_user_of(u, main_user, prefix))
       continue;
     std::cout << "Project: " << u.username << std::endl;
     std::cout << "  Home:  " << u.home_dir << std::endl;
@@ -3246,6 +3362,23 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
       }
     }
 
+    // Current layout: the state file lives in /home/ai_<hash> and may be
+    // missing or corrupted independently of the project directory.  Rebuild
+    // it from the project path (the hash is deterministic).
+    if (!state) {
+      std::string ai_username = new_ai_username_for_project(proj);
+      if (ctx.user_mgr->user_exists(ai_username)) {
+        fs::path home = core::ai_user_home_for_project(proj);
+        std::string main_user = utils::get_effective_username();
+        if (core::UserManager::rebuild_state(home, ai_username, main_user, proj,
+                                             ctx.config.user.prefix)) {
+          utils::get_logger()->info("Rebuilt .am_status for {} in {}",
+                                    ai_username, home.string());
+          state = core::UserManager::read_state(proj);
+        }
+      }
+    }
+
     if (!state) {
       if (!fs::exists(st)) {
         std::cerr << "Not an ai-mirror project (no .am_status): "
@@ -3269,12 +3402,18 @@ int cmd_update(const std::string &path, [[maybe_unused]] bool verbose) {
 // cmd_auto_fix_all: check all mounts and fix unhealthy ones via update
 // ============================================================================
 
-// Walk up from mount target to find project directory containing .am_status
+// Walk up from a mount target to the AI user home (which holds .am_status)
+// and resolve the project path recorded there.  Legacy layout falls back to
+// the directory containing .am_status (home == project).
 static fs::path find_project_from_mount(const fs::path &mount_target) {
   fs::path p = mount_target;
   while (p.has_parent_path() && p != p.parent_path()) {
     std::error_code ec;
     if (fs::exists(p / ".am_status", ec)) {
+      auto state = core::UserManager::read_state(p);
+      if (state && !state->project_path.empty()) {
+        return fs::path(state->project_path);
+      }
       return p;
     }
     p = p.parent_path();
@@ -3338,13 +3477,17 @@ int cmd_auto_fix_all(bool verbose) {
     auto state = core::UserManager::read_state(proj);
     if (!state) {
       std::error_code st_ec;
-      auto status = fs::status(proj / ".am_status", st_ec);
+      fs::path state_path = core::ai_user_home_for_project(proj) / ".am_status";
+      if (!fs::exists(state_path, st_ec)) {
+        state_path = proj / ".am_status";
+      }
+      auto status = fs::status(state_path, st_ec);
       if (st_ec || !fs::exists(status)) {
         std::cerr << "  Skipped (no/inaccessible .am_status): " << proj.string()
                   << std::endl;
       } else {
         std::error_code sz_ec;
-        auto sz = fs::file_size(proj / ".am_status", sz_ec);
+        auto sz = fs::file_size(state_path, sz_ec);
         if (sz == 0) {
           std::cerr << "  Skipped (empty .am_status): " << proj.string()
                     << std::endl;
@@ -3527,13 +3670,11 @@ int cmd_watch(const std::string &watch_path, const std::string &watch_user,
 
       if (need_user_refresh) {
         auto users = ctx.user_mgr->list_ai_users();
-        std::string expected_prefix = ctx.config.user.prefix + main_user + "_";
         std::vector<std::string> usernames;
         std::vector<uid_t> uids;
 
         for (const auto &u : users) {
-          if (u.username.size() > expected_prefix.size() &&
-              u.username.substr(0, expected_prefix.size()) == expected_prefix) {
+          if (is_ai_user_of(u, main_user, ctx.config.user.prefix)) {
 
             // Filter by user name if provided
             if (!watch_user.empty() && u.username != watch_user) {
@@ -3542,8 +3683,9 @@ int cmd_watch(const std::string &watch_path, const std::string &watch_user,
 
             // Filter by project path if provided
             if (path_filter) {
-              // User's home should match project path
-              if (u.home_dir != *path_filter) {
+              const std::string &project =
+                  u.project_path.empty() ? u.home_dir : u.project_path;
+              if (project != *path_filter) {
                 continue;
               }
             }

@@ -1,4 +1,6 @@
 #include "ai_mirror/core/path_resolver.hpp"
+#include "ai_mirror/core/ai_user_hash.hpp"
+#include "ai_mirror/core/ai_user_home.hpp"
 #include "ai_mirror/utils/shell.hpp"
 #include <algorithm>
 #include <pwd.h>
@@ -96,7 +98,7 @@ std::string PathResolver::detect_owner_user(const fs::path &p) {
 std::string PathResolver::detect_ai_user_from_path(const fs::path &p,
                                                    const std::string &main_user,
                                                    const std::string &prefix) {
-  if (main_user.empty() || prefix.empty())
+  if (main_user.empty() && prefix.empty())
     return "";
 
   std::string expected_prefix = prefix + main_user + "_";
@@ -107,9 +109,11 @@ std::string PathResolver::detect_ai_user_from_path(const fs::path &p,
   // NFS, etc.)
   auto check_component = [&](const fs::path &component) -> std::string {
     std::string name = component.string();
-    if (name.length() <= expected_prefix.length())
-      return "";
-    if (name.substr(0, expected_prefix.length()) != expected_prefix)
+
+    bool legacy = name.length() > expected_prefix.length() &&
+                  name.substr(0, expected_prefix.length()) == expected_prefix;
+    bool current = is_ai_user_home(fs::path(kAiUserHomeRoot) / name);
+    if (!legacy && !current)
       return "";
     if (!utils::validate_username(name))
       return "";

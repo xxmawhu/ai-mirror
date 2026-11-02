@@ -23,7 +23,7 @@
 | 角色 | 示例 | 说明 |
 |------|------|------|
 | 主用户 | `maxx` | 拥有 sudo 权限，管理所有 ai-user |
-| AI用户 | `imaxx_alpha` | 每个项目一个，仅拥有该项目目录的写权限 |
+| AI用户 | `ai_2g5vkx17nls6` | 每个项目一个，home 为 `/home/ai_<hash>`，仅拥有该项目目录的写权限 |
 
 权限模型：
 - 主用户的配置文件（`.bashrc`, `.config` 等）通过 bind mount 只读挂载到 ai-user home
@@ -203,11 +203,14 @@ am create <project_path>
 为指定项目创建独立的 ai-user，完成全部初始化。
 
 **执行流程**:
-1. 创建 Linux 用户（用户名 = `prefix + main_user + "_" + 项目名哈希`）
-2. 设置 SSH 免密登录（生成密钥对 + authorized_keys）
-3. 只读 bind mount 主用户的配置文件（`.bashrc`, `.config` 等）
-4. 授予项目目录读写权限
-5. 输出创建的用户名
+1. 创建 Linux 用户（用户名 = `ai_<项目路径 SHA256 的 12 位 base36 哈希>`）
+2. 创建独立 home 目录 `/home/ai_<hash>`（与项目目录分离）
+3. 设置 SSH 免密登录（生成密钥对 + authorized_keys）
+4. 只读 bind mount 主用户的配置文件（`.bashrc`, `.config` 等）
+5. 授予项目目录读写权限（项目目录保留在原位置）
+6. 输出创建的用户名
+
+> 旧格式 `{prefix}{主用户}_{hash6}`（home = 项目目录）继续兼容读取和删除，但不再新建。
 
 ---
 
@@ -274,7 +277,7 @@ am cd <path>
 am rm <project_path>
 ```
 
-安全删除项目的 ai-user，保留输出文件。
+删除项目的 ai-user 与 `/home/ai_<hash>`，保留项目目录（输出文件）并将项目所有权归还主用户。
 
 ---
 

@@ -1,4 +1,5 @@
 #include "ai_mirror/daemon/mount_cleaner.hpp"
+#include "ai_mirror/core/ai_user_home.hpp"
 #include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
@@ -43,9 +44,10 @@ std::vector<fs::path> MountCleaner::find_stale_mounts() {
   setpwent();
   while (auto *pw = getpwent()) {
     std::string name(pw->pw_name);
-    if (name.length() > prefix_.length() &&
-        name.substr(0, prefix_.length()) == prefix_ &&
-        utils::validate_username(name) &&
+    bool legacy = name.length() > prefix_.length() &&
+                  name.substr(0, prefix_.length()) == prefix_;
+    bool current = core::is_ai_user_home(fs::path(pw->pw_dir));
+    if ((legacy || current) && utils::validate_username(name) &&
         std::string(pw->pw_dir).find('/') == 0) {
       ai_homes.push_back(pw->pw_dir);
     }
@@ -93,9 +95,10 @@ int MountCleaner::force_cleanup(const std::vector<fs::path> &mounts) {
   setpwent();
   while (auto *pw = getpwent()) {
     std::string name(pw->pw_name);
-    if (name.length() > prefix_.length() &&
-        name.substr(0, prefix_.length()) == prefix_ &&
-        utils::validate_username(name) &&
+    bool legacy = name.length() > prefix_.length() &&
+                  name.substr(0, prefix_.length()) == prefix_;
+    bool current = core::is_ai_user_home(fs::path(pw->pw_dir));
+    if ((legacy || current) && utils::validate_username(name) &&
         std::string(pw->pw_dir).find('/') == 0) {
       ai_homes.push_back(pw->pw_dir);
     }

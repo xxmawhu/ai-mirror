@@ -1,4 +1,5 @@
 #include "ai_mirror/core/graft.hpp"
+#include "ai_mirror/core/ai_user_home.hpp"
 #include "ai_mirror/core/vfs_util.hpp"
 #include "ai_mirror/security/path_validator.hpp"
 #include "ai_mirror/utils/logger.hpp"
@@ -250,9 +251,10 @@ std::vector<MountEntry> Graft::parse_mount_table() const {
   setpwent();
   while (auto *pw = getpwent()) {
     std::string name(pw->pw_name);
-    if (name.length() > prefix_.length() &&
-        name.substr(0, prefix_.length()) == prefix_ &&
-        utils::validate_username(name) &&
+    bool legacy = name.length() > prefix_.length() &&
+                  name.substr(0, prefix_.length()) == prefix_;
+    bool current = is_ai_user_home(fs::path(pw->pw_dir));
+    if ((legacy || current) && utils::validate_username(name) &&
         std::string(pw->pw_dir).find('/') == 0) {
       ai_homes.push_back(pw->pw_dir);
     }
@@ -437,8 +439,10 @@ bool Graft::unmount_all(const std::string &username) {
   }
 
   std::string prefix_check = prefix_ + utils::get_effective_username() + "_";
-  if (username.length() <= prefix_check.length() ||
-      username.substr(0, prefix_check.length()) != prefix_check) {
+  bool legacy_match = username.length() > prefix_check.length() &&
+                      username.substr(0, prefix_check.length()) == prefix_check;
+  bool current_match = is_ai_user_home(fs::path(kAiUserHomeRoot) / username);
+  if (!legacy_match && !current_match) {
     utils::get_logger()->error("Refusing to unmount_all non-ai-mirror user: {}",
                                username);
     return false;

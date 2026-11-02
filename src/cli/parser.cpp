@@ -30,7 +30,7 @@ int parse_and_run(int argc, char **argv) {
       "create",
       "创建项目用户\n"
       "  为指定项目创建独立的 ai-user，完成全部初始化：\n"
-      "  1. 创建 Linux 用户（用户名 = prefix + 主用户 + 项目名哈希）\n"
+      "  1. 创建 Linux 用户（ai_<项目路径哈希>，home = /home/ai_<hash>）\n"
       "  2. 设置 SSH 免密登录（生成密钥对 + authorized_keys）\n"
       "  3. 只读 bind mount 主用户的配置文件（.bashrc, .config 等）\n"
       "  4. 授予项目目录读写权限\n"
@@ -147,7 +147,8 @@ int parse_and_run(int argc, char **argv) {
   std::string rm_path;
   auto *rm_cmd =
       app.add_subcommand("rm", "删除项目\n"
-                               "  安全删除项目的 ai-user，保留输出文件");
+                               "  删除 ai-user 与 /home/ai_<hash>，保留项目目"
+                               "录并将所有权归还主用户");
   rm_cmd->add_option("project_path", rm_path, "项目目录路径")->required();
 
   // config

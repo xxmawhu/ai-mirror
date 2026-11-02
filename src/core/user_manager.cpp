@@ -1,4 +1,6 @@
 #include "ai_mirror/core/user_manager.hpp"
+#include "ai_mirror/core/ai_user_hash.hpp"
+#include "ai_mirror/core/ai_user_home.hpp"
 #include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/core/vfs_util.hpp"
 #include "ai_mirror/security/path_validator.hpp"
@@ -22,8 +24,6 @@
 
 namespace ai_mirror::core {
 
-static const std::string STATE_FILE = ".am_status";
-
 static std::string sha256_hex(const std::string &input) {
   unsigned char hash[32];
   unsigned int hash_len = 0;
@@ -35,6 +35,19 @@ static std::string sha256_hex(const std::string &input) {
         << static_cast<int>(hash[i]);
   }
   return oss.str();
+}
+
+// Current layout user name: "ai_" + 12 base36 chars.
+static bool is_new_ai_user_name(const std::string &name) {
+  const std::string prefix(kAiUserHomePrefix);
+  return name.size() == prefix.size() + kAiUserHashLength &&
+         name.compare(0, prefix.size(), prefix) == 0 &&
+         is_valid_ai_user_hash(name.substr(prefix.size()));
+}
+
+static std::string new_ai_username_for_path(const fs::path &canonical_path) {
+  return std::string(kAiUserHomePrefix) +
+         make_ai_user_hash(canonical_path.string());
 }
 
 static nlohmann::ordered_json build_source_stat_json(const MountStatInfo &st) {
@@ -97,7 +110,8 @@ void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
   // shared group write
 
   // 1. Set home_dir to 0755 (remove group write if present)
-  auto chmod_result = utils::exec_safe({"chmod", "0755", home_dir.string()});
+  auto chmod_result = utils::exec_safe(
+      {"chmod", std::to_string(kAiUserHomeMode), home_dir.string()});
   if (chmod_result.exit_code != 0) {
     // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
     utils::get_logger()->warn("Failed to set permissions 0755 on {}: {}",
@@ -191,7 +205,7 @@ static bool verify_state_safe(const nlohmann::json &j,
 
 static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
                              const std::string &main_user) {
-  fs::path state_path = home_dir / STATE_FILE;
+  fs::path state_path = ai_user_status_file(home_dir);
 
   // Use atomic write: write to temp file, then rename.
   // Crash during write leaves the original file intact instead of truncating
@@ -239,7 +253,7 @@ static bool write_state_file(const fs::path &home_dir, const UserInfo &info,
 }
 
 static std::optional<UserInfo> read_state_file(const fs::path &home_dir) {
-  fs::path state_path = home_dir / STATE_FILE;
+  fs::path state_path = ai_user_status_file(home_dir);
 
   // Open with O_NOFOLLOW to prevent symlink attacks: if .am_status has been
   // replaced with a symlink to an arbitrary file (e.g. /etc/shadow), open
@@ -416,8 +430,7 @@ UserManager::UserManager(const std::string &prefix,
     : prefix_(prefix), allowed_bases_(allowed_bases) {}
 
 std::optional<std::string>
-UserManager::compute_username(const fs::path &project_path,
-                              bool check_collision) const {
+UserManager::compute_username(const fs::path &project_path) const {
   // Get canonical absolute path for stable hash
   std::error_code ec;
   fs::path canonical_path = fs::canonical(project_path, ec);
@@ -445,36 +458,14 @@ UserManager::compute_username(const fs::path &project_path,
     return std::nullopt;
   }
 
-  // Collision detection: if username exists for different path, throw error
-  if (check_collision && user_exists(username)) {
-    // Check if existing user belongs to same canonical path
-    auto existing_info = get_user_info(username);
-    if (existing_info) {
-      fs::path existing_home = existing_info->home_dir;
-      // Home dir format: /home/<username> or configured base
-      // We cannot directly recover original path from hash, but collision
-      // means: Two different paths produced same 6-char hash → extremely rare
-      utils::get_logger()->error(
-          "Username collision detected: '{}' already exists (home: {}). "
-          "Path '{}' and another path share the same hash prefix '{}'. "
-          "This is a hash collision (probability ~1/16^6). "
-          "Please choose a different project path or remove existing AI user.",
-          username, existing_home.string(), canonical_path.string(), path_hash);
-      return std::nullopt;
-    }
-  }
-
+  // Collision detection is not needed here: this helper only derives the
+  // legacy name for lookup/removal and never creates a user.
   return username;
 }
 
 std::optional<std::string>
-UserManager::generate_username(const fs::path &project_path) const {
-  return compute_username(project_path, true);
-}
-
-std::optional<std::string>
 UserManager::derive_username(const fs::path &project_path) const {
-  return compute_username(project_path, false);
+  return compute_username(project_path);
 }
 
 bool UserManager::execute_useradd(const std::string &username,
@@ -503,10 +494,28 @@ bool UserManager::execute_useradd(const std::string &username,
     return false;
   }
 
+  // Login defaults may disable home creation; create it explicitly so the
+  // state file and SSH material have a writable owner.
+  std::error_code home_ec;
+  if (!fs::exists(home_dir, home_ec)) {
+    fs::create_directories(home_dir, home_ec);
+  }
+  if (home_ec) {
+    utils::get_logger()->error("Failed to create home {}: {}",
+                               home_dir.string(), home_ec.message());
+    return false;
+  }
+  if (::chown(home_dir.c_str(), uid, gid) != 0) {
+    utils::get_logger()->error("Failed to chown home {}: {}", home_dir.string(),
+                               strerror(errno));
+    return false;
+  }
+
   // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x)
   // NO group write permission (g+w) - main user operates via SSH, not via
   // shared group write
-  auto chmod_result = utils::exec_safe({"chmod", "0755", home_dir.string()});
+  auto chmod_result = utils::exec_safe(
+      {"chmod", std::to_string(kAiUserHomeMode), home_dir.string()});
   if (chmod_result.exit_code != 0) {
     // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
     // - home_dir 可能已不存在（useradd 失败的罕见场景）
@@ -696,7 +705,14 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     return {"", "", "", "", "", 0, 0, false, err, {}};
   }
 
-  auto state = read_state_file(abs_proj);
+  // Current layout keeps .am_status in /home/ai_<hash>; the project directory
+  // no longer hosts the state file.  Fall back to the project directory so
+  // legacy projects (home == project) keep working.
+  fs::path state_home = ai_user_home_for_project(abs_proj);
+  auto state = read_state_file(state_home);
+  if (!state) {
+    state = read_state_file(abs_proj);
+  }
   if (state) {
     if (user_exists(state->username)) {
       auto sys_info = get_user_info(state->username);
@@ -705,9 +721,10 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
         utils::get_logger()->info(
             "User already exists (state file matches): {} (uid={})",
             state->username, state->uid);
-        // Fix permissions for existing AM home so main user can create
-        // sub-projects
-        fix_home_dir_permissions(abs_proj, main_user);
+        // Fix permissions for the existing AI user home.
+        fs::path existing_home =
+            state->home_dir.empty() ? state_home : fs::path(state->home_dir);
+        fix_home_dir_permissions(existing_home, main_user);
         return *state;
       }
       utils::get_logger()->warn(
@@ -715,29 +732,26 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     }
   }
 
-  auto username_opt = generate_username(proj);
-  if (!username_opt) {
-    auto derived = derive_username(proj);
-    if (derived && user_exists(*derived)) {
-      auto existing = get_user_info(*derived);
-      if (existing) {
-        write_state_file(abs_proj, *existing, main_user);
-        utils::get_logger()->info(
-            "Recovered existing user: {} (uid={}), wrote state file",
-            existing->username, existing->uid);
-        // Fix permissions for existing AM home so main user can create
-        // sub-projects
-        fix_home_dir_permissions(abs_proj, main_user);
-        return *existing;
-      }
+  // Legacy recovery: reuse an existing {prefix}{main_user}_{hash6} user so an
+  // `am create` on a legacy project does not spawn a second AI user.
+  auto legacy_opt = derive_username(proj);
+  if (legacy_opt && user_exists(*legacy_opt)) {
+    auto existing = get_user_info(*legacy_opt);
+    if (existing) {
+      existing->project_path = abs_proj.string();
+      existing->path_hash = compute_path_hash(abs_proj);
+      write_state_file(abs_proj, *existing, main_user);
+      utils::get_logger()->info(
+          "Recovered existing legacy user: {} (uid={}), wrote state file",
+          existing->username, existing->uid);
+      fix_home_dir_permissions(abs_proj, main_user);
+      return *existing;
     }
-    std::string err = "Cannot create valid username for project '" +
-                      proj.string() +
-                      "': directory name must contain only [a-z0-9_-], no "
-                      "leading digit, max 32 chars";
-    return {"", "", "", "", "", 0, 0, false, err, {}};
   }
-  std::string username = std::move(*username_opt);
+
+  // Current layout: deterministic ai_<hash> user, home /home/ai_<hash>.
+  std::string username = new_ai_username_for_path(abs_proj);
+  fs::path home_dir = ai_user_home_for_project(abs_proj);
   std::string path_hash = compute_path_hash(abs_proj);
   std::string project_path_str = abs_proj.string();
 
@@ -760,17 +774,42 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
     // Fill project_path and path_hash for existing user
     info->project_path = project_path_str;
     info->path_hash = path_hash;
-    write_state_file(abs_proj, *info, main_user);
+    info->home_dir = home_dir.string();
+    // The user may outlive its home directory (manual cleanup).  Recreate it
+    // when missing and always keep the directory itself owned by the AI user
+    // so the state ownership check passes.
+    std::error_code home_ec;
+    if (!fs::exists(home_dir, home_ec)) {
+      fs::create_directories(home_dir, home_ec);
+    }
+    if (!home_ec) {
+      struct passwd *pw = getpwnam(username.c_str());
+      if (pw && ::chown(home_dir.c_str(), pw->pw_uid, pw->pw_gid) != 0) {
+        utils::get_logger()->warn("Failed to chown home {}: {}",
+                                  home_dir.string(), strerror(errno));
+      }
+    } else {
+      utils::get_logger()->error("Failed to create home {}: {}",
+                                 home_dir.string(), home_ec.message());
+      return {username,
+              home_dir.string(),
+              "",
+              project_path_str,
+              path_hash,
+              0,
+              0,
+              false,
+              "failed to create AI user home",
+              {}};
+    }
+    write_state_file(home_dir, *info, main_user);
     utils::get_logger()->info(
         "User already exists: {} (uid={}), wrote state file", info->username,
         info->uid);
-    // Fix permissions for existing AM home so main user can create
-    // sub-projects
-    fix_home_dir_permissions(abs_proj, main_user);
+    fix_home_dir_permissions(home_dir, main_user);
     return *info;
   }
 
-  fs::path home_dir = abs_proj;
   uid_t base_uid = utils::get_login_uid();
   if (base_uid == 0)
     base_uid = getuid();
@@ -822,9 +861,19 @@ bool UserManager::remove_ai_user(const std::string &username, bool force) {
     return false;
   }
 
-  std::string prefix_check = prefix_ + utils::get_effective_username() + "_";
-  if (username.length() <= prefix_check.length() ||
-      username.substr(0, prefix_check.length()) != prefix_check) {
+  std::string effective_user = utils::get_effective_username();
+  std::string prefix_check = prefix_ + effective_user + "_";
+  bool legacy_match = username.length() > prefix_check.length() &&
+                      username.substr(0, prefix_check.length()) == prefix_check;
+  bool new_match = is_new_ai_user_name(username);
+  if (new_match) {
+    // The ai_<hash> name carries no owner; require the state file to record
+    // the calling user as the owner.
+    auto state = read_state_file(fs::path(kAiUserHomeRoot) / username);
+    new_match = state && !state->main_user.empty() &&
+                state->main_user == effective_user;
+  }
+  if (!legacy_match && !new_match) {
     utils::get_logger()->error("Refusing to remove non-ai-mirror user: {}",
                                username);
     return false;
@@ -854,8 +903,9 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
   setpwent();
   while (auto *pw = getpwent()) {
     std::string name(pw->pw_name);
-    if (name.length() > prefix_str.length() &&
-        name.substr(0, prefix_str.length()) == prefix_str) {
+    bool legacy_match = name.length() > prefix_str.length() &&
+                        name.substr(0, prefix_str.length()) == prefix_str;
+    if (legacy_match || is_ai_user_home(fs::path(pw->pw_dir))) {
       UserInfo info{name,       pw->pw_dir, "",   "", "",
                     pw->pw_uid, pw->pw_gid, true, "", {}};
       // Try to read state file for project_path and path_hash
@@ -874,7 +924,52 @@ std::vector<UserInfo> UserManager::list_ai_users() const {
 }
 
 std::optional<UserInfo> UserManager::read_state(const fs::path &project_dir) {
-  return read_state_file(project_dir);
+  // Legacy layout: state file lives in the project directory (home == project).
+  auto legacy = read_state_file(project_dir);
+  if (legacy) {
+    return legacy;
+  }
+  // Current layout: state file lives in /home/ai_<hash>.
+  return read_state_for_project(project_dir);
+}
+
+std::optional<UserInfo>
+UserManager::read_state_for_project(const fs::path &project_path) {
+  std::error_code ec;
+  fs::path canonical = fs::canonical(project_path, ec);
+  if (ec) {
+    canonical = fs::weakly_canonical(fs::absolute(project_path), ec);
+  }
+  if (ec) {
+    return std::nullopt;
+  }
+  return read_state_file(ai_user_home_for_project(canonical));
+}
+
+std::optional<UserInfo>
+UserManager::read_state_from_home(const fs::path &home_dir) {
+  return read_state_file(home_dir);
+}
+
+bool UserManager::is_ai_user_of(const std::string &username,
+                                const std::string &main_user,
+                                const std::string &prefix) {
+  if (username.empty() || main_user.empty()) {
+    return false;
+  }
+
+  std::string legacy_prefix = prefix + main_user + "_";
+  if (username.size() > legacy_prefix.size() &&
+      username.compare(0, legacy_prefix.size(), legacy_prefix) == 0) {
+    return true;
+  }
+
+  if (!is_new_ai_user_name(username)) {
+    return false;
+  }
+  // ai_<hash> has no owner in the name: ownership comes from .am_status.
+  auto state = read_state_file(fs::path(kAiUserHomeRoot) / username);
+  return state && !state->main_user.empty() && state->main_user == main_user;
 }
 
 bool UserManager::update_state_mounts(const std::string &username,
@@ -891,9 +986,17 @@ bool UserManager::update_state_mounts(const std::string &username,
         "attempting rebuild",
         username, home_dir.string());
 
-    // Derive main_user from username format: {prefix}{main_user}_{hash}
+    // Derive main_user from username format: {prefix}{main_user}_{hash}.
+    // ai_<hash> carries no owner and no project path, so a rebuild cannot be
+    // reconstructed here; `am update <project>` performs it with the CLI
+    // arguments.
     std::string main_user;
-    if (prefix.empty()) {
+    if (is_new_ai_user_name(username)) {
+      utils::get_logger()->warn(
+          "update_state_mounts: ai_<hash> state is unrecoverable from name "
+          "alone, run 'am update <project>' to rebuild: {}",
+          username);
+    } else if (prefix.empty()) {
       main_user = utils::get_effective_username();
     } else {
       auto rest = username.substr(prefix.size());

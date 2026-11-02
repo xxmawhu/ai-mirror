@@ -44,6 +44,8 @@ set(AI_MIRROR_SOURCES
     src/core/graft.cpp
     src/core/ssh_manager.cpp
     src/core/path_resolver.cpp
+    src/core/ai_user_hash.cpp
+    src/core/ai_user_home.cpp
     src/security/path_validator.cpp
     src/security/audit.cpp
     src/daemon/health_check.cpp
@@ -83,6 +85,8 @@ add_executable(am-mount-watch
     src/core/graft.cpp
     src/core/path_resolver.cpp
     src/core/user_manager.cpp
+    src/core/ai_user_hash.cpp
+    src/core/ai_user_home.cpp
     src/security/path_validator.cpp
     src/daemon/mount_cleaner.cpp
     src/utils/shell.cpp

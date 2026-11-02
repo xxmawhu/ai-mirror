@@ -77,3 +77,6 @@ env/
 history_log/
 miniconda.sh
 Testing/
+
+# Local scratch artifacts (probes, one-off scripts)
+.var/

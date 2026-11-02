@@ -46,14 +46,15 @@ struct UserInfo {
 
 // AI user management with deterministic username generation.
 //
-// Username generation strategy:
-// - Format: {prefix}{effective_user}_{path_hash[:6]}
-// - path_hash: first 6 hex chars of SHA256(canonical absolute path)
-// - Example: prefix="i", user="maxx", path="/home/maxx/ai-mirror"
-//   → SHA256(...) = "a3f2b1...", username = "imaxx_a3f2b1"
-// - Hash-based naming eliminates same-name project collision
-// - Total username length <= 32 chars (Linux limit)
-// - Collision (different paths, same 6-char hash) throws error
+// Username/home strategy (current):
+// - Format: ai_<hash>, hash = first 12 base36 chars of SHA256(canonical path)
+// - Home: /home/ai_<hash>, created and owned by the AI user, mode 0755
+// - The project directory stays at its original location and is separate from
+//   the home; the AI user is granted write access to it.
+//
+// Legacy format (still readable and removable, never created):
+// - Format: {prefix}{main_user}_{path_hash[:6]}, home = project directory
+// - path_hash: first 6 hex chars of SHA256(canonical path)
 class UserManager {
 public:
   explicit UserManager(const std::string &prefix,
@@ -68,6 +69,22 @@ public:
   std::vector<UserInfo> list_ai_users() const;
 
   static std::optional<UserInfo> read_state(const fs::path &project_dir);
+
+  // Read .am_status from the current-layout home for a project path:
+  // /home/ai_<hash>/.am_status where hash is derived from the canonical path.
+  static std::optional<UserInfo>
+  read_state_for_project(const fs::path &project_path);
+
+  // Read .am_status directly from a layout home directory.  Used when the
+  // project path is not known (e.g. force-destroy by username).
+  static std::optional<UserInfo> read_state_from_home(const fs::path &home_dir);
+
+  // True if `username` belongs to `main_user` under either layout.  The
+  // current layout (ai_<hash>) carries no main user in the name, so ownership
+  // is taken from the main_user field of its .am_status.
+  static bool is_ai_user_of(const std::string &username,
+                            const std::string &main_user,
+                            const std::string &prefix);
 
   // Update .am_status with current mount info for an AI user.
   // Reads /proc/mounts via Graft to get the actual mount list, stats each
@@ -106,9 +123,7 @@ private:
   std::string prefix_;
   std::vector<fs::path> allowed_bases_;
   std::optional<std::string>
-  generate_username(const fs::path &project_path) const;
-  std::optional<std::string> compute_username(const fs::path &project_path,
-                                              bool check_collision) const;
+  compute_username(const fs::path &project_path) const;
   bool execute_useradd(const std::string &username, const fs::path &home_dir,
                        uid_t uid, gid_t gid);
   bool execute_userdel(const std::string &username, bool remove_home);

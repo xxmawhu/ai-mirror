@@ -22,6 +22,7 @@
 //
 // Usage: am-mount-watch [--verbose]
 
+#include "ai_mirror/core/ai_user_home.hpp"
 #include "ai_mirror/core/config.hpp"
 #include "ai_mirror/core/graft.hpp"
 #include "ai_mirror/core/path_resolver.hpp"
@@ -471,8 +472,8 @@ int main(int argc, char *argv[]) {
 
       // ── MAIN USER PROTECTION (hard rule) ──────────────────────────────
       // The main user's systemd --user must NEVER be touched. Only AI
-      // users (naming convention {prefix}{main_user}_{hash}, e.g.
-      // "imaxx_a1b2c3") are subject to the systemd lockdown.
+      // users are subject to the systemd lockdown: legacy
+      // {prefix}{main_user}_{hash} names or current /home/ai_<hash> homes.
       // Guards:
       //   1. username == main_user (name-level)
       //   2. uid == main_user's uid (UID-level, catches renamed users)
@@ -486,9 +487,12 @@ int main(int argc, char *argv[]) {
         is_main_user = (username == main_user) ||
                        (main_uid != 0 && uid != 0 && uid == main_uid);
       }
-      bool is_ai_user_by_name = !main_user.empty() &&
-                                username.size() > prefix.size() &&
-                                username.rfind(prefix, 0) == 0 && !is_main_user;
+      bool is_legacy_ai_user = !main_user.empty() &&
+                               username.size() > prefix.size() &&
+                               username.rfind(prefix, 0) == 0;
+      bool is_ai_user_by_name =
+          (is_legacy_ai_user || core::is_ai_user_home(home_dir)) &&
+          !is_main_user;
 
       if (uid == 0) {
         logger->warn("  user {}: cannot resolve UID, skipping systemd lockdown",
@@ -829,7 +833,13 @@ int main(int argc, char *argv[]) {
     // the AI user was created, and 'am update' was not run.
     // Mark the project as needing an update so the user is notified.
     if (user_info && !main_user.empty()) {
-      fs::path config_path = home_dir / ".ai-mirror.toml";
+      // Legacy layout keeps the config inside the home (== project); the
+      // current layout keeps it in the project directory, which is separate
+      // from the home.
+      fs::path config_dir = user_info->project_path.empty()
+                                ? home_dir
+                                : fs::path(user_info->project_path);
+      fs::path config_path = config_dir / ".ai-mirror.toml";
       std::error_code ec;
       if (fs::exists(config_path, ec)) {
         auto project_config = core::ConfigParser::load(config_path);

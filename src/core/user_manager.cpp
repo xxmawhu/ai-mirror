@@ -697,6 +697,23 @@ UserInfo UserManager::create_ai_user(const std::string &project_path) {
         fs::path existing_home =
             state->home_dir.empty() ? state_home : fs::path(state->home_dir);
         fix_home_dir_permissions(existing_home, main_user);
+
+        // Repair state files written before project_path/path_hash were
+        // persisted: read_state backfills project_path from home_dir, which
+        // makes `am cd` remap the project into the AI home instead of using
+        // the project's real location.
+        const std::string expected_project = abs_proj.string();
+        const std::string expected_hash = compute_path_hash(abs_proj);
+        if (state->project_path != expected_project ||
+            state->path_hash != expected_hash) {
+          state->project_path = expected_project;
+          state->path_hash = expected_hash;
+          if (!write_state_file(existing_home, *state, main_user)) {
+            utils::get_logger()->error(
+                "Failed to repair project_path in state file: {}",
+                ai_user_status_file(existing_home).string());
+          }
+        }
         return *state;
       }
       utils::get_logger()->warn(

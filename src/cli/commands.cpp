@@ -2506,21 +2506,37 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
   std::optional<core::UserInfo> state;
   std::error_code ec;
 
-  // Track the closest corrupted .am_status for the error message below
-  fs::path corrupted_path;
   while (!search_path.empty() && search_path != "/" && search_path != "/home") {
     state = core::UserManager::read_state(search_path);
     if (state) {
-      corrupted_path.clear(); // found valid state, clear any corruption hint
       break;
     }
-    // If .am_status exists but read_state failed, record for error message
-    std::error_code ec2;
-    if (corrupted_path.empty() && fs::exists(search_path / ".am_status", ec2) &&
-        !ec2) {
-      corrupted_path = search_path;
-    }
     search_path = search_path.parent_path();
+  }
+
+  // Current layout: the state file lives in the AI user home (/home/ai_<hash>),
+  // not in the project directory, so the walk-up above finds nothing.  Derive
+  // the deterministic home from each ancestor of the target and read the state
+  // there.  Only /home is touched (root-owned 0644 files); the target mount
+  // path is never stat()ed.
+  if (!state) {
+    fs::path probe = target;
+    while (!probe.empty() && probe != "/" && probe != "/home") {
+      fs::path candidate_home = core::ai_user_home_for_project(probe);
+      if (candidate_home != probe && core::is_ai_user_home(candidate_home)) {
+        auto candidate = core::UserManager::read_state(candidate_home);
+        if (candidate) {
+          // The home name is derived from `probe`, so `probe` is this
+          // project's canonical path.  Legacy state files predate
+          // project_path persistence and get home_dir backfilled on read,
+          // which would otherwise remap the project into the AI home.
+          candidate->project_path = probe.string();
+          state = std::move(candidate);
+          break;
+        }
+      }
+      probe = probe.parent_path();
+    }
   }
 
   if (state) {

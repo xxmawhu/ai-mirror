@@ -923,7 +923,8 @@ std::optional<UserInfo> UserManager::read_state(const fs::path &project_dir) {
 }
 
 std::optional<UserInfo>
-UserManager::read_state_for_project(const fs::path &project_path) {
+UserManager::read_state_for_project(const fs::path &project_path,
+                                    const fs::path &home_root) {
   std::error_code ec;
   fs::path canonical = fs::canonical(project_path, ec);
   if (ec) {
@@ -932,12 +933,68 @@ UserManager::read_state_for_project(const fs::path &project_path) {
   if (ec) {
     return std::nullopt;
   }
-  return read_state_file(ai_user_home_for_project(canonical));
+  const fs::path home =
+      fs::path(home_root) /
+      ai_user_home_name(make_ai_user_hash(canonical.string()));
+  auto state = read_state_file(home);
+  if (!state) {
+    return std::nullopt;
+  }
+  // The home was derived from `canonical`, so `canonical` is this project's
+  // path regardless of what the file stored.  State files written before
+  // project_path/path_hash were persisted leave those fields empty, and
+  // read_state_file backfills project_path from home_dir, which would make
+  // ai_user_access_path treat the project as homed inside the AI home and
+  // remap it (am cd ".", issue 2026-11-03).  Override with the authoritative
+  // path; the caller resolves the project, not the file.
+  apply_canonical_project_path(*state, canonical);
+  return state;
+}
+
+void UserManager::apply_canonical_project_path(
+    UserInfo &info, const fs::path &canonical_project_path) {
+  const std::string canonical_str = canonical_project_path.string();
+  if (info.project_path == canonical_str &&
+      info.path_hash == compute_path_hash(canonical_project_path)) {
+    return;
+  }
+  info.project_path = canonical_str;
+  info.path_hash = compute_path_hash(canonical_project_path);
 }
 
 std::optional<UserInfo>
 UserManager::read_state_from_home(const fs::path &home_dir) {
   return read_state_file(home_dir);
+}
+
+bool UserManager::repair_state_project_path(
+    const fs::path &home_dir, const fs::path &canonical_project_path) {
+  // `canonical_project_path` is already canonical (path_resolver or the
+  // caller's project probe); canonicalizing again would stat the project
+  // mount target, which can hang on a stale BeeGFS bind mount (D state).
+  auto state = read_state_file(home_dir);
+  if (!state) {
+    return false;
+  }
+  const std::string canonical_str = canonical_project_path.string();
+  const std::string expected_hash = compute_path_hash(canonical_project_path);
+  if (state->project_path == canonical_str &&
+      state->path_hash == expected_hash) {
+    return true;
+  }
+  state->project_path = canonical_str;
+  state->path_hash = expected_hash;
+  if (!write_state_file(home_dir, *state, state->main_user)) {
+    // WARN: 修复失败不阻断调用方（read_state_for_project 已按项目路径覆盖），
+    // 下一次 root 身份的 am cd 会重试。
+    utils::get_logger()->warn("Failed to repair project_path in state file: {}",
+                              ai_user_status_file(home_dir).string());
+    return false;
+  }
+  utils::get_logger()->info("Repaired project_path in state file: {} -> {}",
+                            ai_user_status_file(home_dir).string(),
+                            canonical_str);
+  return true;
 }
 
 bool UserManager::is_ai_user_of(const std::string &username,

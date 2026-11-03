@@ -70,14 +70,31 @@ public:
 
   static std::optional<UserInfo> read_state(const fs::path &project_dir);
 
-  // Read .am_status from the current-layout home for a project path:
-  // /home/ai_<hash>/.am_status where hash is derived from the canonical path.
+  /// 按项目路径读取当前布局的状态文件（home 名由 canonical 路径哈希派生）。
+  /// @param project_path 项目路径，内部规范化为 canonical 绝对路径
+  /// @param home_root AI 用户 home 根目录（默认 /home）
+  /// @return 状态；project_path 与 path_hash 以解析出的 canonical 项目路径为准
   static std::optional<UserInfo>
-  read_state_for_project(const fs::path &project_path);
+  read_state_for_project(const fs::path &project_path,
+                         const fs::path &home_root = "/home");
+
+  /// 以 canonical 项目路径覆盖状态中的 project_path 与 path_hash。
+  /// @param info 待修正的状态（原地修改）
+  /// @param canonical_project_path 已规范化的项目绝对路径
+  static void
+  apply_canonical_project_path(UserInfo &info,
+                               const fs::path &canonical_project_path);
 
   // Read .am_status directly from a layout home directory.  Used when the
   // project path is not known (e.g. force-destroy by username).
   static std::optional<UserInfo> read_state_from_home(const fs::path &home_dir);
+
+  /// 将权威项目路径写入当前布局的状态文件。
+  /// @param home_dir AI 用户 home 目录（/home/ai_<hash>）
+  /// @param canonical_project_path 已规范化的项目绝对路径
+  /// @return 字段已一致或写入成功返回 true，读取或写入失败返回 false
+  static bool repair_state_project_path(const fs::path &home_dir,
+                                        const fs::path &canonical_project_path);
 
   // True if `username` belongs to `main_user` under either layout.  The
   // current layout (ai_<hash>) carries no main user in the name, so ownership

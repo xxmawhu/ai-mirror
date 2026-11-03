@@ -86,36 +86,6 @@ static bool is_ai_user_of(const core::UserInfo &info,
   return validate_ai_user_ownership(info.username, main_user, prefix);
 }
 
-// Path the AI user must cd into for `target`.
-//
-// Legacy layout: home == project, so access goes through the mirrored path
-// inside the AI home (config files are bind-mounted there).
-// Current layout: home is separate and the project stays at its original
-// location (only config files are bind-mounted into the home), so a target
-// inside the project is used as-is.
-static fs::path ai_user_access_path(const fs::path &target,
-                                    const core::UserInfo &state,
-                                    const std::string &ai_user,
-                                    const std::string &main_user) {
-  if (!state.project_path.empty()) {
-    fs::path project = fs::path(state.project_path).lexically_normal();
-    fs::path normalized = target.lexically_normal();
-    const std::string project_str = project.string();
-    const std::string target_str = normalized.string();
-    const bool under_project =
-        target_str == project_str ||
-        (target_str.size() > project_str.size() &&
-         target_str.compare(0, project_str.size(), project_str) == 0 &&
-         target_str[project_str.size()] == '/');
-    if (under_project &&
-        fs::path(state.home_dir).lexically_normal() != project) {
-      return normalized;
-    }
-  }
-  return core::PathResolver::to_ai_user_path(target, ai_user, main_user,
-                                             state.home_dir);
-}
-
 struct CommandContext {
   core::Config config;
   std::unique_ptr<core::UserManager> user_mgr;
@@ -2514,33 +2484,33 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
     search_path = search_path.parent_path();
   }
 
-  // Current layout: the state file lives in the AI user home (/home/ai_<hash>),
-  // not in the project directory, so the walk-up above finds nothing.  Derive
-  // the deterministic home from each ancestor of the target and read the state
-  // there.  Only /home is touched (root-owned 0644 files); the target mount
-  // path is never stat()ed.
-  if (!state) {
-    fs::path probe = target;
-    while (!probe.empty() && probe != "/" && probe != "/home") {
-      fs::path candidate_home = core::ai_user_home_for_project(probe);
-      if (candidate_home != probe && core::is_ai_user_home(candidate_home)) {
-        auto candidate = core::UserManager::read_state(candidate_home);
-        if (candidate) {
-          // The home name is derived from `probe`, so `probe` is this
-          // project's canonical path.  Legacy state files predate
-          // project_path persistence and get home_dir backfilled on read,
-          // which would otherwise remap the project into the AI home.
-          candidate->project_path = probe.string();
-          state = std::move(candidate);
-          break;
-        }
-      }
-      probe = probe.parent_path();
-    }
-  }
+  // Current layout (home separated from the project) needs no extra lookup
+  // here: read_state() already falls back to read_state_for_project(), which
+  // derives /home/ai_<hash> from each candidate ancestor.
+  // read_state_for_project also overrides project_path with the resolved
+  // project, so legacy state files that lack project_path no longer remap the
+  // project into the AI home.
 
   if (state) {
     std::string ai_user = state->username;
+
+    // Self-heal legacy state files: when the state was located through its
+    // project-derived home, persist the authoritative project_path/path_hash
+    // so commands reading the file directly (am status, am-mount-watch) see
+    // the real path.  `am cd` runs under sudo, so the root-owned file is
+    // writable; as an unprivileged caller the repair is skipped.
+    if (::geteuid() == 0) {
+      fs::path probe = target;
+      while (!probe.empty() && probe != "/" && probe != "/home") {
+        if (core::ai_user_home_for_project(probe) ==
+            fs::path(state->home_dir)) {
+          core::UserManager::repair_state_project_path(
+              fs::path(state->home_dir), probe);
+          break;
+        }
+        probe = probe.parent_path();
+      }
+    }
 
     // NOTE: am cd must NOT perform any filesystem operations (stat, mount)
     // on the target mount path.  stat() on a stale BeeGFS bind mount target
@@ -2684,8 +2654,8 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
             .string();
 
     // Convert main user's target path to the path the AI user can access.
-    fs::path ai_user_target =
-        ai_user_access_path(target, *state, ai_user, main_user);
+    fs::path ai_user_target = core::PathResolver::ai_user_access_path(
+        target, state->project_path, state->home_dir, ai_user, main_user);
     std::string ai_user_target_str = ai_user_target.string();
 
     // Build remote command for SSH interactive session

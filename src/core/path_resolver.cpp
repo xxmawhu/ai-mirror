@@ -85,6 +85,33 @@ fs::path PathResolver::to_ai_user_path(const fs::path &main_path,
   return main_path;
 }
 
+fs::path PathResolver::ai_user_access_path(const fs::path &target,
+                                           const fs::path &project_path,
+                                           const fs::path &home_dir,
+                                           const std::string &ai_user,
+                                           const std::string &main_user) {
+  // Pure lexical comparison: never stat the target.  stat() on a stale BeeGFS
+  // bind mount target can block in uninterruptible sleep (D state).
+  if (!project_path.empty()) {
+    const fs::path project = project_path.lexically_normal();
+    const fs::path normalized = target.lexically_normal();
+    const std::string project_str = project.string();
+    const std::string target_str = normalized.string();
+    const bool under_project =
+        target_str == project_str ||
+        (target_str.size() > project_str.size() &&
+         target_str.compare(0, project_str.size(), project_str) == 0 &&
+         target_str[project_str.size()] == '/');
+    // Current layout keeps the project at its original path and only mirrors
+    // config files into the home; legacy layout (home == project) has no
+    // directly accessible project tree, so it keeps the mirrored path.
+    if (under_project && home_dir.lexically_normal() != project) {
+      return normalized;
+    }
+  }
+  return to_ai_user_path(target, ai_user, main_user, home_dir);
+}
+
 std::string PathResolver::detect_owner_user(const fs::path &p) {
   struct stat st{};
   if (stat(p.c_str(), &st) != 0) {

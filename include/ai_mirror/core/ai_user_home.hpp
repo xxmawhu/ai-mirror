@@ -14,9 +14,6 @@ inline constexpr std::string_view kAiUserHomeRoot = "/home";
 inline constexpr std::string_view kAiUserHomePrefix = "ai_";
 /// 状态文件名。
 inline constexpr std::string_view kAiUserStatusFileName = ".am_status";
-/// home 目录权限模式。
-inline constexpr unsigned kAiUserHomeMode = 0755;
-
 /// 由哈希生成 home 目录名（ai_ + 哈希）。
 /// @param hash 12 位小写 base36 哈希
 /// @return home 目录名

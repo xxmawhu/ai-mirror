@@ -105,24 +105,11 @@ static std::string make_state_content(const UserInfo &info,
 
 void UserManager::fix_home_dir_permissions(const fs::path &home_dir,
                                            const std::string &main_user) {
-  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x)
-  // NO group write permission (g+w) - main user operates via SSH, not via
-  // shared group write
+  // Home directory mode is left at the system default (useradd's value);
+  // am does not chmod it.  Only the group owner is normalised below.
+  // g+w is stripped later for sshd StrictModes compatibility when needed.
 
-  // 1. Set home_dir to 0755 (remove group write if present)
-  auto chmod_result = utils::exec_safe(
-      {"chmod", std::to_string(kAiUserHomeMode), home_dir.string()});
-  if (chmod_result.exit_code != 0) {
-    // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
-    utils::get_logger()->warn("Failed to set permissions 0755 on {}: {}",
-                              home_dir.string(), chmod_result.stderr_output);
-  } else {
-    utils::get_logger()->info(
-        "Set permissions 0755 on {} (AI user home isolation, per root.md §2.3)",
-        home_dir.string());
-  }
-
-  // 2. chgrp to main user's primary group (for read access via group
+  // chgrp to main user's primary group (for read access via group
   // membership)
   struct passwd *main_pw = getpwnam(main_user.c_str());
   if (main_pw) {
@@ -511,23 +498,8 @@ bool UserManager::execute_useradd(const std::string &username,
     return false;
   }
 
-  // [root.md §2.3] AI user home MUST be 0755 (owner rwx, group/other r-x)
-  // NO group write permission (g+w) - main user operates via SSH, not via
-  // shared group write
-  auto chmod_result = utils::exec_safe(
-      {"chmod", std::to_string(kAiUserHomeMode), home_dir.string()});
-  if (chmod_result.exit_code != 0) {
-    // [log-review] 降级为 warning: chmod 失败不影响 ai-user 正常使用
-    // - home_dir 可能已不存在（useradd 失败的罕见场景）
-    // - 文件系统可能不支持权限设置
-    // - 权限可能已被设置为 0755（重复执行）
-    utils::get_logger()->warn("Failed to set permissions 0755 on {}: {}",
-                              home_dir.string(), chmod_result.stderr_output);
-  } else {
-    utils::get_logger()->info(
-        "Set permissions 0755 on {} (AI user home isolation, per root.md §2.3)",
-        home_dir.string());
-  }
+  // Home directory mode stays at the system default (see root.md §2 design
+  // principles): am does not chmod the AI user home.
 
   auto unlock = utils::exec_safe({"passwd", "-u", username});
   if (unlock.exit_code != 0) {

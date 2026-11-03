@@ -242,10 +242,36 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
           }
         }
       }
+      // Explicit writable mount sources are user-approved write targets:
+      // never strip g+w from them or their parent directories here.
+      std::vector<std::string> writable_sources;
+      for (const auto &wpath : ctx.config.mount.write_paths) {
+        auto resolved = core::PathResolver::resolve(wpath.string());
+        if (resolved) {
+          writable_sources.push_back(resolved->string());
+        }
+      }
+      auto protects_writable_mount = [&writable_sources](const fs::path &dir) {
+        const std::string d = dir.string();
+        for (const auto &src : writable_sources) {
+          if (src == d) {
+            return true;
+          }
+          if (src.size() > d.size() && src.compare(0, d.size(), d) == 0 &&
+              src[d.size()] == '/') {
+            return true;
+          }
+        }
+        return false;
+      };
+
       std::error_code iter_ec;
       for (const auto &entry : fs::directory_iterator(mhome, iter_ec)) {
         if (!entry.is_directory())
           continue;
+        if (protects_writable_mount(entry.path())) {
+          continue;
+        }
         std::error_code ec;
         auto ep = entry.status(ec).permissions();
         if (!ec && (ep & fs::perms::group_write) != fs::perms::none) {
@@ -659,10 +685,25 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
 
   ctx.graft->invalidate_cache();
   auto existing = ctx.graft->list_mounts(username);
+  std::map<std::string, bool> live_modes; // target -> read_only
+  for (const auto &m : existing) {
+    live_modes[m.target.string()] = m.read_only;
+  }
+
+  // Mount plan: read-only paths plus the explicit writable list.  The same
+  // source can only be mounted once, so mount_specs() dedupes with writable
+  // winning.
+  struct MountPlan {
+    fs::path source;
+    fs::path target;
+    bool read_only{true};
+  };
+  std::vector<MountPlan> mount_plans;
+  std::map<std::string, std::size_t> plan_index; // target -> mount_plans index
 
   std::set<std::string> configured_targets;
-  for (const auto &mount_path : ctx.config.mount.paths) {
-    auto source_opt = core::PathResolver::resolve(mount_path.string());
+  for (const auto &spec : ctx.config.mount_specs()) {
+    auto source_opt = core::PathResolver::resolve(spec.path.string());
     if (!source_opt)
       continue;
     fs::path source = *source_opt;
@@ -670,7 +711,18 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
       continue;
     fs::path target = core::PathResolver::to_ai_user_path(source, username,
                                                           main_user, home_dir);
-    configured_targets.insert(target.string());
+    const std::string target_key = target.string();
+    configured_targets.insert(target_key);
+    auto it = plan_index.find(target_key);
+    if (it != plan_index.end()) {
+      // 两个配置路径经符号链接指向同一目标：只挂载一次，可写优先
+      if (!spec.read_only) {
+        mount_plans[it->second].read_only = false;
+      }
+      continue;
+    }
+    plan_index[target_key] = mount_plans.size();
+    mount_plans.push_back({source, target, spec.read_only});
   }
 
   for (const auto &m : existing) {
@@ -695,19 +747,13 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   }
 
   int mount_failures = 0;
-  for (const auto &mount_path : ctx.config.mount.paths) {
-    auto source_opt = core::PathResolver::resolve(mount_path.string());
-    if (!source_opt)
-      continue;
-    fs::path source = *source_opt;
-    if (!fs::exists(source))
-      continue;
+  for (const auto &plan : mount_plans) {
+    const fs::path &source = plan.source;
+    const fs::path &target = plan.target;
+    const bool read_only = plan.read_only;
     if (!utils::is_path_allowed(source, main_user,
                                 ctx.config.user.allowed_bases))
       continue;
-
-    fs::path target = core::PathResolver::to_ai_user_path(source, username,
-                                                          main_user, home_dir);
 
     // Check if target is mounted and whether it's stale.
     // A bind mount becomes stale when its source is deleted, making the
@@ -755,10 +801,30 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
     }
 
     if (is_mounted && !is_stale) {
+      auto mode_it = live_modes.find(target.string());
+      if (mode_it != live_modes.end() && mode_it->second != read_only) {
+        utils::get_logger()->info(
+            "Mount mode changed ({} -> {}), remounting: {}",
+            mode_it->second ? "ro" : "rw", read_only ? "ro" : "rw",
+            target.string());
+        if (ctx.graft->unmount(target, true)) {
+          is_mounted = false;
+          fixes++;
+        } else {
+          // [log-review] 降级为 warning：单次重挂载失败不影响其余挂载处理，
+          // 下一次 am update 会重试
+          utils::get_logger()->warn("Failed to remount mode change for {}",
+                                    target.string());
+        }
+      }
+    }
+
+    if (is_mounted && !is_stale) {
       // Already mounted — fix ownership of intermediate directories only.
-      // Bind mount targets are read-only (sourced from main user's home),
-      // chown on them always fails with EPERM. Only the parent path chain
-      // from project root needs ownership correction for AI user access.
+      // The mount target must NOT be chowned: a bind mount shares the source
+      // inode, so chown would silently change the main user's files (and is
+      // rejected with EPERM for read-only mounts).  Only the parent path
+      // chain under the AI user home needs ownership correction.
       if (state.uid != 0 || state.gid != 0) {
         fs::path boundary = home_dir.empty()
                                 ? fs::path(target.parent_path().parent_path())
@@ -791,15 +857,15 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
             }
           }
         }
-        // NOTE: target is a read-only bind mount — skip chown.
-        // chown on a read-only bind mount always fails with EPERM.
+        // NOTE: target ownership is intentionally left untouched (see above).
       }
       continue;
     }
 
-    utils::get_logger()->info("Fixing mount: {} -> {}", source.string(),
+    utils::get_logger()->info("Fixing mount ({}): {} -> {}",
+                              read_only ? "ro" : "rw", source.string(),
                               target.string());
-    if (ctx.graft->bind_mount(source, target, true, state.uid, state.gid,
+    if (ctx.graft->bind_mount(source, target, read_only, state.uid, state.gid,
                               home_dir)) {
       fixes++;
     } else {
@@ -912,8 +978,8 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   {
     // Build set of currently configured mount targets under home_dir
     std::set<std::string> configured_mount_targets;
-    for (const auto &mount_path : ctx.config.mount.paths) {
-      auto source_opt = core::PathResolver::resolve(mount_path.string());
+    for (const auto &spec : ctx.config.mount_specs()) {
+      auto source_opt = core::PathResolver::resolve(spec.path.string());
       if (!source_opt)
         continue;
       fs::path target = core::PathResolver::to_ai_user_path(
@@ -978,7 +1044,8 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
   }
 
   // Third pass: recursively fix ownership of ALL entries in home_dir
-  // Skip .am_status (root:root by design) and bind mount targets (read-only)
+  // Skip .am_status (root:root by design) and bind mount targets (never chown
+  // the source inode shared through the mount)
   // [P1-performance] Skip in mount_only mode — ownership is not a mount
   // concern.
   if (!mount_only) {
@@ -1026,7 +1093,7 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                     state.uid, state.gid);
                 local_fixes++;
               } else {
-                // Expected for read-only bind mounts or permission issues
+                // Expected for bind mount targets or permission issues
                 utils::get_logger()->debug(
                     "Third pass: failed to fix symlink {}", ep.string());
               }
@@ -1056,7 +1123,8 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
           }
 
           if (is_mount_point) {
-            // Don't chown or recurse into mount points (read-only bind mounts)
+            // Don't chown or recurse into mount points: a bind mount shares
+            // the main user's source inode
             continue;
           }
 
@@ -1071,7 +1139,7 @@ static int do_configure(CommandContext &ctx, const core::UserInfo &state,
                                            ep.string(), state.uid, state.gid);
                 local_fixes++;
               } else {
-                // Expected for read-only bind mounts; these are caught by mount
+                // Expected for bind mount targets; these are caught by mount
                 // detection above
                 utils::get_logger()->debug("Third pass: failed to fix {}",
                                            ep.string());
@@ -2470,9 +2538,9 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
     // string comparison — no stat(), no mount operations, no hang risk.
     {
       // Build set of mount TARGETS from .am_status
-      std::unordered_set<std::string> status_targets;
+      std::unordered_map<std::string, bool> status_modes;
       for (const auto &m : state->mounts) {
-        status_targets.insert(m.target);
+        status_modes[m.target] = m.read_only;
       }
       // Check config mount paths against status targets
       // NOTE: Must resolve (canonicalize) paths the same way do_configure()
@@ -2483,20 +2551,33 @@ int cmd_cd(const std::string &path, [[maybe_unused]] bool verbose,
       // .am_status, causing a false "not configured" warning.  See issue
       // 2026-07-10-cmd-cd-mount-check-false-positive.
       std::vector<std::string> missing;
-      for (const auto &mp : config.mount.paths) {
-        auto source_opt = core::PathResolver::resolve(mp.string());
+      std::vector<std::string> mode_mismatch;
+      for (const auto &spec : config.mount_specs()) {
+        auto source_opt = core::PathResolver::resolve(spec.path.string());
         if (!source_opt)
           continue; // skip unresolvable paths (no stat, safe)
         auto expected = core::PathResolver::to_ai_user_path(
             *source_opt, ai_user, main_user, state->home_dir);
-        if (status_targets.find(expected.string()) == status_targets.end()) {
-          missing.push_back(mp.string());
+        auto mode_it = status_modes.find(expected.string());
+        if (mode_it == status_modes.end()) {
+          missing.push_back(spec.path.string());
+        } else if (mode_it->second != spec.read_only) {
+          mode_mismatch.push_back(spec.path.string());
         }
       }
       if (!missing.empty()) {
         std::cerr << "warning: " << missing.size()
                   << " mount(s) not configured for this project:" << std::endl;
         for (const auto &m : missing) {
+          std::cerr << "  - " << m << std::endl;
+        }
+        std::cerr << "  Run 'am update " << target_str << "' to sync."
+                  << std::endl;
+      }
+      if (!mode_mismatch.empty()) {
+        std::cerr << "warning: " << mode_mismatch.size()
+                  << " mount(s) with changed read/write mode:" << std::endl;
+        for (const auto &m : mode_mismatch) {
           std::cerr << "  - " << m << std::endl;
         }
         std::cerr << "  Run 'am update " << target_str << "' to sync."
@@ -2737,8 +2818,8 @@ int cmd_health([[maybe_unused]] bool verbose) {
   std::map<std::string, std::set<std::string>> user_configured_targets;
   for (const auto &[home_dir, username] : user_home_to_name) {
     std::set<std::string> targets;
-    for (const auto &mount_path : ctx.config.mount.paths) {
-      auto source_opt = core::PathResolver::resolve(mount_path.string());
+    for (const auto &spec : ctx.config.mount_specs()) {
+      auto source_opt = core::PathResolver::resolve(spec.path.string());
       if (!source_opt)
         continue;
       fs::path source = *source_opt;
@@ -3145,9 +3226,18 @@ int cmd_config([[maybe_unused]] bool verbose) {
   std::cout << "SSH default key: " << config.ssh.ai_default_key.string()
             << std::endl;
 
-  std::cout << "Mount paths:" << std::endl;
-  for (const auto &p : config.mount.paths) {
-    std::cout << "  - " << p.string() << std::endl;
+  auto mount_specs = config.mount_specs();
+  std::cout << "Mount paths (read-only):" << std::endl;
+  for (const auto &spec : mount_specs) {
+    if (!spec.read_only)
+      continue;
+    std::cout << "  - " << spec.path.string() << std::endl;
+  }
+  std::cout << "Mount paths (read-write):" << std::endl;
+  for (const auto &spec : mount_specs) {
+    if (spec.read_only)
+      continue;
+    std::cout << "  - " << spec.path.string() << std::endl;
   }
 
   if (!config.ai_user.groups.empty()) {

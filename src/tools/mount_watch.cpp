@@ -66,7 +66,8 @@ using namespace std::chrono_literals;
 /// - New bind mount creates a fresh mapping to the current source inode
 /// - Processes with old fds continue accessing old data (standard Linux
 ///   lazy-umount semantics, no data-loss risk)
-static bool safe_remount(const fs::path &source, const fs::path &target) {
+static bool safe_remount(const fs::path &source, const fs::path &target,
+                         bool read_only) {
   auto logger = utils::get_logger();
   // Step 1: Lazy umount — detach stale mount from namespace.
   // Even if this fails (e.g. mount already gone), we still try bind.
@@ -92,6 +93,20 @@ static bool safe_remount(const fs::path &source, const fs::path &target) {
     logger->error("  remount FAILED: {} -> {} - {}", source.string(),
                   target.string(), bind.stderr_output);
     return false;
+  }
+
+  // mount --bind defaults to rw; restore the configured mode so a repaired
+  // read-only mount never silently becomes writable.
+  if (read_only) {
+    auto remount =
+        utils::exec_safe({"mount", "-o", "remount,bind,ro", target.string()});
+    if (remount.exit_code != 0) {
+      // Restoring ro failed: the mount stays writable, i.e. the read-only
+      // guarantee is lost — a real fault, not a tolerated degradation.
+      logger->error("  remount ro failed: {} - {}", target.string(),
+                    remount.stderr_output);
+      return false;
+    }
   }
 
   return true;
@@ -677,7 +692,7 @@ int main(int argc, char *argv[]) {
         if (mit != mountinfo_sources.end() && source_exists(mit->second)) {
           // mountinfo has correct source AND it exists → safe to remount
           logger->warn("  stale mount target (ENOENT): {}", mi.target);
-          if (safe_remount(mit->second, target)) {
+          if (safe_remount(mit->second, target, mi.read_only)) {
             logger->info("  remounted: {} -> {}", mit->second, mi.target);
             // Persist corrected state
             core::UserManager::update_state_mounts(username, home_dir, prefix);
@@ -707,7 +722,7 @@ int main(int argc, char *argv[]) {
                      mi.target, mi.source);
         // Try to remount using source from .am_status
         if (source_exists(source)) {
-          if (safe_remount(source, target)) {
+          if (safe_remount(source, target, mi.read_only)) {
             logger->info("  remounted missing mount: {} -> {}", mi.source,
                          mi.target);
             core::UserManager::update_state_mounts(username, home_dir, prefix);
@@ -745,7 +760,7 @@ int main(int argc, char *argv[]) {
           fs::path correct_source =
               (mit != mountinfo_sources.end()) ? fs::path(mit->second) : source;
           if (source_exists(correct_source)) {
-            if (safe_remount(correct_source, target)) {
+            if (safe_remount(correct_source, target, mi.read_only)) {
               logger->info("  remounted (metadata fix): {} -> {}",
                            correct_source.string(), mi.target);
               core::UserManager::update_state_mounts(username, home_dir,
@@ -790,7 +805,7 @@ int main(int argc, char *argv[]) {
           logger->warn("  inode mismatch src={}/{} tgt={}/{} — stale data",
                        src_st.st_dev, src_st.st_ino, tgt_st.st_dev,
                        tgt_st.st_ino);
-          if (safe_remount(source, target)) {
+          if (safe_remount(source, target, mi.read_only)) {
             logger->info("  remounted: {} -> {}", mi.source, mi.target);
             core::UserManager::update_state_mounts(username, home_dir, prefix);
           }
@@ -843,11 +858,12 @@ int main(int argc, char *argv[]) {
       std::error_code ec;
       if (fs::exists(config_path, ec)) {
         auto project_config = core::ConfigParser::load(config_path);
-        if (project_config.loaded && !project_config.mount.paths.empty()) {
+        auto specs = project_config.mount_specs();
+        if (project_config.loaded && !specs.empty()) {
           // Build set of target paths from .am_status
-          std::unordered_set<std::string> status_targets;
+          std::unordered_map<std::string, bool> status_modes;
           for (const auto &m : expected_mounts) {
-            status_targets.insert(m.target);
+            status_modes[m.target] = m.read_only;
           }
           // Check each config mount path
           // NOTE: Must resolve (canonicalize) paths the same way
@@ -855,15 +871,18 @@ int main(int argc, char *argv[]) {
           // A raw path like "~/.share/" produces a different expected target
           // than the resolved "/foo/.share" stored in .am_status.
           std::vector<std::string> missing;
-          for (const auto &mp : project_config.mount.paths) {
-            auto source_opt = core::PathResolver::resolve(mp.string());
+          std::vector<std::string> mode_mismatch;
+          for (const auto &spec : specs) {
+            auto source_opt = core::PathResolver::resolve(spec.path.string());
             if (!source_opt)
               continue;
             auto expected_target = core::PathResolver::to_ai_user_path(
                 *source_opt, username, main_user, home_dir);
-            if (status_targets.find(expected_target.string()) ==
-                status_targets.end()) {
-              missing.push_back(mp.string());
+            auto mode_it = status_modes.find(expected_target.string());
+            if (mode_it == status_modes.end()) {
+              missing.push_back(spec.path.string());
+            } else if (mode_it->second != spec.read_only) {
+              mode_mismatch.push_back(spec.path.string());
             }
           }
           if (!missing.empty()) {
@@ -872,6 +891,14 @@ int main(int argc, char *argv[]) {
                          username, missing.size(), home_dir.string());
             for (const auto &m : missing) {
               logger->warn("    missing: {}", m);
+            }
+          }
+          if (!mode_mismatch.empty()) {
+            logger->warn("  user {}: {} mount(s) with changed read/write "
+                         "mode — run 'am update {}'",
+                         username, mode_mismatch.size(), home_dir.string());
+            for (const auto &m : mode_mismatch) {
+              logger->warn("    mode changed: {}", m);
             }
           }
         }

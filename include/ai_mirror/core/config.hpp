@@ -20,8 +20,15 @@ struct Config {
                                          // $HOME (e.g. BeeGFS mount points)
   } user;
 
+  /// 单个挂载项：路径与挂载模式。
+  struct MountSpec {
+    fs::path path;
+    bool read_only{true};
+  };
+
   struct MountConfig {
-    std::vector<fs::path> paths;
+    std::vector<fs::path> paths;       // 只读挂载列表
+    std::vector<fs::path> write_paths; // 可读可写挂载列表
   } mount;
 
   struct SSHConfig {
@@ -38,6 +45,10 @@ struct Config {
   fs::path config_path;
   bool loaded = false;
   std::string load_error;
+
+  /// 返回挂载清单：paths 只读、write_paths 可写，同一路径可写优先。
+  /// @return 已去重的挂载项列表（同一路径只出现一次）
+  std::vector<MountSpec> mount_specs() const;
 };
 
 class ConfigParser {

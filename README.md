@@ -27,6 +27,7 @@
 
 权限模型：
 - 主用户的配置文件（`.bashrc`, `.config` 等）通过 bind mount 只读挂载到 ai-user home
+- `[mount].write_paths` 中显式列出的目录以可读可写方式挂载（不改源目录属主与权限）
 - ai-user 仅对分配的项目目录有读写权限
 - 通过 SSH 免密登录切换身份，不使用 ACL
 
@@ -206,7 +207,7 @@ am create <project_path>
 1. 创建 Linux 用户（用户名 = `ai_<项目路径 SHA256 的 12 位 base36 哈希>`）
 2. 创建独立 home 目录 `/home/ai_<hash>`（与项目目录分离）
 3. 设置 SSH 免密登录（生成密钥对 + authorized_keys）
-4. 只读 bind mount 主用户的配置文件（`.bashrc`, `.config` 等）
+4. bind mount 主用户的配置文件（`.bashrc`, `.config` 等；`write_paths` 列出的目录为可读可写）
 5. 授予项目目录读写权限（项目目录保留在原位置）
 6. 输出创建的用户名
 
@@ -372,17 +373,28 @@ am watch
 #
 # 注意：prefix 在编译时已设置默认值，通常无需配置
 
-# [mount] 只读挂载到每个 ai-user home 目录的文件/目录
-# ai-user 通过 bind mount 以只读方式看到这些内容，无法修改。
+# [mount] 挂载到每个 ai-user home 目录的文件/目录
+# paths:       只读挂载（ai-user 无法修改）
+# write_paths: 可读可写挂载（以 rw bind mount 挂载）
 # 用途：让 ai-user 继承主用户的 shell 环境、编辑器配置、语言设置等，
 #       避免每个 ai-user 都需要单独配置一遍。
 # 路径支持 ~ 展开为当前主用户的 home 目录。
+# 同一路径同时出现在两个列表时按可写处理。
 [mount]
 paths = [
     "~/.bashrc",       # Shell 初始化脚本（别名、环境变量、PATH 等）
     "~/.config",       # 应用配置目录（git、nvim、bash-completion 等）
     "~/.local/bin",    # 用户自定义脚本/工具目录
 ]
+write_paths = []
+
+# write_paths 示例：ai-user 需要写入的共享目录（挂载后可读可写）
+# 注意：am 只改变挂载模式，不修改源目录属主与权限；
+#       源目录本身须对 ai-user 可写（如 owner 为 ai-user，或 group/other 有 w）。
+# write_paths = [
+#     "~/.cache/ai-shared",
+#     "~/data/ai-work",
+# ]
 
 # [ssh] SSH 密钥与身份切换配置
 # ai-mirror 通过 SSH 密钥实现主用户到 ai-user 的免密身份切换，

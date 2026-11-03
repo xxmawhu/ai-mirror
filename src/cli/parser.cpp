@@ -32,7 +32,8 @@ int parse_and_run(int argc, char **argv) {
       "  为指定项目创建独立的 ai-user，完成全部初始化：\n"
       "  1. 创建 Linux 用户（ai_<项目路径哈希>，home = /home/ai_<hash>）\n"
       "  2. 设置 SSH 免密登录（生成密钥对 + authorized_keys）\n"
-      "  3. 只读 bind mount 主用户的配置文件（.bashrc, .config 等）\n"
+      "  3. bind mount 主用户的配置文件（.bashrc, .config 等；\n"
+      "     [mount].write_paths 列出的目录为可读可写）\n"
       "  4. 授予项目目录读写权限\n"
       "  5. 输出创建的用户名");
   create_cmd->add_option("project_path", create_path, "项目目录路径")

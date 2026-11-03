@@ -129,6 +129,44 @@ fs::path ConfigParser::expand_path(const std::string &path) {
   return resolve_home(fs::path(path));
 }
 
+std::vector<Config::MountSpec> Config::mount_specs() const {
+  std::vector<MountSpec> specs;
+  // lexically_normal() keeps a trailing slash for directories, which would
+  // make "/data/x/" and "/data/x" look like different mounts; strip it so the
+  // dedupe is path-stable.
+  auto normalize = [](const fs::path &p) {
+    std::string key = p.lexically_normal().string();
+    while (key.size() > 1 && key.back() == '/') {
+      key.pop_back();
+    }
+    return key;
+  };
+  auto upsert = [&specs, &normalize](const fs::path &p, bool read_only) {
+    const std::string key = normalize(p);
+    for (auto &spec : specs) {
+      if (normalize(spec.path) == key) {
+        // 同一路径同时出现在两个列表时按可写处理（显式可写优先）
+        if (!read_only) {
+          spec.read_only = false;
+        }
+        return;
+      }
+    }
+    MountSpec spec;
+    spec.path = p;
+    spec.read_only = read_only;
+    specs.push_back(std::move(spec));
+  };
+
+  for (const auto &p : mount.paths) {
+    upsert(p, true);
+  }
+  for (const auto &p : mount.write_paths) {
+    upsert(p, false);
+  }
+  return specs;
+}
+
 Config ConfigParser::load(const fs::path &config_path) {
   Config config;
   config.config_path = config_path;
@@ -176,19 +214,33 @@ Config ConfigParser::load(const fs::path &config_path) {
     }
 
     if (data.as_table().contains("mount")) {
-      try {
-        auto &mount = data["mount"];
-        if (mount.as_table().contains("paths")) {
+      auto &mount = data["mount"];
+      if (mount.as_table().contains("paths")) {
+        try {
           auto paths = toml::get<std::vector<std::string>>(mount["paths"]);
           for (const auto &p : paths) {
             config.mount.paths.push_back(expand_path(p));
           }
+        } catch (const std::exception &e) {
+          std::string field_err = std::string("mount.paths: ") + e.what();
+          config.load_error +=
+              (config.load_error.empty() ? "" : "; ") + field_err;
+          utils::get_logger()->warn("Config field error: {}", field_err);
         }
-      } catch (const std::exception &e) {
-        std::string field_err = std::string("mount.paths: ") + e.what();
-        config.load_error +=
-            (config.load_error.empty() ? "" : "; ") + field_err;
-        utils::get_logger()->warn("Config field error: {}", field_err);
+      }
+      if (mount.as_table().contains("write_paths")) {
+        try {
+          auto write_paths =
+              toml::get<std::vector<std::string>>(mount["write_paths"]);
+          for (const auto &p : write_paths) {
+            config.mount.write_paths.push_back(expand_path(p));
+          }
+        } catch (const std::exception &e) {
+          std::string field_err = std::string("mount.write_paths: ") + e.what();
+          config.load_error +=
+              (config.load_error.empty() ? "" : "; ") + field_err;
+          utils::get_logger()->warn("Config field error: {}", field_err);
+        }
       }
     }
 
@@ -437,8 +489,17 @@ bool ConfigParser::save(const Config &config, const fs::path &config_path) {
   for (const auto &p : config.mount.paths) {
     oss << "    \"" << toml_escape(p.string()) << "\",\n";
   }
-  oss << "]\n\n"
-      << "[ssh]\n"
+  oss << "]\n";
+  if (config.mount.write_paths.empty()) {
+    oss << "write_paths = []\n";
+  } else {
+    oss << "write_paths = [\n";
+    for (const auto &p : config.mount.write_paths) {
+      oss << "    \"" << toml_escape(p.string()) << "\",\n";
+    }
+    oss << "]\n";
+  }
+  oss << "\n[ssh]\n"
       << "key_type = \"" << toml_escape(config.ssh.key_type) << "\"\n";
   // Only write key_path if explicitly set; omit to enable runtime
   // auto-detection
